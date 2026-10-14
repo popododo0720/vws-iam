@@ -29,7 +29,8 @@ A device lock starts only from wrong codes: the 5th wrong code in a row
 (Verify, Enable, console Login or STS with a valid credential) locks the
 device for 15 minutes from that failure. An attempt refused with
 `Throttling` checks no code, so it never starts a lock. When the user's
-own attempt counter is over its limit, a throttled console Login renews
+own attempt counter is over its limit, a throttled console Login or STS
+MFA attempt renews
 a lock that is already running to now+15m, but never past 1 hour
 (`mfa.MaxLockout`) from the failure that locked it; then the device
 unlocks and only 5 new wrong codes lock it again. A throttle by the
@@ -58,12 +59,13 @@ An STS call (AssumeRole, GetSessionToken) with an MFA code whose user,
 access key or source IP is over its attempt limit is refused with
 `Throttling` (RESOURCE_EXHAUSTED), not AccessDenied. Only when the
 user's own counter is over its limit does that throttled attempt renew
-the device lock: `locked_until` becomes now+15m, so the lock lasts 15
-minutes from the last attempt rather than ending with the attempt-counter
-window. A throttle by the source IP or access key alone leaves
-`locked_until` and `failed_attempts` untouched, so the right code from
-another IP or key still works. Console Login does not renew the device
-lock (#48).
+a running device lock: `locked_until` becomes now+15m, capped at 1 hour
+from the failure that locked it (see "MFA lock renewal"), so the lock
+lasts 15 minutes from the last attempt rather than ending with the
+attempt-counter window. A throttle never starts a lock. A throttle by the
+source IP or access key alone leaves `locked_until` and
+`failed_attempts` untouched, so the right code from another IP or key
+still works. Console Login renews the same way (#48).
 
 ## Development
 

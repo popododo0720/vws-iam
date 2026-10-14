@@ -2,8 +2,9 @@ package grpcapi
 
 import (
 	"context"
-	"errors"
 	"log/slog"
+
+	"github.com/popododo0720/vws-iam/internal/iam"
 )
 
 // renewLoginLock runs after a console Login refused with Throttling. Like
@@ -11,11 +12,11 @@ import (
 // the user's MFA device locks (mfa.RenewLock: only a running lock, capped
 // at mfa.MaxLockout); a throttle by the source IP alone leaves them. The
 // answer stays Throttling, and a failed renewal is only logged.
-func (s *Server) renewLoginLock(ctx context.Context, p project, pid, user string) {
-	ctx = context.WithoutCancel(ctx)
-	if err := s.checkAttempts(ctx, callers{userSubject(pid, user)}); !errors.Is(err, errThrottled) {
+func renewLoginLock(ctx context.Context, p project, user string, err error) {
+	if !throttledBy(err, iam.AttemptUser) {
 		return
 	}
+	ctx = context.WithoutCancel(ctx)
 	devices, err := p.mfa.List(ctx, user)
 	if err != nil {
 		slog.Default().LogAttrs(ctx, slog.LevelWarn, "mfa lock renewal on login throttle failed", slog.String("error", err.Error()))

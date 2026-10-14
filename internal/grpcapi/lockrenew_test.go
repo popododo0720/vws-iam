@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/popododo0720/vws-iam/internal/grpcapi"
+	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/mfa"
 	"github.com/popododo0720/vws-iam/internal/store"
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
@@ -169,4 +170,94 @@ func testLoginLockRenewal(t *testing.T, backend func(*testing.T) store.Backend) 
 			t.Fatalf("IP-only throttle renewed: %v, was %v", until, before)
 		}
 	})
+}
+
+// TestSTSLockRenewalMemstore and TestSTSLockRenewalOnAPIServer: a STS
+// attempt throttled by the user's own limit renews only a running device
+// lock, never past mfa.MaxLockout from the failure that locked it, and
+// never starts one (#48).
+func TestSTSLockRenewalMemstore(t *testing.T) {
+	testSTSLockRenewal(t, func(*testing.T) store.Backend { return memstore.New() })
+}
+
+func TestSTSLockRenewalOnAPIServer(t *testing.T) {
+	testSTSLockRenewal(t, apiServerBackends(t))
+}
+
+func testSTSLockRenewal(t *testing.T, backend func(*testing.T) store.Backend) {
+	b := backend(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	a, rb := newEnvOn(t, b, &now), newEnvOn(t, b, &now)
+	ctx := t.Context()
+	u := a.createUser(t, ctx, "alice")
+	key, err := a.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: u.GetName()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kid := key.GetAccessKey().GetName()[strings.LastIndex(key.GetAccessKey().GetName(), "/")+1:]
+	seed, serial, _ := strings.Cut(enableMFA(t, a, ctx, "alice"), "|")
+	gstMFA := func(e *env, code string) error {
+		_, err := e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{
+			Authentication: gstSig(a.stsSign(kid, key.GetSecretAccessKey(), "", "GetSessionToken")), SerialNumber: serial, TokenCode: code})
+		return err
+	}
+	// tripUser puts alice's user counter at its limit in a fresh window,
+	// as wrong passwords from anyone who knows the name would.
+	userHash := grpcapi.AttemptCounterHash(iam.AttemptUser, proj+"/alice")
+	tripUser := func() {
+		t.Helper()
+		c := iam.AttemptCounter{Hash: userHash, Scope: iam.AttemptUser, Failures: grpcapi.UserAttemptLimit, WindowStart: now}
+		if _, err := store.Create(ctx, b, c); err == nil {
+			return
+		}
+		if _, err := store.Mutate(ctx, b, userHash, func(x *iam.AttemptCounter) error {
+			*x = c
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Never starts: the user is over its limit, the device is not locked.
+	tripUser()
+	wantThrottled(t, gstMFA(rb, code(t, rb, seed)))
+	if n, until := deviceLock(t, a); n != 0 || !until.IsZero() {
+		t.Fatalf("STS throttle started a lock: %d %v", n, until)
+	}
+
+	// Lock by wrong codes once the counter is clear, then keep the user
+	// limit tripped for two hours: renewals stop at start+MaxLockout.
+	now = now.Add(grpcapi.AttemptLockout + grpcapi.AttemptWindow)
+	start := now
+	for range mfa.MaxFailedAttempts {
+		wantErr(t, gstMFA(a, "000000"), codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+	}
+	for i := 0; now.Before(start.Add(mfa.MaxLockout + grpcapi.AttemptLockout)); i++ {
+		now = now.Add(10 * time.Minute)
+		tripUser()
+		e := a
+		if i%2 == 1 {
+			e = rb
+		}
+		wantThrottled(t, gstMFA(e, code(t, e, seed)))
+		_, until := deviceLock(t, a)
+		want := now.Add(mfa.LockoutDuration)
+		if cap := start.Add(mfa.MaxLockout); want.After(cap) {
+			want = cap
+		}
+		if now.Before(start.Add(mfa.MaxLockout)) && !until.Equal(want) {
+			t.Fatalf("at +%v: locked_until %v, want %v", now.Sub(start), until, want)
+		}
+		if until.After(start.Add(mfa.MaxLockout)) {
+			t.Fatalf("lock %v past cap %v", until, start.Add(mfa.MaxLockout))
+		}
+	}
+	if _, until := deviceLock(t, rb); !until.IsZero() {
+		t.Fatalf("still locked after the cap: %v", until)
+	}
+	// Counter clear: the right code works.
+	now = now.Add(grpcapi.AttemptLockout + grpcapi.AttemptWindow)
+	if err := gstMFA(rb, code(t, rb, seed)); err != nil {
+		t.Fatalf("after cap: %v", err)
+	}
 }
