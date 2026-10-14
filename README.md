@@ -23,6 +23,26 @@ clock, never moves backwards, and is informational only. Tokens issued
 before this change carry no counter; for them the old time comparison is
 widened by `sigv4.MaxSkew` (15 minutes) until they expire.
 
+## MFA lock renewal
+
+A device lock starts only from wrong codes: the 5th wrong code in a row
+(Verify, Enable, console Login or STS with a valid credential) locks the
+device for 15 minutes from that failure. An attempt refused with
+`Throttling` checks no code, so it never starts a lock. When the user's
+own attempt counter is over its limit, a throttled console Login renews
+a lock that is already running to now+15m, but never past 1 hour
+(`mfa.MaxLockout`) from the failure that locked it; then the device
+unlocks and only 5 new wrong codes lock it again. A throttle by the
+source IP alone leaves the lock as it is.
+
+Who can affect a lock: wrong codes need the user's password (console
+Login) or one of the user's access keys (STS, which only checks the
+caller's own devices). Anyone who knows the user name can trip the
+user's attempt limit with wrong passwords and so extend a running lock,
+but only up to the 1-hour cap. A holder of a leaked key can still lock
+the device again with 5 new wrong codes per lock, as with any lockout;
+the fix is to deactivate that key (#48).
+
 ## MFA lockout status
 
 GetMfaDevice and ListMfaDevices report `status.failed_attempts` and
