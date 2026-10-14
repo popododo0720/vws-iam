@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"net/netip"
 	"time"
 
@@ -67,8 +68,9 @@ func ipSubject(ip string) (subject, bool) {
 	}
 	a = a.Unmap()
 	if a.Is6() {
-		p, _ := a.Prefix(64)
-		return subject{iam.AttemptIP, p.String()}, true
+		if p, err := a.Prefix(64); err == nil {
+			return subject{iam.AttemptIP, p.String()}, true
+		}
 	}
 	return subject{iam.AttemptIP, a.String()}, true
 }
@@ -107,7 +109,9 @@ func (s *Server) limitedVerify(ctx context.Context, cs callers, verify func() er
 	}
 	// A failed release only leaves the attempt counted until the window
 	// ends; the caller's credentials were right, so do not fail the call.
-	_ = s.releaseAttempts(context.WithoutCancel(ctx), held)
+	if err := s.releaseAttempts(context.WithoutCancel(ctx), held); err != nil {
+		slog.Default().LogAttrs(ctx, slog.LevelWarn, "attempt release failed", slog.String("error", err.Error()))
+	}
 	return nil
 }
 
