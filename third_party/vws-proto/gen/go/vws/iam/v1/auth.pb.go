@@ -241,9 +241,11 @@ func (x *Principal) GetAuthTime() *timestamppb.Timestamp {
 type Credentials struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// "ASIA" followed by 16 uppercase letters and digits.
-	AccessKeyId     string `protobuf:"bytes,1,opt,name=access_key_id,json=accessKeyId,proto3" json:"access_key_id,omitempty"`
+	AccessKeyId string `protobuf:"bytes,1,opt,name=access_key_id,json=accessKeyId,proto3" json:"access_key_id,omitempty"`
+	// Secret: never log it.
 	SecretAccessKey string `protobuf:"bytes,2,opt,name=secret_access_key,json=secretAccessKey,proto3" json:"secret_access_key,omitempty"`
 	// Opaque, HMAC-signed, expiry embedded. Sent as X-Amz-Security-Token.
+	// Secret: never log it.
 	SessionToken  string                 `protobuf:"bytes,3,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"`
 	ExpireTime    *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=expire_time,json=expireTime,proto3" json:"expire_time,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -330,6 +332,7 @@ type AuthenticateRequest struct {
 	// Lowercase hex signature from the request.
 	Signature string `protobuf:"bytes,7,opt,name=signature,proto3" json:"signature,omitempty"`
 	// X-Amz-Security-Token. Required for an ASIA key, empty for a long-term key.
+	// Secret: never log it.
 	SessionToken string `protobuf:"bytes,8,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"`
 	// Client address, for aws:SourceIp and audit. Optional; console-api does not send it yet.
 	SourceIp      string `protobuf:"bytes,9,opt,name=source_ip,json=sourceIp,proto3" json:"source_ip,omitempty"`
@@ -712,8 +715,9 @@ type LoginRequest struct {
 	Project string                 `protobuf:"bytes,1,opt,name=project,proto3" json:"project,omitempty"`
 	// IAM user name, or "root" for the account root user.
 	UserName string `protobuf:"bytes,2,opt,name=user_name,json=userName,proto3" json:"user_name,omitempty"`
+	// Secret: never log it.
 	Password string `protobuf:"bytes,3,opt,name=password,proto3" json:"password,omitempty"`
-	// Six digits when the user has an enabled MFA device.
+	// Six digits when the user has an enabled MFA device. Never log it.
 	TotpCode string `protobuf:"bytes,4,opt,name=totp_code,json=totpCode,proto3" json:"totp_code,omitempty"`
 	// Client address for aws:SourceIp in later Authorize calls and for audit.
 	SourceIp      string `protobuf:"bytes,5,opt,name=source_ip,json=sourceIp,proto3" json:"source_ip,omitempty"`
@@ -787,7 +791,8 @@ func (x *LoginRequest) GetSourceIp() string {
 }
 
 type LoginResponse struct {
-	state        protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Secret: never log it.
 	SessionToken string                 `protobuf:"bytes,1,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"`
 	ExpireTime   *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=expire_time,json=expireTime,proto3" json:"expire_time,omitempty"`
 	Principal    *Principal             `protobuf:"bytes,3,opt,name=principal,proto3" json:"principal,omitempty"`
@@ -856,8 +861,9 @@ func (x *LoginResponse) GetPasswordResetRequired() bool {
 }
 
 type ValidateSessionRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionToken  string                 `protobuf:"bytes,1,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Secret: never log it.
+	SessionToken  string `protobuf:"bytes,1,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -952,8 +958,9 @@ func (x *ValidateSessionResponse) GetExpireTime() *timestamppb.Timestamp {
 }
 
 type LogoutRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionToken  string                 `protobuf:"bytes,1,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Secret: never log it.
+	SessionToken  string `protobuf:"bytes,1,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1034,7 +1041,10 @@ func (*LogoutResponse) Descriptor() ([]byte, []int) {
 type AssumeRoleRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Role  string                 `protobuf:"bytes,1,opt,name=role,proto3" json:"role,omitempty"`
-	// The caller: from Authenticate or ValidateSession.
+	// Deprecated and ignored: the caller is derived from authentication.
+	// Never trust a principal sent by the client (impersonation risk).
+	//
+	// Deprecated: Marked as deprecated in vws/iam/v1/auth.proto.
 	Caller *Principal `protobuf:"bytes,2,opt,name=caller,proto3" json:"caller,omitempty"`
 	// [\w+=,.@-]{2,64}.
 	RoleSessionName string `protobuf:"bytes,3,opt,name=role_session_name,json=roleSessionName,proto3" json:"role_session_name,omitempty"`
@@ -1042,11 +1052,20 @@ type AssumeRoleRequest struct {
 	DurationSeconds int32 `protobuf:"varint,4,opt,name=duration_seconds,json=durationSeconds,proto3" json:"duration_seconds,omitempty"`
 	// MFA serial number ARN and its current code, when the trust policy needs MFA.
 	SerialNumber string `protobuf:"bytes,5,opt,name=serial_number,json=serialNumber,proto3" json:"serial_number,omitempty"`
-	TokenCode    string `protobuf:"bytes,6,opt,name=token_code,json=tokenCode,proto3" json:"token_code,omitempty"`
+	// Never log it.
+	TokenCode string `protobuf:"bytes,6,opt,name=token_code,json=tokenCode,proto3" json:"token_code,omitempty"`
 	// sts:ExternalId condition value.
-	ExternalId    string `protobuf:"bytes,7,opt,name=external_id,json=externalId,proto3" json:"external_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ExternalId string `protobuf:"bytes,7,opt,name=external_id,json=externalId,proto3" json:"external_id,omitempty"`
+	// How the caller authenticated. vws-iam verifies it and derives the caller
+	// from it; required.
+	//
+	// Types that are valid to be assigned to Authentication:
+	//
+	//	*AssumeRoleRequest_Sigv4
+	//	*AssumeRoleRequest_ConsoleSessionToken
+	Authentication isAssumeRoleRequest_Authentication `protobuf_oneof:"authentication"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *AssumeRoleRequest) Reset() {
@@ -1086,6 +1105,7 @@ func (x *AssumeRoleRequest) GetRole() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in vws/iam/v1/auth.proto.
 func (x *AssumeRoleRequest) GetCaller() *Principal {
 	if x != nil {
 		return x.Caller
@@ -1127,6 +1147,50 @@ func (x *AssumeRoleRequest) GetExternalId() string {
 	}
 	return ""
 }
+
+func (x *AssumeRoleRequest) GetAuthentication() isAssumeRoleRequest_Authentication {
+	if x != nil {
+		return x.Authentication
+	}
+	return nil
+}
+
+func (x *AssumeRoleRequest) GetSigv4() *AuthenticateRequest {
+	if x != nil {
+		if x, ok := x.Authentication.(*AssumeRoleRequest_Sigv4); ok {
+			return x.Sigv4
+		}
+	}
+	return nil
+}
+
+func (x *AssumeRoleRequest) GetConsoleSessionToken() string {
+	if x != nil {
+		if x, ok := x.Authentication.(*AssumeRoleRequest_ConsoleSessionToken); ok {
+			return x.ConsoleSessionToken
+		}
+	}
+	return ""
+}
+
+type isAssumeRoleRequest_Authentication interface {
+	isAssumeRoleRequest_Authentication()
+}
+
+type AssumeRoleRequest_Sigv4 struct {
+	// The SigV4 request of the caller (console-api passes what it would send
+	// to Authenticate).
+	Sigv4 *AuthenticateRequest `protobuf:"bytes,8,opt,name=sigv4,proto3,oneof"`
+}
+
+type AssumeRoleRequest_ConsoleSessionToken struct {
+	// Console session token, as from Login. Secret: never log it.
+	ConsoleSessionToken string `protobuf:"bytes,9,opt,name=console_session_token,json=consoleSessionToken,proto3,oneof"`
+}
+
+func (*AssumeRoleRequest_Sigv4) isAssumeRoleRequest_Authentication() {}
+
+func (*AssumeRoleRequest_ConsoleSessionToken) isAssumeRoleRequest_Authentication() {}
 
 type AssumeRoleResponse struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
@@ -1182,14 +1246,28 @@ func (x *AssumeRoleResponse) GetAssumedRoleUser() *Principal {
 }
 
 type GetSessionTokenRequest struct {
-	state  protoimpl.MessageState `protogen:"open.v1"`
-	Caller *Principal             `protobuf:"bytes,1,opt,name=caller,proto3" json:"caller,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Deprecated and ignored: the caller is derived from authentication.
+	// Never trust a principal sent by the client (impersonation risk).
+	//
+	// Deprecated: Marked as deprecated in vws/iam/v1/auth.proto.
+	Caller *Principal `protobuf:"bytes,1,opt,name=caller,proto3" json:"caller,omitempty"`
 	// 900 to 129600. Zero means 43200.
 	DurationSeconds int32  `protobuf:"varint,2,opt,name=duration_seconds,json=durationSeconds,proto3" json:"duration_seconds,omitempty"`
 	SerialNumber    string `protobuf:"bytes,3,opt,name=serial_number,json=serialNumber,proto3" json:"serial_number,omitempty"`
-	TokenCode       string `protobuf:"bytes,4,opt,name=token_code,json=tokenCode,proto3" json:"token_code,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Never log it.
+	TokenCode string `protobuf:"bytes,4,opt,name=token_code,json=tokenCode,proto3" json:"token_code,omitempty"`
+	// How the caller authenticated. vws-iam verifies it and derives the caller
+	// from it; required.
+	// Only a long-term key (sigv4) or the root user may call it.
+	//
+	// Types that are valid to be assigned to Authentication:
+	//
+	//	*GetSessionTokenRequest_Sigv4
+	//	*GetSessionTokenRequest_ConsoleSessionToken
+	Authentication isGetSessionTokenRequest_Authentication `protobuf_oneof:"authentication"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *GetSessionTokenRequest) Reset() {
@@ -1222,6 +1300,7 @@ func (*GetSessionTokenRequest) Descriptor() ([]byte, []int) {
 	return file_vws_iam_v1_auth_proto_rawDescGZIP(), []int{15}
 }
 
+// Deprecated: Marked as deprecated in vws/iam/v1/auth.proto.
 func (x *GetSessionTokenRequest) GetCaller() *Principal {
 	if x != nil {
 		return x.Caller
@@ -1249,6 +1328,50 @@ func (x *GetSessionTokenRequest) GetTokenCode() string {
 	}
 	return ""
 }
+
+func (x *GetSessionTokenRequest) GetAuthentication() isGetSessionTokenRequest_Authentication {
+	if x != nil {
+		return x.Authentication
+	}
+	return nil
+}
+
+func (x *GetSessionTokenRequest) GetSigv4() *AuthenticateRequest {
+	if x != nil {
+		if x, ok := x.Authentication.(*GetSessionTokenRequest_Sigv4); ok {
+			return x.Sigv4
+		}
+	}
+	return nil
+}
+
+func (x *GetSessionTokenRequest) GetConsoleSessionToken() string {
+	if x != nil {
+		if x, ok := x.Authentication.(*GetSessionTokenRequest_ConsoleSessionToken); ok {
+			return x.ConsoleSessionToken
+		}
+	}
+	return ""
+}
+
+type isGetSessionTokenRequest_Authentication interface {
+	isGetSessionTokenRequest_Authentication()
+}
+
+type GetSessionTokenRequest_Sigv4 struct {
+	// The SigV4 request of the caller (console-api passes what it would send
+	// to Authenticate).
+	Sigv4 *AuthenticateRequest `protobuf:"bytes,5,opt,name=sigv4,proto3,oneof"`
+}
+
+type GetSessionTokenRequest_ConsoleSessionToken struct {
+	// Console session token, as from Login. Secret: never log it.
+	ConsoleSessionToken string `protobuf:"bytes,6,opt,name=console_session_token,json=consoleSessionToken,proto3,oneof"`
+}
+
+func (*GetSessionTokenRequest_Sigv4) isGetSessionTokenRequest_Authentication() {}
+
+func (*GetSessionTokenRequest_ConsoleSessionToken) isGetSessionTokenRequest_Authentication() {}
 
 type GetSessionTokenResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1299,7 +1422,7 @@ var File_vws_iam_v1_auth_proto protoreflect.FileDescriptor
 const file_vws_iam_v1_auth_proto_rawDesc = "" +
 	"\n" +
 	"\x15vws/iam/v1/auth.proto\x12\n" +
-	"vws.iam.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb0\x02\n" +
+	"vws.iam.v1\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb0\x02\n" +
 	"\tPrincipal\x12-\n" +
 	"\x04type\x18\x01 \x01(\x0e2\x19.vws.iam.v1.PrincipalTypeR\x04type\x12\x10\n" +
 	"\x03arn\x18\x02 \x01(\tR\x03arn\x12\x18\n" +
@@ -1309,13 +1432,13 @@ const file_vws_iam_v1_auth_proto_rawDesc = "" +
 	"\x01*R\bresource\x12!\n" +
 	"\fsession_name\x18\x06 \x01(\tR\vsessionName\x12+\n" +
 	"\x11mfa_authenticated\x18\a \x01(\bR\x10mfaAuthenticated\x127\n" +
-	"\tauth_time\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\bauthTime\"\xbf\x01\n" +
+	"\tauth_time\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\bauthTime\"\xcf\x01\n" +
 	"\vCredentials\x12\"\n" +
-	"\raccess_key_id\x18\x01 \x01(\tR\vaccessKeyId\x12*\n" +
-	"\x11secret_access_key\x18\x02 \x01(\tR\x0fsecretAccessKey\x12#\n" +
-	"\rsession_token\x18\x03 \x01(\tR\fsessionToken\x12;\n" +
+	"\raccess_key_id\x18\x01 \x01(\tR\vaccessKeyId\x122\n" +
+	"\x11secret_access_key\x18\x02 \x01(\tB\x06\xe0A\x03\x80\x01\x01R\x0fsecretAccessKey\x12+\n" +
+	"\rsession_token\x18\x03 \x01(\tB\x06\xe0A\x03\x80\x01\x01R\fsessionToken\x12;\n" +
 	"\vexpire_time\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"expireTime\"\xd5\x02\n" +
+	"expireTime\"\xdd\x02\n" +
 	"\x13AuthenticateRequest\x12'\n" +
 	"\raccess_key_id\x18\x01 \x01(\tB\x03\xe0A\x02R\vaccessKeyId\x12\x17\n" +
 	"\x04date\x18\x02 \x01(\tB\x03\xe0A\x02R\x04date\x12\x1b\n" +
@@ -1323,8 +1446,8 @@ const file_vws_iam_v1_auth_proto_rawDesc = "" +
 	"\aservice\x18\x04 \x01(\tB\x03\xe0A\x02R\aservice\x120\n" +
 	"\x11canonical_request\x18\x05 \x01(\tB\x03\xe0A\x02R\x10canonicalRequest\x12)\n" +
 	"\x0estring_to_sign\x18\x06 \x01(\tB\x03\xe0A\x02R\fstringToSign\x12!\n" +
-	"\tsignature\x18\a \x01(\tB\x03\xe0A\x02R\tsignature\x12#\n" +
-	"\rsession_token\x18\b \x01(\tR\fsessionToken\x12\x1b\n" +
+	"\tsignature\x18\a \x01(\tB\x03\xe0A\x02R\tsignature\x12+\n" +
+	"\rsession_token\x18\b \x01(\tB\x06\xe0A\x04\x80\x01\x01R\fsessionToken\x12\x1b\n" +
 	"\tsource_ip\x18\t \x01(\tR\bsourceIp\"\xcd\x01\n" +
 	"\x14AuthenticateResponse\x12\x18\n" +
 	"\aaccount\x18\x01 \x01(\tR\aaccount\x12\x10\n" +
@@ -1347,48 +1470,54 @@ const file_vws_iam_v1_auth_proto_rawDesc = "" +
 	"\bdecision\x18\x01 \x01(\x0e2\x14.vws.iam.v1.DecisionR\bdecision\x12%\n" +
 	"\x0ematched_policy\x18\x02 \x01(\tR\rmatchedPolicy\x12+\n" +
 	"\x11matched_statement\x18\x03 \x01(\tR\x10matchedStatement\x12\x16\n" +
-	"\x06reason\x18\x04 \x01(\tR\x06reason\"\xb2\x01\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\"\xb8\x01\n" +
 	"\fLoginRequest\x12\x1d\n" +
 	"\aproject\x18\x01 \x01(\tB\x03\xe0A\x02R\aproject\x12 \n" +
-	"\tuser_name\x18\x02 \x01(\tB\x03\xe0A\x02R\buserName\x12\"\n" +
-	"\bpassword\x18\x03 \x01(\tB\x06\xe0A\x02\xe0A\x04R\bpassword\x12 \n" +
-	"\ttotp_code\x18\x04 \x01(\tB\x03\xe0A\x04R\btotpCode\x12\x1b\n" +
-	"\tsource_ip\x18\x05 \x01(\tR\bsourceIp\"\xde\x01\n" +
-	"\rLoginResponse\x12#\n" +
-	"\rsession_token\x18\x01 \x01(\tR\fsessionToken\x12;\n" +
+	"\tuser_name\x18\x02 \x01(\tB\x03\xe0A\x02R\buserName\x12%\n" +
+	"\bpassword\x18\x03 \x01(\tB\t\xe0A\x02\xe0A\x04\x80\x01\x01R\bpassword\x12#\n" +
+	"\ttotp_code\x18\x04 \x01(\tB\x06\xe0A\x04\x80\x01\x01R\btotpCode\x12\x1b\n" +
+	"\tsource_ip\x18\x05 \x01(\tR\bsourceIp\"\xe6\x01\n" +
+	"\rLoginResponse\x12+\n" +
+	"\rsession_token\x18\x01 \x01(\tB\x06\xe0A\x03\x80\x01\x01R\fsessionToken\x12;\n" +
 	"\vexpire_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"expireTime\x123\n" +
 	"\tprincipal\x18\x03 \x01(\v2\x15.vws.iam.v1.PrincipalR\tprincipal\x126\n" +
-	"\x17password_reset_required\x18\x04 \x01(\bR\x15passwordResetRequired\"B\n" +
-	"\x16ValidateSessionRequest\x12(\n" +
-	"\rsession_token\x18\x01 \x01(\tB\x03\xe0A\x02R\fsessionToken\"\x8b\x01\n" +
+	"\x17password_reset_required\x18\x04 \x01(\bR\x15passwordResetRequired\"H\n" +
+	"\x16ValidateSessionRequest\x12.\n" +
+	"\rsession_token\x18\x01 \x01(\tB\t\xe0A\x02\xe0A\x04\x80\x01\x01R\fsessionToken\"\x8b\x01\n" +
 	"\x17ValidateSessionResponse\x123\n" +
 	"\tprincipal\x18\x01 \x01(\v2\x15.vws.iam.v1.PrincipalR\tprincipal\x12;\n" +
 	"\vexpire_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"expireTime\"9\n" +
-	"\rLogoutRequest\x12(\n" +
-	"\rsession_token\x18\x01 \x01(\tB\x03\xe0A\x02R\fsessionToken\"\x10\n" +
-	"\x0eLogoutResponse\"\xb7\x02\n" +
+	"expireTime\"?\n" +
+	"\rLogoutRequest\x12.\n" +
+	"\rsession_token\x18\x01 \x01(\tB\t\xe0A\x02\xe0A\x04\x80\x01\x01R\fsessionToken\"\x10\n" +
+	"\x0eLogoutResponse\"\xbf\x03\n" +
 	"\x11AssumeRoleRequest\x12(\n" +
 	"\x04role\x18\x01 \x01(\tB\x14\xe0A\x02\xfaA\x0e\n" +
-	"\fvws.iam/RoleR\x04role\x122\n" +
-	"\x06caller\x18\x02 \x01(\v2\x15.vws.iam.v1.PrincipalB\x03\xe0A\x02R\x06caller\x12/\n" +
+	"\fvws.iam/RoleR\x04role\x121\n" +
+	"\x06caller\x18\x02 \x01(\v2\x15.vws.iam.v1.PrincipalB\x02\x18\x01R\x06caller\x12/\n" +
 	"\x11role_session_name\x18\x03 \x01(\tB\x03\xe0A\x02R\x0froleSessionName\x12)\n" +
 	"\x10duration_seconds\x18\x04 \x01(\x05R\x0fdurationSeconds\x12#\n" +
-	"\rserial_number\x18\x05 \x01(\tR\fserialNumber\x12\"\n" +
+	"\rserial_number\x18\x05 \x01(\tR\fserialNumber\x12%\n" +
 	"\n" +
-	"token_code\x18\x06 \x01(\tB\x03\xe0A\x04R\ttokenCode\x12\x1f\n" +
+	"token_code\x18\x06 \x01(\tB\x06\xe0A\x04\x80\x01\x01R\ttokenCode\x12\x1f\n" +
 	"\vexternal_id\x18\a \x01(\tR\n" +
-	"externalId\"\x92\x01\n" +
+	"externalId\x127\n" +
+	"\x05sigv4\x18\b \x01(\v2\x1f.vws.iam.v1.AuthenticateRequestH\x00R\x05sigv4\x129\n" +
+	"\x15console_session_token\x18\t \x01(\tB\x03\x80\x01\x01H\x00R\x13consoleSessionTokenB\x10\n" +
+	"\x0eauthentication\"\x92\x01\n" +
 	"\x12AssumeRoleResponse\x129\n" +
 	"\vcredentials\x18\x01 \x01(\v2\x17.vws.iam.v1.CredentialsR\vcredentials\x12A\n" +
-	"\x11assumed_role_user\x18\x02 \x01(\v2\x15.vws.iam.v1.PrincipalR\x0fassumedRoleUser\"\xc0\x01\n" +
-	"\x16GetSessionTokenRequest\x122\n" +
-	"\x06caller\x18\x01 \x01(\v2\x15.vws.iam.v1.PrincipalB\x03\xe0A\x02R\x06caller\x12)\n" +
+	"\x11assumed_role_user\x18\x02 \x01(\v2\x15.vws.iam.v1.PrincipalR\x0fassumedRoleUser\"\xc8\x02\n" +
+	"\x16GetSessionTokenRequest\x121\n" +
+	"\x06caller\x18\x01 \x01(\v2\x15.vws.iam.v1.PrincipalB\x02\x18\x01R\x06caller\x12)\n" +
 	"\x10duration_seconds\x18\x02 \x01(\x05R\x0fdurationSeconds\x12#\n" +
-	"\rserial_number\x18\x03 \x01(\tR\fserialNumber\x12\"\n" +
+	"\rserial_number\x18\x03 \x01(\tR\fserialNumber\x12%\n" +
 	"\n" +
-	"token_code\x18\x04 \x01(\tB\x03\xe0A\x04R\ttokenCode\"T\n" +
+	"token_code\x18\x04 \x01(\tB\x06\xe0A\x04\x80\x01\x01R\ttokenCode\x127\n" +
+	"\x05sigv4\x18\x05 \x01(\v2\x1f.vws.iam.v1.AuthenticateRequestH\x00R\x05sigv4\x129\n" +
+	"\x15console_session_token\x18\x06 \x01(\tB\x03\x80\x01\x01H\x00R\x13consoleSessionTokenB\x10\n" +
+	"\x0eauthentication\"T\n" +
 	"\x17GetSessionTokenResponse\x129\n" +
 	"\vcredentials\x18\x01 \x01(\v2\x17.vws.iam.v1.CredentialsR\vcredentials*\x82\x01\n" +
 	"\rPrincipalType\x12\x1e\n" +
@@ -1400,17 +1529,17 @@ const file_vws_iam_v1_auth_proto_rawDesc = "" +
 	"\x14DECISION_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eDECISION_ALLOW\x10\x01\x12\x1a\n" +
 	"\x16DECISION_DENY_EXPLICIT\x10\x02\x12\x1a\n" +
-	"\x16DECISION_DENY_IMPLICIT\x10\x032\x9d\x04\n" +
-	"\vAuthService\x12n\n" +
-	"\fAuthenticate\x12\x1f.vws.iam.v1.AuthenticateRequest\x1a .vws.iam.v1.AuthenticateResponse\"\x1b\x82\xd3\xe4\x93\x02\x15:\x01*\"\x10/v1/authenticate\x12b\n" +
-	"\tAuthorize\x12\x1c.vws.iam.v1.AuthorizeRequest\x1a\x1d.vws.iam.v1.AuthorizeResponse\"\x18\x82\xd3\xe4\x93\x02\x12:\x01*\"\r/v1/authorize\x12[\n" +
-	"\x05Login\x12\x18.vws.iam.v1.LoginRequest\x1a\x19.vws.iam.v1.LoginResponse\"\x1d\x82\xd3\xe4\x93\x02\x17:\x01*\"\x12/v1/sessions:login\x12|\n" +
-	"\x0fValidateSession\x12\".vws.iam.v1.ValidateSessionRequest\x1a#.vws.iam.v1.ValidateSessionResponse\" \x82\xd3\xe4\x93\x02\x1a:\x01*\"\x15/v1/sessions:validate\x12_\n" +
-	"\x06Logout\x12\x19.vws.iam.v1.LogoutRequest\x1a\x1a.vws.iam.v1.LogoutResponse\"\x1e\x82\xd3\xe4\x93\x02\x18:\x01*\"\x13/v1/sessions:logout2\x86\x02\n" +
-	"\fTokenService\x12|\n" +
+	"\x16DECISION_DENY_IMPLICIT\x10\x032\x85\x03\n" +
+	"\vAuthService\x12Q\n" +
+	"\fAuthenticate\x12\x1f.vws.iam.v1.AuthenticateRequest\x1a .vws.iam.v1.AuthenticateResponse\x12H\n" +
+	"\tAuthorize\x12\x1c.vws.iam.v1.AuthorizeRequest\x1a\x1d.vws.iam.v1.AuthorizeResponse\x12<\n" +
+	"\x05Login\x12\x18.vws.iam.v1.LoginRequest\x1a\x19.vws.iam.v1.LoginResponse\x12Z\n" +
+	"\x0fValidateSession\x12\".vws.iam.v1.ValidateSessionRequest\x1a#.vws.iam.v1.ValidateSessionResponse\x12?\n" +
+	"\x06Logout\x12\x19.vws.iam.v1.LogoutRequest\x1a\x1a.vws.iam.v1.LogoutResponse2\xb7\x01\n" +
+	"\fTokenService\x12K\n" +
 	"\n" +
-	"AssumeRole\x12\x1d.vws.iam.v1.AssumeRoleRequest\x1a\x1e.vws.iam.v1.AssumeRoleResponse\"/\x82\xd3\xe4\x93\x02):\x01*\"$/v1/{role=projects/*/roles/*}:assume\x12x\n" +
-	"\x0fGetSessionToken\x12\".vws.iam.v1.GetSessionTokenRequest\x1a#.vws.iam.v1.GetSessionTokenResponse\"\x1c\x82\xd3\xe4\x93\x02\x16:\x01*\"\x11/v1/sessionTokensBX\n" +
+	"AssumeRole\x12\x1d.vws.iam.v1.AssumeRoleRequest\x1a\x1e.vws.iam.v1.AssumeRoleResponse\x12Z\n" +
+	"\x0fGetSessionToken\x12\".vws.iam.v1.GetSessionTokenRequest\x1a#.vws.iam.v1.GetSessionTokenResponseBX\n" +
 	"\x0edev.vws.iam.v1B\tAuthProtoP\x01Z9github.com/popododo0720/vws-proto/gen/go/vws/iam/v1;iamv1b\x06proto3"
 
 var (
@@ -1464,36 +1593,46 @@ var file_vws_iam_v1_auth_proto_depIdxs = []int32{
 	2,  // 10: vws.iam.v1.ValidateSessionResponse.principal:type_name -> vws.iam.v1.Principal
 	20, // 11: vws.iam.v1.ValidateSessionResponse.expire_time:type_name -> google.protobuf.Timestamp
 	2,  // 12: vws.iam.v1.AssumeRoleRequest.caller:type_name -> vws.iam.v1.Principal
-	3,  // 13: vws.iam.v1.AssumeRoleResponse.credentials:type_name -> vws.iam.v1.Credentials
-	2,  // 14: vws.iam.v1.AssumeRoleResponse.assumed_role_user:type_name -> vws.iam.v1.Principal
-	2,  // 15: vws.iam.v1.GetSessionTokenRequest.caller:type_name -> vws.iam.v1.Principal
-	3,  // 16: vws.iam.v1.GetSessionTokenResponse.credentials:type_name -> vws.iam.v1.Credentials
-	7,  // 17: vws.iam.v1.AuthorizeRequest.ContextEntry.value:type_name -> vws.iam.v1.ContextValues
-	4,  // 18: vws.iam.v1.AuthService.Authenticate:input_type -> vws.iam.v1.AuthenticateRequest
-	6,  // 19: vws.iam.v1.AuthService.Authorize:input_type -> vws.iam.v1.AuthorizeRequest
-	9,  // 20: vws.iam.v1.AuthService.Login:input_type -> vws.iam.v1.LoginRequest
-	11, // 21: vws.iam.v1.AuthService.ValidateSession:input_type -> vws.iam.v1.ValidateSessionRequest
-	13, // 22: vws.iam.v1.AuthService.Logout:input_type -> vws.iam.v1.LogoutRequest
-	15, // 23: vws.iam.v1.TokenService.AssumeRole:input_type -> vws.iam.v1.AssumeRoleRequest
-	17, // 24: vws.iam.v1.TokenService.GetSessionToken:input_type -> vws.iam.v1.GetSessionTokenRequest
-	5,  // 25: vws.iam.v1.AuthService.Authenticate:output_type -> vws.iam.v1.AuthenticateResponse
-	8,  // 26: vws.iam.v1.AuthService.Authorize:output_type -> vws.iam.v1.AuthorizeResponse
-	10, // 27: vws.iam.v1.AuthService.Login:output_type -> vws.iam.v1.LoginResponse
-	12, // 28: vws.iam.v1.AuthService.ValidateSession:output_type -> vws.iam.v1.ValidateSessionResponse
-	14, // 29: vws.iam.v1.AuthService.Logout:output_type -> vws.iam.v1.LogoutResponse
-	16, // 30: vws.iam.v1.TokenService.AssumeRole:output_type -> vws.iam.v1.AssumeRoleResponse
-	18, // 31: vws.iam.v1.TokenService.GetSessionToken:output_type -> vws.iam.v1.GetSessionTokenResponse
-	25, // [25:32] is the sub-list for method output_type
-	18, // [18:25] is the sub-list for method input_type
-	18, // [18:18] is the sub-list for extension type_name
-	18, // [18:18] is the sub-list for extension extendee
-	0,  // [0:18] is the sub-list for field type_name
+	4,  // 13: vws.iam.v1.AssumeRoleRequest.sigv4:type_name -> vws.iam.v1.AuthenticateRequest
+	3,  // 14: vws.iam.v1.AssumeRoleResponse.credentials:type_name -> vws.iam.v1.Credentials
+	2,  // 15: vws.iam.v1.AssumeRoleResponse.assumed_role_user:type_name -> vws.iam.v1.Principal
+	2,  // 16: vws.iam.v1.GetSessionTokenRequest.caller:type_name -> vws.iam.v1.Principal
+	4,  // 17: vws.iam.v1.GetSessionTokenRequest.sigv4:type_name -> vws.iam.v1.AuthenticateRequest
+	3,  // 18: vws.iam.v1.GetSessionTokenResponse.credentials:type_name -> vws.iam.v1.Credentials
+	7,  // 19: vws.iam.v1.AuthorizeRequest.ContextEntry.value:type_name -> vws.iam.v1.ContextValues
+	4,  // 20: vws.iam.v1.AuthService.Authenticate:input_type -> vws.iam.v1.AuthenticateRequest
+	6,  // 21: vws.iam.v1.AuthService.Authorize:input_type -> vws.iam.v1.AuthorizeRequest
+	9,  // 22: vws.iam.v1.AuthService.Login:input_type -> vws.iam.v1.LoginRequest
+	11, // 23: vws.iam.v1.AuthService.ValidateSession:input_type -> vws.iam.v1.ValidateSessionRequest
+	13, // 24: vws.iam.v1.AuthService.Logout:input_type -> vws.iam.v1.LogoutRequest
+	15, // 25: vws.iam.v1.TokenService.AssumeRole:input_type -> vws.iam.v1.AssumeRoleRequest
+	17, // 26: vws.iam.v1.TokenService.GetSessionToken:input_type -> vws.iam.v1.GetSessionTokenRequest
+	5,  // 27: vws.iam.v1.AuthService.Authenticate:output_type -> vws.iam.v1.AuthenticateResponse
+	8,  // 28: vws.iam.v1.AuthService.Authorize:output_type -> vws.iam.v1.AuthorizeResponse
+	10, // 29: vws.iam.v1.AuthService.Login:output_type -> vws.iam.v1.LoginResponse
+	12, // 30: vws.iam.v1.AuthService.ValidateSession:output_type -> vws.iam.v1.ValidateSessionResponse
+	14, // 31: vws.iam.v1.AuthService.Logout:output_type -> vws.iam.v1.LogoutResponse
+	16, // 32: vws.iam.v1.TokenService.AssumeRole:output_type -> vws.iam.v1.AssumeRoleResponse
+	18, // 33: vws.iam.v1.TokenService.GetSessionToken:output_type -> vws.iam.v1.GetSessionTokenResponse
+	27, // [27:34] is the sub-list for method output_type
+	20, // [20:27] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_vws_iam_v1_auth_proto_init() }
 func file_vws_iam_v1_auth_proto_init() {
 	if File_vws_iam_v1_auth_proto != nil {
 		return
+	}
+	file_vws_iam_v1_auth_proto_msgTypes[13].OneofWrappers = []any{
+		(*AssumeRoleRequest_Sigv4)(nil),
+		(*AssumeRoleRequest_ConsoleSessionToken)(nil),
+	}
+	file_vws_iam_v1_auth_proto_msgTypes[15].OneofWrappers = []any{
+		(*GetSessionTokenRequest_Sigv4)(nil),
+		(*GetSessionTokenRequest_ConsoleSessionToken)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

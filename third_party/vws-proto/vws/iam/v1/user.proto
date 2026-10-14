@@ -212,11 +212,12 @@ message SetLoginProfileRequest {
     (google.api.field_behavior) = REQUIRED,
     (google.api.resource_reference).type = "vws.iam/User"
   ];
-  // Plaintext once, over the cluster-internal channel. Never stored or logged.
+  // Plaintext once, over the cluster-internal channel. Secret: never stored or logged.
   // 8 to 128 characters. A weaker password is INVALID_ARGUMENT / INVALID_SPEC.
   string password = 2 [
     (google.api.field_behavior) = REQUIRED,
-    (google.api.field_behavior) = INPUT_ONLY
+    (google.api.field_behavior) = INPUT_ONLY,
+    debug_redact = true
   ];
   bool password_reset_required = 3;
 }
@@ -233,14 +234,17 @@ message ChangePasswordRequest {
     (google.api.field_behavior) = REQUIRED,
     (google.api.resource_reference).type = "vws.iam/User"
   ];
+  // Secrets: never log them.
   // A wrong old password is UNAUTHENTICATED / INVALID_CREDENTIALS.
   string old_password = 2 [
     (google.api.field_behavior) = REQUIRED,
-    (google.api.field_behavior) = INPUT_ONLY
+    (google.api.field_behavior) = INPUT_ONLY,
+    debug_redact = true
   ];
   string new_password = 3 [
     (google.api.field_behavior) = REQUIRED,
-    (google.api.field_behavior) = INPUT_ONLY
+    (google.api.field_behavior) = INPUT_ONLY,
+    debug_redact = true
   ];
 }
 

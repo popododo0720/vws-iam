@@ -52,6 +52,9 @@ type Server struct {
 	m    *metrics
 	// marked throttles MarkUsed writes: access key id -> last write time.
 	marked sync.Map
+	// stsSeen holds SigV4 signatures already used for STS: signature ->
+	// time after which it can be forgotten (X-Amz-Date window passed).
+	stsSeen sync.Map
 }
 
 // Option configures a Server.

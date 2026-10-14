@@ -671,6 +671,7 @@ type CreateAccessKeyResponse struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	AccessKey *AccessKey             `protobuf:"bytes,1,opt,name=access_key,json=accessKey,proto3" json:"access_key,omitempty"`
 	// 40 characters. Returned here only, never by Get or List.
+	// Secret: never log it.
 	SecretAccessKey string `protobuf:"bytes,2,opt,name=secret_access_key,json=secretAccessKey,proto3" json:"secret_access_key,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
@@ -786,11 +787,11 @@ const file_vws_iam_v1_access_key_proto_rawDesc = "" +
 	"\x16CreateAccessKeyRequest\x121\n" +
 	"\x06parent\x18\x01 \x01(\tB\x19\xe0A\x02\xfaA\x13\x12\x11vws.iam/AccessKeyR\x06parent\x12*\n" +
 	"\n" +
-	"request_id\x18\x02 \x01(\tB\v\xe0A\x01\xe2\x8c\xcf\xd7\b\x02\b\x01R\trequestId\"{\n" +
+	"request_id\x18\x02 \x01(\tB\v\xe0A\x01\xe2\x8c\xcf\xd7\b\x02\b\x01R\trequestId\"\x83\x01\n" +
 	"\x17CreateAccessKeyResponse\x124\n" +
 	"\n" +
-	"access_key\x18\x01 \x01(\v2\x15.vws.iam.v1.AccessKeyR\taccessKey\x12*\n" +
-	"\x11secret_access_key\x18\x02 \x01(\tR\x0fsecretAccessKey*n\n" +
+	"access_key\x18\x01 \x01(\v2\x15.vws.iam.v1.AccessKeyR\taccessKey\x122\n" +
+	"\x11secret_access_key\x18\x02 \x01(\tB\x06\xe0A\x03\x80\x01\x01R\x0fsecretAccessKey*n\n" +
 	"\x0eAccessKeyState\x12 \n" +
 	"\x1cACCESS_KEY_STATE_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17ACCESS_KEY_STATE_ACTIVE\x10\x01\x12\x1d\n" +

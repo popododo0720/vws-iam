@@ -32,7 +32,8 @@ const (
 //
 // AuthService is the cluster-internal authentication and authorization API
 // for VWS services (console-api first). Only callers allowed by the chart's
-// NetworkPolicy reach it; it is never exposed outside the cluster.
+// NetworkPolicy reach it; it is never exposed outside the cluster, so it has
+// no HTTP routes (no google.api.http): gRPC only.
 // None of these RPCs is an operation: they write no desired state.
 type AuthServiceClient interface {
 	// Authenticate verifies a SigV4 signature inside vws-iam. The caller
@@ -126,7 +127,8 @@ func (c *authServiceClient) Logout(ctx context.Context, in *LogoutRequest, opts 
 //
 // AuthService is the cluster-internal authentication and authorization API
 // for VWS services (console-api first). Only callers allowed by the chart's
-// NetworkPolicy reach it; it is never exposed outside the cluster.
+// NetworkPolicy reach it; it is never exposed outside the cluster, so it has
+// no HTTP routes (no google.api.http): gRPC only.
 // None of these RPCs is an operation: they write no desired state.
 type AuthServiceServer interface {
 	// Authenticate verifies a SigV4 signature inside vws-iam. The caller
@@ -331,7 +333,15 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// TokenService is STS: temporary credentials.
+// TokenService is STS: temporary credentials. Cluster-internal like
+// AuthService, gRPC only, no HTTP routes.
+//
+// The caller is never taken from the request. vws-iam derives it from the
+// credential the client authenticated with (sigv4 or console_session_token)
+// and verifies that credential itself. A request without one is
+// UNAUTHENTICATED / INVALID_CREDENTIALS. The deprecated caller field is
+// ignored: trusting it would let any client that reaches this service act as
+// any principal (impersonation).
 type TokenServiceClient interface {
 	// AssumeRole needs the role's trust policy to allow the caller and the
 	// caller's identity policies to allow sts:AssumeRole on the role ARN;
@@ -376,7 +386,15 @@ func (c *tokenServiceClient) GetSessionToken(ctx context.Context, in *GetSession
 // All implementations must embed UnimplementedTokenServiceServer
 // for forward compatibility.
 //
-// TokenService is STS: temporary credentials.
+// TokenService is STS: temporary credentials. Cluster-internal like
+// AuthService, gRPC only, no HTTP routes.
+//
+// The caller is never taken from the request. vws-iam derives it from the
+// credential the client authenticated with (sigv4 or console_session_token)
+// and verifies that credential itself. A request without one is
+// UNAUTHENTICATED / INVALID_CREDENTIALS. The deprecated caller field is
+// ignored: trusting it would let any client that reaches this service act as
+// any principal (impersonation).
 type TokenServiceServer interface {
 	// AssumeRole needs the role's trust policy to allow the caller and the
 	// caller's identity policies to allow sts:AssumeRole on the role ARN;

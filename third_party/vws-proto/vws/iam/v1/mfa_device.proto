@@ -150,10 +150,17 @@ message CreateVirtualMfaDeviceRequest {
 
 message CreateVirtualMfaDeviceResponse {
   MfaDevice mfa_device = 1;
-  // RFC 4648 base32 seed. Returned here only.
-  string base32_string_seed = 2;
-  // otpauth://totp/... URI for a QR code. Returned here only.
-  string otpauth_uri = 3;
+  // RFC 4648 base32 seed. Returned here only. Secret: never log it.
+  string base32_string_seed = 2 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    debug_redact = true
+  ];
+  // otpauth://totp/... URI for a QR code; it contains the seed. Returned here
+  // only. Secret: never log it.
+  string otpauth_uri = 3 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    debug_redact = true
+  ];
 }
 
 message EnableMfaDeviceRequest {
@@ -165,8 +172,18 @@ message EnableMfaDeviceRequest {
     (google.api.field_behavior) = REQUIRED,
     (google.api.resource_reference).type = "vws.iam/User"
   ];
-  string authentication_code_1 = 3 [(google.api.field_behavior) = REQUIRED];
-  string authentication_code_2 = 4 [(google.api.field_behavior) = REQUIRED];
+  // TOTP code. Never log it.
+  string authentication_code_1 = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = INPUT_ONLY,
+    debug_redact = true
+  ];
+  // TOTP code. Never log it.
+  string authentication_code_2 = 4 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = INPUT_ONLY,
+    debug_redact = true
+  ];
 }
 
 message DeactivateMfaDeviceRequest {

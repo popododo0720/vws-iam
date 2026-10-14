@@ -3,16 +3,17 @@ package grpcapi
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
-	"google.golang.org/grpc/metadata"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
+	"github.com/popododo0720/vws-iam/internal/sigv4"
 	"github.com/popododo0720/vws-iam/internal/sts"
 )
 
@@ -27,37 +28,56 @@ func credsProto(c sts.Credentials) *iamv1.Credentials {
 }
 
 // authn is how the caller of AssumeRole or GetSessionToken authenticated:
-// exactly one of a console session token or a SigV4 request.
+// exactly one of a console session token or a SigV4 request. A console
+// session token is accepted by AssumeRole for IAM users; GetSessionToken
+// accepts it only for the root user (AWS: long-term credentials only).
 type authn struct {
 	console string
 	sigv4   *iamv1.AuthenticateRequest
 }
 
-// Metadata keys from which AssumeRole and GetSessionToken derive the
-// caller (vws-proto#28). The request's caller field is never trusted.
-const (
-	// MetadataSessionToken carries a console session token from Login.
-	MetadataSessionToken = "x-vws-session-token"
-	// MetadataAuthenticate carries the caller's serialized
-	// AuthenticateRequest (SigV4 canonical request and signature); the
-	// server verifies it itself, so the gateway cannot vouch for anyone.
-	MetadataAuthenticate = "x-vws-authenticate-bin"
-)
-
-func authnFromMetadata(ctx context.Context) (authn, error) {
-	md, _ := metadata.FromIncomingContext(ctx)
-	tokens, signed := md.Get(MetadataSessionToken), md.Get(MetadataAuthenticate)
+// authnOf reads the request's authentication oneof (vws-proto v0.3.0). It
+// is the only source of the caller; the deprecated caller field is ignored.
+func authnOf(sigv4 *iamv1.AuthenticateRequest, console string) (authn, error) {
 	switch {
-	case len(tokens)+len(signed) != 1:
-		return authn{}, missingAuthentication()
-	case len(tokens) == 1:
-		return authn{console: tokens[0]}, nil
+	case sigv4 != nil:
+		return authn{sigv4: sigv4}, nil
+	case console != "":
+		return authn{console: console}, nil
 	}
-	req := &iamv1.AuthenticateRequest{}
-	if err := proto.Unmarshal([]byte(signed[0]), req); err != nil {
-		return authn{}, invalidCredentials("IncompleteSignature", "malformed "+MetadataAuthenticate)
+	return authn{}, missingAuthentication()
+}
+
+// stsSigv4 checks that a forwarded SigV4 request was signed for this STS
+// call, so a request signed for another service or action cannot be
+// replayed here, and that the same signature is not used twice while its
+// X-Amz-Date is inside the sigv4.MaxSkew window.
+func (s *Server) stsSigv4(r *iamv1.AuthenticateRequest, action string) error {
+	if r.GetService() != "sts" {
+		return accessDenied("the signed request is not an STS call")
 	}
-	return authn{sigv4: req}, nil
+	lines := strings.Split(r.GetCanonicalRequest(), "\n")
+	if len(lines) < 3 {
+		return invalidCredentials("IncompleteSignature", "malformed canonical request")
+	}
+	q, err := url.ParseQuery(lines[2])
+	if err != nil {
+		return invalidCredentials("IncompleteSignature", "malformed canonical query")
+	}
+	if a := q.Get("Action"); a != "" && a != action {
+		return accessDenied("the signed request is for " + a + ", not " + action)
+	}
+	now := s.now()
+	s.stsSeen.Range(func(k, v any) bool {
+		if t, ok := v.(time.Time); ok && now.After(t) {
+			s.stsSeen.Delete(k)
+		}
+		return true
+	})
+	if _, dup := s.stsSeen.LoadOrStore(r.GetSignature(), now.Add(2*sigv4.MaxSkew)); dup {
+		return accessDenied("this signed request was already used")
+	}
+	return nil
 }
 
 func missingAuthentication() error {
@@ -67,11 +87,14 @@ func missingAuthentication() error {
 // authenticatedCaller verifies the caller's credential on the server and
 // derives the STS caller from it (sts.Resolve or the stored console
 // session). Nothing in the request body names the caller.
-func (s *Server) authenticatedCaller(ctx context.Context, a authn) (project, sts.Caller, error) {
+func (s *Server) authenticatedCaller(ctx context.Context, a authn, action string) (project, sts.Caller, error) {
 	switch {
 	case a.sigv4 != nil:
 		resp, err := s.authenticate(ctx, a.sigv4)
 		if err != nil {
+			return project{}, sts.Caller{}, err
+		}
+		if err := s.stsSigv4(a.sigv4, action); err != nil {
 			return project{}, sts.Caller{}, err
 		}
 		p := s.project(resp.GetAccount())
@@ -96,7 +119,7 @@ func (s *Server) AssumeRole(ctx context.Context, req *iamv1.AssumeRoleRequest) (
 	defer func() {
 		s.m.add(ctx, s.m.issued, attribute.String("rpc", "AssumeRole"), attribute.String("result", result(err)))
 	}()
-	a, err := authnFromMetadata(ctx)
+	a, err := authnOf(req.GetSigv4(), req.GetConsoleSessionToken())
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
@@ -108,7 +131,7 @@ func (s *Server) assumeRole(ctx context.Context, req *iamv1.AssumeRoleRequest, a
 	if err != nil {
 		return nil, err
 	}
-	p, c, err := s.authenticatedCaller(ctx, a)
+	p, c, err := s.authenticatedCaller(ctx, a, "AssumeRole")
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
@@ -148,7 +171,7 @@ func (s *Server) GetSessionToken(ctx context.Context, req *iamv1.GetSessionToken
 	defer func() {
 		s.m.add(ctx, s.m.issued, attribute.String("rpc", "GetSessionToken"), attribute.String("result", result(err)))
 	}()
-	a, err := authnFromMetadata(ctx)
+	a, err := authnOf(req.GetSigv4(), req.GetConsoleSessionToken())
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
@@ -162,7 +185,7 @@ func (s *Server) getSessionToken(ctx context.Context, req *iamv1.GetSessionToken
 		// console session here, and vws-iam has no root console login yet.
 		return nil, toStatus(ctx, fmt.Errorf("%w: GetSessionToken with a console session is root-only", sts.ErrAccessDenied))
 	}
-	p, c, err := s.authenticatedCaller(ctx, a)
+	p, c, err := s.authenticatedCaller(ctx, a, "GetSessionToken")
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}

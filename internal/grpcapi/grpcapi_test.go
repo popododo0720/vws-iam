@@ -6,6 +6,7 @@ import (
 	"encoding/base32"
 	"encoding/hex"
 	"net"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +16,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
@@ -45,6 +45,7 @@ type env struct {
 	token    iamv1.TokenServiceClient
 	ops      longrunningpb.OperationsClient
 	now      *time.Time
+	nonce    int
 }
 
 func newEnv(t *testing.T) *env {
@@ -281,14 +282,26 @@ func (e *env) sign(id, secretKey, token string) *iamv1.AuthenticateRequest {
 		StringToSign: sts, Signature: sigv4.Sign([]byte(secretKey), date, "kr-1", "s3", sts), SessionToken: token}
 }
 
-// signedCtx forwards a SigV4-signed request in metadata, as the gateway does.
-func (e *env) signedCtx(t *testing.T, ctx context.Context, id, secretKey, token string) context.Context {
-	t.Helper()
-	b, err := proto.Marshal(e.sign(id, secretKey, token))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return metadata.AppendToOutgoingContext(ctx, grpcapi.MetadataAuthenticate, string(b))
+// stsSign signs an STS request as a client would; console-api forwards
+// it in the request's authentication oneof. Each call is a distinct
+// request (fresh nonce), so the replay guard does not refuse it.
+func (e *env) stsSign(id, secretKey, token, action string) *iamv1.AuthenticateRequest {
+	e.nonce++
+	date := e.now.Format("20060102")
+	amz := e.now.Format("20060102T150405Z")
+	canonical := "POST\n/\nAction=" + action + "&Nonce=" + strconv.Itoa(e.nonce) + "&Version=2011-06-15\nhost:sts.vws.local\nx-amz-date:" + amz + "\n\nhost;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	h := sha256.Sum256([]byte(canonical))
+	sts := "AWS4-HMAC-SHA256\n" + amz + "\n" + date + "/kr-1/sts/aws4_request\n" + hex.EncodeToString(h[:])
+	return &iamv1.AuthenticateRequest{AccessKeyId: id, Date: date, Region: "kr-1", Service: "sts", CanonicalRequest: canonical,
+		StringToSign: sts, Signature: sigv4.Sign([]byte(secretKey), date, "kr-1", "sts", sts), SessionToken: token}
+}
+
+func gstSig(r *iamv1.AuthenticateRequest) *iamv1.GetSessionTokenRequest_Sigv4 {
+	return &iamv1.GetSessionTokenRequest_Sigv4{Sigv4: r}
+}
+
+func arSig(r *iamv1.AuthenticateRequest) *iamv1.AssumeRoleRequest_Sigv4 {
+	return &iamv1.AssumeRoleRequest_Sigv4{Sigv4: r}
 }
 
 func TestAuthenticateAuthorize(t *testing.T) {
@@ -449,12 +462,11 @@ func TestLoginMFAAndSessions(t *testing.T) {
 	// GetSessionToken with MFA.
 	*e.now = e.now.Add(30 * time.Second)
 	// The caller comes from the session, not from the request (vws-proto#28).
-	_, err = e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{Caller: l.GetPrincipal()})
+	_, err = e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{Caller: l.GetPrincipal()}) //nolint:staticcheck // proves the deprecated caller field is ignored
 	wantErr(t, err, codes.Unauthenticated, "INVALID_CREDENTIALS", "MissingAuthenticationToken")
 	// An IAM user's console session is not a long-term credential: only
 	// the root user may call GetSessionToken with a console session.
-	sctx := metadata.AppendToOutgoingContext(ctx, grpcapi.MetadataSessionToken, l.GetSessionToken())
-	_, err = e.token.GetSessionToken(sctx, &iamv1.GetSessionTokenRequest{SerialNumber: serial, TokenCode: code(t, e, seed)})
+	_, err = e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{Authentication: &iamv1.GetSessionTokenRequest_ConsoleSessionToken{ConsoleSessionToken: l.GetSessionToken()}, SerialNumber: serial, TokenCode: code(t, e, seed)})
 	wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
 	key, err := e.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: u.GetName()})
 	if err != nil {
@@ -462,9 +474,9 @@ func TestLoginMFAAndSessions(t *testing.T) {
 	}
 	kid := key.GetAccessKey().GetName()[strings.LastIndex(key.GetAccessKey().GetName(), "/")+1:]
 	// The MFA code is verified server-side: a wrong one is refused.
-	_, err = e.token.GetSessionToken(e.signedCtx(t, ctx, kid, key.GetSecretAccessKey(), ""), &iamv1.GetSessionTokenRequest{SerialNumber: serial, TokenCode: "000000"})
+	_, err = e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{Authentication: gstSig(e.stsSign(kid, key.GetSecretAccessKey(), "", "GetSessionToken")), SerialNumber: serial, TokenCode: "000000"})
 	wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
-	st, err := e.token.GetSessionToken(e.signedCtx(t, ctx, kid, key.GetSecretAccessKey(), ""), &iamv1.GetSessionTokenRequest{SerialNumber: serial, TokenCode: code(t, e, seed)})
+	st, err := e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{Authentication: gstSig(e.stsSign(kid, key.GetSecretAccessKey(), "", "GetSessionToken")), SerialNumber: serial, TokenCode: code(t, e, seed)})
 	if err != nil || !strings.HasPrefix(st.GetCredentials().GetAccessKeyId(), "ASIA") {
 		t.Fatalf("session token %v", err)
 	}
@@ -475,7 +487,7 @@ func TestLoginMFAAndSessions(t *testing.T) {
 	_, err = e.auth.Authenticate(ctx, e.sign(st.GetCredentials().GetAccessKeyId(), st.GetCredentials().GetSecretAccessKey(), ""))
 	wantErr(t, err, codes.Unauthenticated, "INVALID_CREDENTIALS", "MissingAuthenticationToken")
 	// Temporary credentials cannot call GetSessionToken (AWS rule), now detectable.
-	_, err = e.token.GetSessionToken(e.signedCtx(t, ctx, st.GetCredentials().GetAccessKeyId(), st.GetCredentials().GetSecretAccessKey(), st.GetCredentials().GetSessionToken()), &iamv1.GetSessionTokenRequest{})
+	_, err = e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{Authentication: gstSig(e.stsSign(st.GetCredentials().GetAccessKeyId(), st.GetCredentials().GetSecretAccessKey(), st.GetCredentials().GetSessionToken(), "GetSessionToken"))})
 	wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
 
 	if _, err := e.auth.Logout(ctx, &iamv1.LogoutRequest{SessionToken: l.GetSessionToken()}); err != nil {
@@ -516,13 +528,15 @@ func TestAssumeRole(t *testing.T) {
 		t.Fatal(err)
 	}
 	kid := key.GetAccessKey().GetName()[strings.LastIndex(key.GetAccessKey().GetName(), "/")+1:]
-	actx := e.signedCtx(t, ctx, kid, key.GetSecretAccessKey(), "")
+	alice := func() *iamv1.AssumeRoleRequest_Sigv4 {
+		return arSig(e.stsSign(kid, key.GetSecretAccessKey(), "", "AssumeRole"))
+	}
 
 	// A caller field alone authenticates nothing (vws-proto#28).
-	_, err = e.token.AssumeRole(ctx, &iamv1.AssumeRoleRequest{Role: role.GetName(), Caller: caller, RoleSessionName: "s1", ExternalId: "ext-1"})
+	_, err = e.token.AssumeRole(ctx, &iamv1.AssumeRoleRequest{Role: role.GetName(), Caller: caller, RoleSessionName: "s1", ExternalId: "ext-1"}) //nolint:staticcheck // proves the deprecated caller field is ignored
 	wantErr(t, err, codes.Unauthenticated, "INVALID_CREDENTIALS", "MissingAuthenticationToken")
 	// A bad signature in the forwarded request is rejected by vws-iam itself.
-	_, err = e.token.AssumeRole(e.signedCtx(t, ctx, kid, strings.Repeat("x", 40), ""), &iamv1.AssumeRoleRequest{Role: role.GetName(), RoleSessionName: "s1", ExternalId: "ext-1"})
+	_, err = e.token.AssumeRole(ctx, &iamv1.AssumeRoleRequest{Authentication: arSig(e.stsSign(kid, strings.Repeat("x", 40), "", "AssumeRole")), Role: role.GetName(), RoleSessionName: "s1", ExternalId: "ext-1"})
 	wantErr(t, err, codes.Unauthenticated, "INVALID_CREDENTIALS", "SignatureDoesNotMatch")
 	// Signed as mallory but claiming alice: the caller field is ignored, so
 	// mallory is the caller and the trust policy (alice only) refuses her.
@@ -532,12 +546,12 @@ func TestAssumeRole(t *testing.T) {
 		t.Fatal(err)
 	}
 	mkid := mkey.GetAccessKey().GetName()[strings.LastIndex(mkey.GetAccessKey().GetName(), "/")+1:]
-	_, err = e.token.AssumeRole(e.signedCtx(t, ctx, mkid, mkey.GetSecretAccessKey(), ""), &iamv1.AssumeRoleRequest{Role: role.GetName(), Caller: caller, RoleSessionName: "s1", ExternalId: "ext-1"})
+	_, err = e.token.AssumeRole(ctx, &iamv1.AssumeRoleRequest{Authentication: arSig(e.stsSign(mkid, mkey.GetSecretAccessKey(), "", "AssumeRole")), Role: role.GetName(), Caller: caller, RoleSessionName: "s1", ExternalId: "ext-1"}) //nolint:staticcheck // proves the deprecated caller field is ignored
 	wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
 
-	_, err = e.token.AssumeRole(actx, &iamv1.AssumeRoleRequest{Role: role.GetName(), RoleSessionName: "s1"})
+	_, err = e.token.AssumeRole(ctx, &iamv1.AssumeRoleRequest{Authentication: alice(), Role: role.GetName(), RoleSessionName: "s1"})
 	wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
-	resp, err := e.token.AssumeRole(actx, &iamv1.AssumeRoleRequest{Role: role.GetName(), Caller: caller, RoleSessionName: "s1", ExternalId: "ext-1"})
+	resp, err := e.token.AssumeRole(ctx, &iamv1.AssumeRoleRequest{Authentication: alice(), Role: role.GetName(), Caller: caller, RoleSessionName: "s1", ExternalId: "ext-1"}) //nolint:staticcheck // proves the deprecated caller field is ignored
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -558,7 +572,7 @@ func TestAssumeRole(t *testing.T) {
 		t.Fatalf("role authorize %v %v", r, err)
 	}
 	// Cross-project and role sessions of a recreated role are refused.
-	_, err = e.token.AssumeRole(actx, &iamv1.AssumeRoleRequest{Role: "projects/other/roles/deployer", RoleSessionName: "s1", ExternalId: "ext-1"})
+	_, err = e.token.AssumeRole(ctx, &iamv1.AssumeRoleRequest{Authentication: alice(), Role: "projects/other/roles/deployer", RoleSessionName: "s1", ExternalId: "ext-1"})
 	wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
 	if _, err := e.roles.DeleteRole(ctx, &iamv1.DeleteRoleRequest{Name: role.GetName()}); err != nil {
 		t.Fatal(err)
@@ -664,4 +678,118 @@ func TestClientServiceConfigRetries(t *testing.T) {
 	if err != nil || op.GetName() != "ok" || f.calls != 3 {
 		t.Fatalf("op=%v err=%v calls=%d", op, err, f.calls)
 	}
+}
+
+// TestSTSAuthenticationOneof covers vws-proto v0.3.0 and the follow-ups of
+// #30: the caller comes only from the authentication oneof, a missing one
+// is UNAUTHENTICATED, and a forwarded SigV4 request cannot be replayed for
+// another service or action, reused, or used outside the X-Amz-Date window.
+func TestSTSAuthenticationOneof(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	u := e.createUser(t, ctx, "alice")
+	key, err := e.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: u.GetName()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kid := key.GetAccessKey().GetName()[strings.LastIndex(key.GetAccessKey().GetName(), "/")+1:]
+	secret := key.GetSecretAccessKey()
+	caller := &iamv1.Principal{Type: iamv1.PrincipalType_PRINCIPAL_TYPE_USER, Arn: u.GetStatus().GetArn(), Project: proj, UniqueId: u.GetStatus().GetUniqueId(), Resource: u.GetName()}
+
+	// Missing authentication: UNAUTHENTICATED, even with a caller field.
+	_, err = e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{Caller: caller}) //nolint:staticcheck // proves the deprecated caller field is ignored
+	wantErr(t, err, codes.Unauthenticated, "INVALID_CREDENTIALS", "MissingAuthenticationToken")
+	_, err = e.token.AssumeRole(ctx, &iamv1.AssumeRoleRequest{Role: parentName + "/roles/r", Caller: caller, RoleSessionName: "s1"}) //nolint:staticcheck // proves the deprecated caller field is ignored
+	wantErr(t, err, codes.Unauthenticated, "INVALID_CREDENTIALS", "MissingAuthenticationToken")
+
+	// Signed for another service (s3) or another STS action.
+	_, err = e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{Authentication: gstSig(e.sign(kid, secret, ""))})
+	wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+	_, err = e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{Authentication: gstSig(e.stsSign(kid, secret, "", "AssumeRole"))})
+	wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+
+	// The same signed request works once; a replay is refused.
+	signed := e.stsSign(kid, secret, "", "GetSessionToken")
+	if _, err := e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{Authentication: gstSig(signed)}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{Authentication: gstSig(signed)})
+	wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+
+	// Outside the X-Amz-Date window.
+	stale := e.stsSign(kid, secret, "", "GetSessionToken")
+	*e.now = e.now.Add(16 * time.Minute)
+	_, err = e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{Authentication: gstSig(stale)})
+	wantErr(t, err, codes.Unauthenticated, "INVALID_CREDENTIALS", "RequestTimeTooSkewed")
+}
+
+// TestSTSMFAIsVerifiedAndLocksOut checks that SerialNumber/TokenCode are
+// verified server-side through internal/mfa, including its lockout.
+func TestSTSMFAIsVerifiedAndLocksOut(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	u := e.createUser(t, ctx, "alice")
+	seed, serial, _ := strings.Cut(enableMFA(t, e, ctx, "alice"), "|")
+	key, err := e.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: u.GetName()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kid := key.GetAccessKey().GetName()[strings.LastIndex(key.GetAccessKey().GetName(), "/")+1:]
+	gst := func(code string) error {
+		_, err := e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{SerialNumber: serial, TokenCode: code,
+			Authentication: gstSig(e.stsSign(kid, key.GetSecretAccessKey(), "", "GetSessionToken"))})
+		return err
+	}
+	_, err = e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{SerialNumber: serial,
+		Authentication: gstSig(e.stsSign(kid, key.GetSecretAccessKey(), "", "GetSessionToken"))})
+	wantErr(t, err, codes.InvalidArgument, "INVALID_SPEC", "ValidationError")
+	for range 5 {
+		wantErr(t, gst("000000"), codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+	}
+	// Locked: even the right code is refused.
+	wantErr(t, gst(code(t, e, seed)), codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+	*e.now = e.now.Add(15 * time.Minute)
+	if err := gst(code(t, e, seed)); err != nil {
+		t.Fatalf("after lockout: %v", err)
+	}
+}
+
+// TestConsoleSessionAuthentication: a user's console session may assume a
+// role (its MFA carried over) but may not call GetSessionToken (root-only).
+func TestConsoleSessionAuthentication(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	u := e.createUser(t, ctx, "alice")
+	pol := e.createPolicy(t, ctx, "assume", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sts:AssumeRole","Resource":"*"}]}`)
+	if _, err := e.users.UpdateUser(ctx, &iamv1.UpdateUserRequest{User: &iamv1.User{Name: u.GetName(), Spec: &iamv1.UserSpec{AttachedPolicies: []string{pol.GetName()}}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.attached_policies"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.users.SetLoginProfile(ctx, &iamv1.SetLoginProfileRequest{Name: u.GetName(), Password: "correct horse battery"}); err != nil {
+		t.Fatal(err)
+	}
+	seed, _, _ := strings.Cut(enableMFA(t, e, ctx, "alice"), "|")
+	l, err := e.auth.Login(ctx, &iamv1.LoginRequest{Project: proj, UserName: "alice", Password: "correct horse battery", TotpCode: code(t, e, seed)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:vws:iam::acme:user/alice"},"Action":"sts:AssumeRole","Condition":{"Bool":{"aws:MultiFactorAuthPresent":"true"}}}]}`
+	op, err := e.roles.CreateRole(ctx, &iamv1.CreateRoleRequest{Parent: parentName, RoleId: "admin", Role: &iamv1.Role{Spec: &iamv1.RoleSpec{AssumeRolePolicy: trust}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	role := unpack(t, op, &iamv1.Role{})
+	console := &iamv1.AssumeRoleRequest_ConsoleSessionToken{ConsoleSessionToken: l.GetSessionToken()}
+	resp, err := e.token.AssumeRole(ctx, &iamv1.AssumeRoleRequest{Role: role.GetName(), RoleSessionName: "s1", Authentication: console})
+	if err != nil || !resp.GetAssumedRoleUser().GetMfaAuthenticated() {
+		t.Fatalf("console assume %v %v", resp, err)
+	}
+	_, err = e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{Authentication: &iamv1.GetSessionTokenRequest_ConsoleSessionToken{ConsoleSessionToken: l.GetSessionToken()}})
+	wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+	// After logout the token authenticates nothing.
+	if _, err := e.auth.Logout(ctx, &iamv1.LogoutRequest{SessionToken: l.GetSessionToken()}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.token.AssumeRole(ctx, &iamv1.AssumeRoleRequest{Role: role.GetName(), RoleSessionName: "s1", Authentication: console})
+	wantErr(t, err, codes.Unauthenticated, "INVALID_CREDENTIALS", "InvalidClientTokenId")
 }

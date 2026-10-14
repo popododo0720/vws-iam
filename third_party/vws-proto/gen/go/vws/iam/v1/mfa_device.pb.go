@@ -546,9 +546,10 @@ func (x *CreateVirtualMfaDeviceRequest) GetMfaDevice() *MfaDevice {
 type CreateVirtualMfaDeviceResponse struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	MfaDevice *MfaDevice             `protobuf:"bytes,1,opt,name=mfa_device,json=mfaDevice,proto3" json:"mfa_device,omitempty"`
-	// RFC 4648 base32 seed. Returned here only.
+	// RFC 4648 base32 seed. Returned here only. Secret: never log it.
 	Base32StringSeed string `protobuf:"bytes,2,opt,name=base32_string_seed,json=base32StringSeed,proto3" json:"base32_string_seed,omitempty"`
-	// otpauth://totp/... URI for a QR code. Returned here only.
+	// otpauth://totp/... URI for a QR code; it contains the seed. Returned here
+	// only. Secret: never log it.
 	OtpauthUri    string `protobuf:"bytes,3,opt,name=otpauth_uri,json=otpauthUri,proto3" json:"otpauth_uri,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -606,11 +607,13 @@ func (x *CreateVirtualMfaDeviceResponse) GetOtpauthUri() string {
 }
 
 type EnableMfaDeviceRequest struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	Name                 string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	User                 string                 `protobuf:"bytes,2,opt,name=user,proto3" json:"user,omitempty"`
-	AuthenticationCode_1 string                 `protobuf:"bytes,3,opt,name=authentication_code_1,json=authenticationCode1,proto3" json:"authentication_code_1,omitempty"`
-	AuthenticationCode_2 string                 `protobuf:"bytes,4,opt,name=authentication_code_2,json=authenticationCode2,proto3" json:"authentication_code_2,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	User  string                 `protobuf:"bytes,2,opt,name=user,proto3" json:"user,omitempty"`
+	// TOTP code. Never log it.
+	AuthenticationCode_1 string `protobuf:"bytes,3,opt,name=authentication_code_1,json=authenticationCode1,proto3" json:"authentication_code_1,omitempty"`
+	// TOTP code. Never log it.
+	AuthenticationCode_2 string `protobuf:"bytes,4,opt,name=authentication_code_2,json=authenticationCode2,proto3" json:"authentication_code_2,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -872,20 +875,20 @@ const file_vws_iam_v1_mfa_device_proto_rawDesc = "" +
 	"\x06parent\x18\x01 \x01(\tB\x19\xe0A\x02\xfaA\x13\x12\x11vws.iam/MfaDeviceR\x06parent\x12'\n" +
 	"\rmfa_device_id\x18\x02 \x01(\tB\x03\xe0A\x02R\vmfaDeviceId\x129\n" +
 	"\n" +
-	"mfa_device\x18\x03 \x01(\v2\x15.vws.iam.v1.MfaDeviceB\x03\xe0A\x02R\tmfaDevice\"\xa5\x01\n" +
+	"mfa_device\x18\x03 \x01(\v2\x15.vws.iam.v1.MfaDeviceB\x03\xe0A\x02R\tmfaDevice\"\xb5\x01\n" +
 	"\x1eCreateVirtualMfaDeviceResponse\x124\n" +
 	"\n" +
-	"mfa_device\x18\x01 \x01(\v2\x15.vws.iam.v1.MfaDeviceR\tmfaDevice\x12,\n" +
-	"\x12base32_string_seed\x18\x02 \x01(\tR\x10base32StringSeed\x12\x1f\n" +
-	"\votpauth_uri\x18\x03 \x01(\tR\n" +
-	"otpauthUri\"\xe3\x01\n" +
+	"mfa_device\x18\x01 \x01(\v2\x15.vws.iam.v1.MfaDeviceR\tmfaDevice\x124\n" +
+	"\x12base32_string_seed\x18\x02 \x01(\tB\x06\xe0A\x03\x80\x01\x01R\x10base32StringSeed\x12'\n" +
+	"\votpauth_uri\x18\x03 \x01(\tB\x06\xe0A\x03\x80\x01\x01R\n" +
+	"otpauthUri\"\xef\x01\n" +
 	"\x16EnableMfaDeviceRequest\x12-\n" +
 	"\x04name\x18\x01 \x01(\tB\x19\xe0A\x02\xfaA\x13\n" +
 	"\x11vws.iam/MfaDeviceR\x04name\x12(\n" +
 	"\x04user\x18\x02 \x01(\tB\x14\xe0A\x02\xfaA\x0e\n" +
-	"\fvws.iam/UserR\x04user\x127\n" +
-	"\x15authentication_code_1\x18\x03 \x01(\tB\x03\xe0A\x02R\x13authenticationCode1\x127\n" +
-	"\x15authentication_code_2\x18\x04 \x01(\tB\x03\xe0A\x02R\x13authenticationCode2\"u\n" +
+	"\fvws.iam/UserR\x04user\x12=\n" +
+	"\x15authentication_code_1\x18\x03 \x01(\tB\t\xe0A\x02\xe0A\x04\x80\x01\x01R\x13authenticationCode1\x12=\n" +
+	"\x15authentication_code_2\x18\x04 \x01(\tB\t\xe0A\x02\xe0A\x04\x80\x01\x01R\x13authenticationCode2\"u\n" +
 	"\x1aDeactivateMfaDeviceRequest\x12-\n" +
 	"\x04name\x18\x01 \x01(\tB\x19\xe0A\x02\xfaA\x13\n" +
 	"\x11vws.iam/MfaDeviceR\x04name\x12(\n" +

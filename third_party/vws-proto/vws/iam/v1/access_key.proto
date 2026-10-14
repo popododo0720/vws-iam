@@ -178,5 +178,9 @@ message CreateAccessKeyRequest {
 message CreateAccessKeyResponse {
   AccessKey access_key = 1;
   // 40 characters. Returned here only, never by Get or List.
-  string secret_access_key = 2;
+  // Secret: never log it.
+  string secret_access_key = 2 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    debug_redact = true
+  ];
 }

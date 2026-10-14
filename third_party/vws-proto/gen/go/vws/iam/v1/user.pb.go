@@ -696,7 +696,7 @@ func (x *DeleteUserRequest) GetEtag() string {
 type SetLoginProfileRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// Plaintext once, over the cluster-internal channel. Never stored or logged.
+	// Plaintext once, over the cluster-internal channel. Secret: never stored or logged.
 	// 8 to 128 characters. A weaker password is INVALID_ARGUMENT / INVALID_SPEC.
 	Password              string `protobuf:"bytes,2,opt,name=password,proto3" json:"password,omitempty"`
 	PasswordResetRequired bool   `protobuf:"varint,3,opt,name=password_reset_required,json=passwordResetRequired,proto3" json:"password_reset_required,omitempty"`
@@ -802,6 +802,7 @@ func (x *DeleteLoginProfileRequest) GetName() string {
 type ChangePasswordRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Secrets: never log them.
 	// A wrong old password is UNAUTHENTICATED / INVALID_CREDENTIALS.
 	OldPassword   string `protobuf:"bytes,2,opt,name=old_password,json=oldPassword,proto3" json:"old_password,omitempty"`
 	NewPassword   string `protobuf:"bytes,3,opt,name=new_password,json=newPassword,proto3" json:"new_password,omitempty"`
@@ -1045,20 +1046,20 @@ const file_vws_iam_v1_user_proto_rawDesc = "" +
 	"\n" +
 	"request_id\x18\x02 \x01(\tB\v\xe0A\x01\xe2\x8c\xcf\xd7\b\x02\b\x01R\trequestId\x12(\n" +
 	"\rallow_missing\x18\x03 \x01(\bB\x03\xe0A\x01R\fallowMissing\x12\x17\n" +
-	"\x04etag\x18\x04 \x01(\tB\x03\xe0A\x01R\x04etag\"\x9e\x01\n" +
+	"\x04etag\x18\x04 \x01(\tB\x03\xe0A\x01R\x04etag\"\xa1\x01\n" +
 	"\x16SetLoginProfileRequest\x12(\n" +
 	"\x04name\x18\x01 \x01(\tB\x14\xe0A\x02\xfaA\x0e\n" +
-	"\fvws.iam/UserR\x04name\x12\"\n" +
-	"\bpassword\x18\x02 \x01(\tB\x06\xe0A\x02\xe0A\x04R\bpassword\x126\n" +
+	"\fvws.iam/UserR\x04name\x12%\n" +
+	"\bpassword\x18\x02 \x01(\tB\t\xe0A\x02\xe0A\x04\x80\x01\x01R\bpassword\x126\n" +
 	"\x17password_reset_required\x18\x03 \x01(\bR\x15passwordResetRequired\"E\n" +
 	"\x19DeleteLoginProfileRequest\x12(\n" +
 	"\x04name\x18\x01 \x01(\tB\x14\xe0A\x02\xfaA\x0e\n" +
-	"\fvws.iam/UserR\x04name\"\x97\x01\n" +
+	"\fvws.iam/UserR\x04name\"\x9d\x01\n" +
 	"\x15ChangePasswordRequest\x12(\n" +
 	"\x04name\x18\x01 \x01(\tB\x14\xe0A\x02\xfaA\x0e\n" +
-	"\fvws.iam/UserR\x04name\x12)\n" +
-	"\fold_password\x18\x02 \x01(\tB\x06\xe0A\x02\xe0A\x04R\voldPassword\x12)\n" +
-	"\fnew_password\x18\x03 \x01(\tB\x06\xe0A\x02\xe0A\x04R\vnewPassword\"\x19\n" +
+	"\fvws.iam/UserR\x04name\x12,\n" +
+	"\fold_password\x18\x02 \x01(\tB\t\xe0A\x02\xe0A\x04\x80\x01\x01R\voldPassword\x12,\n" +
+	"\fnew_password\x18\x03 \x01(\tB\t\xe0A\x02\xe0A\x04\x80\x01\x01R\vnewPassword\"\x19\n" +
 	"\x17SetLoginProfileResponse\"\x1c\n" +
 	"\x1aDeleteLoginProfileResponse\"\x18\n" +
 	"\x16ChangePasswordResponse2\xb4\t\n" +
