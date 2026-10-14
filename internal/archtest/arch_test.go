@@ -75,6 +75,7 @@ var packageRules = []struct {
 	{"internal/store", onlyModule("internal/iam"), "the store contract sees only the domain types"},
 	{"internal/accesskey", transport, "domain services import no transport"},
 	{"internal/authz", transport, "domain services import no transport"},
+	{"internal/sts", transport, "domain services import no transport"},
 	{"internal/grpcapi", hasPrefix(module+"/internal/store/kubestore", module+"/internal/store/memstore"),
 		"the server uses the store.Backend contract, not a backend's internals"},
 }
@@ -192,6 +193,7 @@ func TestArchitectureRules(t *testing.T) {
 		"internal/secret/s.go":              `package secret; import _ "` + module + `/internal/store"`,
 		"internal/store/s.go":               `package store; import _ "database/sql"`,
 		"internal/authz/a.go":               `package authz; import _ "google.golang.org/grpc"`,
+		"internal/sts/s.go":                 `package sts; import _ "google.golang.org/grpc"`,
 		"internal/grpcapi/g.go":             `package grpcapi; import _ "` + module + `/internal/store/kubestore"; func f(s S) { s.GetSigningCredential() }`,
 		"internal/widget/k.go":              `package widget; import _ "k8s.io/apimachinery/pkg/types"`,
 		"internal/widget/l.go":              `package widget; import "log"; var _ = log.Println`,
@@ -206,6 +208,8 @@ func TestArchitectureRules(t *testing.T) {
 	want := []string{
 		"internal/authz imports google.golang.org/grpc: domain services import no transport",
 		"internal/authz imports google.golang.org/grpc: gRPC stays at the edge",
+		"internal/sts imports google.golang.org/grpc: domain services import no transport",
+		"internal/sts imports google.golang.org/grpc: gRPC stays at the edge",
 		"internal/grpcapi imports " + module + "/internal/store/kubestore: the server uses the store.Backend contract, not a backend's internals",
 		"internal/iam imports " + module + "/internal/store: the domain types are pure",
 		"internal/password imports " + module + "/internal/iam: password hashing imports nothing from this module",

@@ -15,6 +15,7 @@ Rules for anyone changing this repository, human or agent. A rule with an enforc
 | `internal/accesskey` | Access keys: create (secret returned once), list, status, delete, at most 2 per user, `GetSigningCredential`. |
 | `internal/policy` | Policy parse/validate (`MalformedPolicyDocument`) and evaluation: explicit Deny > Allow > implicit deny, session policies narrow. Pure. |
 | `internal/authz` | `Authorize`: gathers user, group, and role policies from the store and evaluates them. |
+| `internal/sts` | `AssumeRole` and `GetSessionToken`. The session token is the sealed session (KEK, AES-256-GCM), bound to its `ASIA` key id and its principal's unique id; `Validate` rejects tampered, mismatched, expired, and revoked tokens. `Resolve` derives the `Caller` (MFA, temporary) server-side; `RevokeSessions` stores a cut-off on the user or role. |
 | `cmd/vws-iam` | Wiring and flags (`-listen`, `-namespace`, `-kubeconfig`). |
 | `deploy/crds`, `deploy/rbac` | The CRDs and the namespaced store `Role`. The chart lives in vws-deploy. |
 
@@ -26,7 +27,7 @@ Every row names its enforcer. `TestAgentsRulesNameAnEnforcer` (internal/archtest
 | --- | --- |
 | `internal/iam` and `internal/policy` are pure: nothing from this module, Kubernetes, gRPC, or protobuf. | `TestArchitectureRules` |
 | `internal/password` imports nothing from this module; `internal/secret` and `internal/store` see only `internal/iam`. | `TestArchitectureRules` |
-| Domain services (`internal/accesskey`, `internal/authz`) import no transport. | `TestArchitectureRules` |
+| Domain services (`internal/accesskey`, `internal/authz`, `internal/sts`) import no transport. | `TestArchitectureRules` |
 | Kubernetes client packages stay in `internal/store/kubestore`. | `TestArchitectureRules` |
 | gRPC stays in `internal/grpcapi` and `cmd/vws-iam`; protobuf, genproto, vws-proto, and longrunning types stay in `internal/grpcapi`. | `TestArchitectureRules` |
 | `internal/grpcapi` uses the `store.Backend` contract, never `kubestore` or `memstore` internals. | `TestArchitectureRules` |
@@ -40,6 +41,8 @@ Every row names its enforcer. `TestAgentsRulesNameAnEnforcer` (internal/archtest
 | Secrets are never logged. | Judgment |
 | An access key's secret is stored only sealed; listing never returns it; an inactive key gets no signing credential; a KEK rotation still opens old values and rewraps them. | `TestSecretIsNeverStoredInPlaintext`, `TestInactiveKeyIsRejected`, `TestKEKRotationReadsOldKeyIDAndRewraps` |
 | Explicit deny beats allow, nothing is allowed by default, a session policy only narrows, and an unknown principal, unknown policy, or malformed stored policy is an error, never an allow. Wildcard matching is linear. | `TestEvaluateAWSExamples`, `TestSessionPolicyOnlyNarrows`, `TestAuthorizeFailsClosed`, `TestMatchIsLinear`, `FuzzParse` |
+| AssumeRole needs both the caller's `sts:AssumeRole` permission and the role's trust; MFA is carried into the session; a session policy narrows; chained sessions last at most 1 h; tokens expire and are tamper-evident. | `TestUntrustedPrincipalIsDenied`, `TestMFAConditionAndPropagation`, `TestSessionPolicyNarrows`, `TestDurationAndNameBounds`, `TestAssumeRoleCredentialsWorkThenExpire`, `TestTokenIsBoundTamperEvidentAndSurvivesRestart` |
+| A `Caller` is built only by `Resolve` or a validated session, never from client fields; client-set `aws:MultiFactorAuthPresent` is dropped; `GetSessionToken`/`AssumeRole` verify SerialNumber + TokenCode before granting MFA; `RevokeSessions` invalidates earlier sessions across restarts. | `TestCallerIsDerivedServerSide`, `TestGetSessionTokenVerifiesMFA`, `TestRevokeSessions` |
 | Only `deploy/crds` and `deploy/rbac` manifests; RBAC is a namespaced `Role` without wildcards. vws-iam owns the IAM CRD schemas; vws-deploy only syncs them. | `TestOnlyRBACAndCRDManifests` |
 | Code is gofmt and goimports clean and passes the `.golangci.yml` linters. `third_party` is excluded. | `golangci-lint` v2.14.0 in CI, `gofmt -l` step in CI |
 | `go test -race ./...` passes. The envtest test skips unless `KUBEBUILDER_ASSETS` is set. | CI `test` job |
