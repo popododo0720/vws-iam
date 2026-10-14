@@ -16,6 +16,13 @@ import (
 
 // replayTTL is how long a used STS signature is remembered: past it the
 // request's X-Amz-Date is outside sigv4.MaxSkew and fails on its own.
+//
+// Clock skew between replicas: each replica checks X-Amz-Date and sets
+// Expires with its own clock. The TTL is twice MaxSkew, so an entry
+// written by a replica whose clock is up to MaxSkew behind still outlives
+// the window seen by any other replica; replicas must keep their clocks
+// within that margin (NTP). Larger skew could let a replay through after
+// GC removed the entry.
 const replayTTL = 2 * sigv4.MaxSkew
 
 // replayHash is the store key of a signed request. Only this digest is
@@ -44,6 +51,11 @@ func (s *Server) claimReplay(ctx context.Context, r *iamv1.AuthenticateRequest) 
 		}
 	}
 	exp := now.Add(replayTTL)
+	// Lost response: if the create below commits but its response is lost
+	// (a timeout or UNAVAILABLE), this call fails, and a client retry of
+	// the same signed request then meets its own entry and is refused as a
+	// replay. That rejects one legitimate request once; the client signs a
+	// new request. Accepting it instead would let a real replay through.
 	for attempt := 0; ; attempt++ {
 		_, err := store.Create(ctx, s.b, iam.ReplayEntry{Hash: h, Expires: exp})
 		if err == nil {
