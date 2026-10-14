@@ -38,9 +38,7 @@ func TestRenewLock(t *testing.T) {
 		t.Fatalf("renewal started a lock: %+v", d)
 	}
 
-	for range mfa.MaxFailedAttempts {
-		_ = svc.Verify(ctx, "alice", "d1", "000000")
-	}
+	failCodes(t, svc)
 	start := clk.t.UTC()
 	if d := lockState(t, b, "d1"); !d.LockedSince.Equal(start) || !d.LockedUntil.Equal(start.Add(mfa.LockoutDuration)) {
 		t.Fatalf("lock %+v, want since %v", d, start)
@@ -66,7 +64,7 @@ func TestRenewLock(t *testing.T) {
 		clk.t = clk.t.Add(10 * time.Minute)
 	}
 	// Past the cap the device works again, and renewal does not relock it.
-	if wrote, _ := svc.RenewLock(ctx, "alice", "d1"); wrote {
+	if wrote, err := svc.RenewLock(ctx, "alice", "d1"); err != nil || wrote {
 		t.Fatal("renewal after the cap relocked")
 	}
 	if err := svc.Verify(ctx, "alice", "d1", code(seed, clk.t, 0)); err != nil {
@@ -76,9 +74,7 @@ func TestRenewLock(t *testing.T) {
 		t.Fatalf("expired lock not cleared: %+v", d)
 	}
 	// A new lock needs new wrong codes, and gets a new start.
-	for range mfa.MaxFailedAttempts {
-		_ = svc.Verify(ctx, "alice", "d1", "000000")
-	}
+	failCodes(t, svc)
 	if err := svc.Verify(ctx, "alice", "d1", code(seed, clk.t, 0)); !errors.Is(err, mfa.ErrLocked) {
 		t.Fatalf("relock by wrong codes: %v", err)
 	}
@@ -113,5 +109,19 @@ func TestRenewLockLegacy(t *testing.T) {
 	}
 	if d := lockState(t, b, "d1"); !d.LockedUntil.Equal(start.Add(mfa.MaxLockout)) || !d.LockedSince.Equal(start) {
 		t.Fatalf("legacy lock %+v", d)
+	}
+}
+
+// failCodes sends MaxFailedAttempts wrong codes; the last one locks.
+func failCodes(t *testing.T, svc *mfa.Service) {
+	t.Helper()
+	for i := 1; i <= mfa.MaxFailedAttempts; i++ {
+		want := mfa.ErrInvalidCode
+		if i == mfa.MaxFailedAttempts {
+			want = mfa.ErrLocked
+		}
+		if err := svc.Verify(context.Background(), "alice", "d1", "000000"); !errors.Is(err, want) {
+			t.Fatalf("wrong code %d: %v, want %v", i, err, want)
+		}
 	}
 }

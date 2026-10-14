@@ -135,13 +135,21 @@ func testLoginLockRenewal(t *testing.T, backend func(*testing.T) store.Backend) 
 		withCheapPassword(t, a, b, "alice")
 		seed, _, _ := strings.Cut(enableMFA(t, a, t.Context(), "alice"), "|")
 		const shared = "203.0.113.50"
-		// Other names exhaust the shared IP; alice has no failures.
+		// Other users (cheap hashes, each below its own limit) exhaust the
+		// shared IP; alice has no failures. Nonexistent names would burn a
+		// production-cost argon2id each (#43).
+		const others = 10
+		var names []string
+		for i := range others {
+			names = append(names, "guess"+strconv.Itoa(i))
+		}
+		withCheapPassword(t, a, b, names...)
 		for i := range grpcapi.IPAttemptLimit {
 			e := a
 			if i%2 == 1 {
 				e = rb
 			}
-			wantBadLogin(t, login(t.Context(), e, "guess"+strconv.Itoa(i), "wrong password!", shared))
+			wantBadLogin(t, login(t.Context(), e, names[i%others], "wrong password!", shared))
 		}
 		wantThrottled(t, loginTOTP(t.Context(), rb, "alice", goodPW, code(t, rb, seed), shared))
 		if n, until := deviceLock(t, a); n != 0 || !until.IsZero() {
