@@ -288,8 +288,8 @@ func watchHealth(ctx context.Context, hs *grpchealth.Server, ready func(context.
 	}
 }
 
-// collectReplays deletes expired SigV4 replay entries (#33) every few
-// minutes. Each replica runs it; races between them are harmless.
+// collectReplays deletes expired SigV4 replay entries (#33) and attempt
+// counters whose window and lockout are over (#12) every few minutes. Each replica runs it; races between them are harmless.
 func collectReplays(ctx context.Context, log *slog.Logger, api *grpcapi.Server) {
 	t := time.NewTicker(5 * time.Minute)
 	defer t.Stop()
@@ -299,14 +299,19 @@ func collectReplays(ctx context.Context, log *slog.Logger, api *grpcapi.Server) 
 			return
 		case <-t.C:
 		}
-		cctx, cancel := context.WithTimeout(ctx, time.Minute)
-		n, err := api.GCReplayEntries(cctx)
-		cancel()
-		if err != nil {
-			log.LogAttrs(ctx, slog.LevelWarn, "replay gc", slog.String("error", err.Error()))
-			continue
+		for _, gc := range []struct {
+			name string
+			run  func(context.Context) (int, error)
+		}{{"replay", api.GCReplayEntries}, {"attempt", api.GCAttemptCounters}} {
+			cctx, cancel := context.WithTimeout(ctx, time.Minute)
+			n, err := gc.run(cctx)
+			cancel()
+			if err != nil {
+				log.LogAttrs(ctx, slog.LevelWarn, "gc failed", slog.String("gc", gc.name), slog.String("error", err.Error()))
+				continue
+			}
+			log.LogAttrs(ctx, slog.LevelDebug, "gc done", slog.String("gc", gc.name), slog.Int("deleted", n))
 		}
-		log.LogAttrs(ctx, slog.LevelDebug, "replay gc", slog.Int("deleted", n))
 	}
 }
 

@@ -56,6 +56,8 @@ type Server struct {
 	// (replay.go): replay hash -> time after which it can be forgotten.
 	// It only ever rejects, so it is safe to be stale or empty.
 	stsSeen sync.Map
+	// gcPage is the GC list page size (gcPageSize; tests lower it).
+	gcPage int
 }
 
 // Option configures a Server.
@@ -66,7 +68,7 @@ func WithClock(now func() time.Time) Option { return func(s *Server) { s.now = n
 
 // New returns a Server. b is the unscoped backend; keys seals secrets.
 func New(b store.Backend, keys *secret.Keyring, opts ...Option) *Server {
-	s := &Server{b: b, keys: keys, now: time.Now, m: newMetrics()}
+	s := &Server{b: b, keys: keys, now: time.Now, m: newMetrics(), gcPage: gcPageSize}
 	for _, o := range opts {
 		o(s)
 	}
@@ -106,7 +108,7 @@ func (s *Server) project(id string) project {
 		authz: az,
 		keys:  accesskey.New(b, s.b, id, s.keys, s.now),
 		mfa:   m,
-		sts:   sts.New(b, s.keys, az, id, s.now, sts.WithMFA(mfaVerifier{m})),
+		sts:   sts.New(b, s.keys, az, id, s.now, sts.WithMFA(mfaVerifier{m: m, s: s, project: id})),
 	}
 }
 
@@ -176,13 +178,25 @@ const ClientServiceConfig = `{
 }`
 
 // mfaVerifier lets STS verify SerialNumber + TokenCode against this
-// project's devices, with the replay guard and lockout of internal/mfa.
-type mfaVerifier struct{ m *mfa.Service }
+// project's devices, with the replay guard and lockout of internal/mfa,
+// and counts the attempt for the user and for the access key and source
+// IP the STS call carried (limit.go).
+type mfaVerifier struct {
+	m       *mfa.Service
+	s       *Server
+	project string
+}
 
 func (v mfaVerifier) VerifyMFA(ctx context.Context, user, serial, code string) error {
-	prefix := v.m.Serial("")
-	if !strings.HasPrefix(serial, prefix) {
-		return mfa.ErrNotAssociated
+	cs := callers{userSubject(v.project, user)}
+	if extra, ok := ctx.Value(attemptsKey{}).(callers); ok {
+		cs = append(cs, extra...)
 	}
-	return v.m.Verify(ctx, user, strings.TrimPrefix(serial, prefix), code)
+	return v.s.limitedVerify(ctx, cs, func() error {
+		prefix := v.m.Serial("")
+		if !strings.HasPrefix(serial, prefix) {
+			return mfa.ErrNotAssociated
+		}
+		return v.m.Verify(ctx, user, strings.TrimPrefix(serial, prefix), code)
+	})
 }

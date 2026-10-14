@@ -16,6 +16,13 @@ import (
 
 // replayTTL is how long a used STS signature is remembered: past it the
 // request's X-Amz-Date is outside sigv4.MaxSkew and fails on its own.
+//
+// Clock skew between replicas: each replica checks X-Amz-Date and sets
+// Expires with its own clock. The TTL is twice MaxSkew, so an entry
+// written by a replica whose clock is up to MaxSkew behind still outlives
+// the window seen by any other replica; replicas must keep their clocks
+// within that margin (NTP). Larger skew could let a replay through after
+// GC removed the entry.
 const replayTTL = 2 * sigv4.MaxSkew
 
 // replayHash is the store key of a signed request. Only this digest is
@@ -44,6 +51,11 @@ func (s *Server) claimReplay(ctx context.Context, r *iamv1.AuthenticateRequest) 
 		}
 	}
 	exp := now.Add(replayTTL)
+	// Lost response: if the create below commits but its response is lost
+	// (a timeout or UNAVAILABLE), this call fails, and a client retry of
+	// the same signed request then meets its own entry and is refused as a
+	// replay. That rejects one legitimate request once; the client signs a
+	// new request. Accepting it instead would let a real replay through.
 	for attempt := 0; ; attempt++ {
 		_, err := store.Create(ctx, s.b, iam.ReplayEntry{Hash: h, Expires: exp})
 		if err == nil {
@@ -82,23 +94,38 @@ func replayed() error { return accessDenied("this signed request was already use
 // GCReplayEntries deletes expired replay entries and returns how many it
 // removed. Every replica may run it; a lost race is not an error.
 func (s *Server) GCReplayEntries(ctx context.Context) (int, error) {
-	vs, err := store.List[iam.ReplayEntry](ctx, s.b)
-	if err != nil {
-		return 0, err
-	}
-	now, n := s.now(), 0
-	for _, v := range vs {
-		if !now.After(v.Object.Expires) {
-			continue
-		}
-		err := store.Delete[iam.ReplayEntry](ctx, s.b, v.Object.Hash, v.Version)
-		switch {
-		case err == nil:
-			n++
-		case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrConflict):
-		default:
+	now := s.now()
+	return gcPaged(ctx, s, func(r iam.ReplayEntry) bool { return now.After(r.Expires) })
+}
+
+// gcPageSize bounds one GC list call (Limit/Continue), so a large backlog
+// is not read into memory at once.
+const gcPageSize = 500
+
+// gcPaged deletes, page by page, every T for which done holds, with its
+// version. NotFound and Conflict are races with another replica.
+func gcPaged[T iam.Object](ctx context.Context, s *Server, done func(T) bool) (int, error) {
+	n, cont := 0, ""
+	for {
+		vs, next, err := store.ListPage[T](ctx, s.b, int64(s.gcPage), cont)
+		if err != nil {
 			return n, err
 		}
+		for _, v := range vs {
+			if !done(v.Object) {
+				continue
+			}
+			err := store.Delete[T](ctx, s.b, v.Object.Key(), v.Version)
+			switch {
+			case err == nil:
+				n++
+			case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrConflict):
+			default:
+				return n, err
+			}
+		}
+		if cont = next; cont == "" {
+			return n, nil
+		}
 	}
-	return n, nil
 }

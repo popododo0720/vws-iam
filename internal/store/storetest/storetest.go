@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +32,7 @@ func Samples() []iam.Object {
 		iam.Session{Hash: strings.Repeat("ab", 32), Project: "proj-a", UserName: "Alice", AuthTime: now, Expires: now.Add(time.Hour)},
 		iam.Operation{ID: "op-1", Project: "proj-a", Response: []byte{1}, Created: now},
 		iam.ReplayEntry{Hash: strings.Repeat("cd", 32), Expires: now.Add(time.Hour)},
+		iam.AttemptCounter{Hash: strings.Repeat("ef", 32), Scope: iam.AttemptIP, Failures: 1, WindowStart: now},
 	}
 }
 
@@ -122,7 +124,52 @@ func Run(t *testing.T, open func(t *testing.T) store.Backend) {
 				c := o
 				c.Expires = later
 				roundTrip(t, b, o, c)
+			case iam.AttemptCounter:
+				c := o
+				c.Failures, c.LockedUntil = 2, later
+				roundTrip(t, b, o, c)
 			}
+		}
+	})
+	t.Run("ListPageCoversEveryEntry", func(t *testing.T) {
+		b := open(t)
+		if _, ok := b.(store.Pager); !ok {
+			t.Skip("backend has no Pager")
+		}
+		ctx := context.Background()
+		want := map[string]bool{}
+		for i := range 5 {
+			h := strings.Repeat(strconv.Itoa(i), 64)
+			if _, err := store.Create(ctx, b, iam.ReplayEntry{Hash: h, Expires: time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)}); err != nil {
+				t.Fatal(err)
+			}
+			want[h] = true
+		}
+		got, pages, cont := map[string]bool{}, 0, ""
+		for {
+			vs, next, err := store.ListPage[iam.ReplayEntry](ctx, b, 2, cont)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// An API server may ignore limit (the fake client does) but
+			// then returns everything at once.
+			if len(vs) > 2 && next != "" {
+				t.Fatalf("page of %d with a continue token, limit 2", len(vs))
+			}
+			pages++
+			for _, v := range vs {
+				if got[v.Object.Hash] {
+					t.Fatalf("%s listed twice", v.Object.Hash)
+				}
+				got[v.Object.Hash] = true
+			}
+			if cont = next; cont == "" {
+				break
+			}
+		}
+		t.Logf("%d entries in %d pages", len(got), pages)
+		if len(got) != len(want) || (pages != 3 && pages != 1) {
+			t.Fatalf("got %d entries in %d pages, want 5 in 3 (or 1 if limit is ignored)", len(got), pages)
 		}
 	})
 	t.Run("NamesAreCaseInsensitive", func(t *testing.T) {

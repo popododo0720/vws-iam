@@ -38,3 +38,30 @@ func TestClaimReplayStaleEntry(t *testing.T) {
 		t.Fatal("replay on second replica accepted")
 	}
 }
+
+// TestGCPaginates deletes expired entries across several Limit/Continue
+// pages and keeps live ones.
+func TestGCPaginates(t *testing.T) {
+	ctx := t.Context()
+	now := time.Now().UTC()
+	b := memstore.New()
+	s := New(b, nil, WithClock(func() time.Time { return now }))
+	s.gcPage = 2
+	for i := range 7 {
+		exp := now.Add(-time.Minute)
+		if i == 3 {
+			exp = now.Add(time.Minute)
+		}
+		h := replayHash(&iamv1.AuthenticateRequest{AccessKeyId: "AKIA", Signature: string(rune('a' + i))})
+		if _, err := store.Create(ctx, b, iam.ReplayEntry{Hash: h, Expires: exp}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := s.GCReplayEntries(ctx)
+	if err != nil || n != 6 {
+		t.Fatalf("GC = %d, %v; want 6", n, err)
+	}
+	if vs, err := store.List[iam.ReplayEntry](ctx, b); err != nil || len(vs) != 1 {
+		t.Fatalf("left %d, %v; want the 1 live entry", len(vs), err)
+	}
+}

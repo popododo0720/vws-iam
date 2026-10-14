@@ -171,6 +171,31 @@ func (s *Store) List(ctx context.Context, kind iam.Kind) ([]store.Entry, error) 
 	return out, nil
 }
 
+// ListPage implements store.Pager with the API server's limit and
+// continue token.
+func (s *Store) ListPage(ctx context.Context, kind iam.Kind, limit int64, cont string) ([]store.Entry, string, error) {
+	l := &unstructured.UnstructuredList{}
+	gvk := GVK(kind)
+	gvk.Kind += "List"
+	l.SetGroupVersionKind(gvk)
+	opts := []client.ListOption{client.InNamespace(s.ns), client.Limit(limit)}
+	if cont != "" {
+		opts = append(opts, client.Continue(cont))
+	}
+	if err := s.c.List(ctx, l, opts...); err != nil {
+		return nil, "", translate(err)
+	}
+	out := make([]store.Entry, 0, len(l.Items))
+	for i := range l.Items {
+		e, err := entry(&l.Items[i])
+		if err != nil {
+			return nil, "", err
+		}
+		out = append(out, e)
+	}
+	return out, l.GetContinue(), nil
+}
+
 // Delete implements store.Backend.
 func (s *Store) Delete(ctx context.Context, kind iam.Kind, key, version string) error {
 	u := &unstructured.Unstructured{}

@@ -327,36 +327,48 @@ func (s *Server) Login(ctx context.Context, req *iamv1.LoginRequest) (resp *iamv
 		return nil, badCredentials()
 	}
 	p := s.project(pid)
-	u, err := store.Get[iam.User](ctx, p.b, req.GetUserName())
-	if errors.Is(err, store.ErrNotFound) || (err == nil && u.Object.PasswordHash == "") {
-		// Same work as a real check, so timing does not reveal users.
-		burn(req.GetPassword())
-		return nil, badCredentials()
-	}
-	if err != nil {
-		return nil, toStatus(ctx, err)
-	}
-	if password.Verify(req.GetPassword(), u.Object.PasswordHash) != nil {
-		return nil, badCredentials()
-	}
-	devices, err := p.mfa.List(ctx, u.Object.Name)
-	if err != nil {
-		return nil, toStatus(ctx, err)
-	}
-	mfaOK := false
-	if len(devices) > 0 {
+	// The whole password + MFA check is one counted attempt per user and
+	// source IP (limit.go); an MFA_REQUIRED answer is not a failure.
+	var u store.Versioned[iam.User]
+	mfaOK, needMFA := false, false
+	err = s.limitedVerify(ctx, callers{userSubject(pid, req.GetUserName())}.withIP(req.GetSourceIp()), func() error {
+		var err error
+		u, err = store.Get[iam.User](ctx, p.b, req.GetUserName())
+		if errors.Is(err, store.ErrNotFound) || (err == nil && u.Object.PasswordHash == "") {
+			// Same work as a real check, so timing does not reveal users.
+			burn(req.GetPassword())
+			return badCredentials()
+		}
+		if err != nil {
+			return err
+		}
+		if password.Verify(req.GetPassword(), u.Object.PasswordHash) != nil {
+			return badCredentials()
+		}
+		devices, err := p.mfa.List(ctx, u.Object.Name)
+		if err != nil {
+			return err
+		}
+		if len(devices) == 0 {
+			return nil
+		}
 		if req.GetTotpCode() == "" {
-			return nil, fail(codes.Unauthenticated, "MFA_REQUIRED", "MultiFactorAuthenticationRequired", "an MFA code is required")
+			needMFA = true
+			return nil
 		}
 		for _, d := range devices {
 			if p.mfa.Verify(ctx, u.Object.Name, d.Name, req.GetTotpCode()) == nil {
 				mfaOK = true
-				break
+				return nil
 			}
 		}
-		if !mfaOK {
-			return nil, invalidCredentials("InvalidAuthenticationCode", "invalid MFA code")
-		}
+		return invalidCredentials("InvalidAuthenticationCode", "invalid MFA code")
+	})
+	if err != nil {
+		return nil, toStatus(ctx, err)
+	}
+	if needMFA {
+		return nil, fail(codes.Unauthenticated, "MFA_REQUIRED", "MultiFactorAuthenticationRequired", "an MFA code is required")
 	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {

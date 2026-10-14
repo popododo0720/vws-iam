@@ -70,6 +70,21 @@ func (s *Server) stsSigv4(ctx context.Context, r *iamv1.AuthenticateRequest, act
 	return s.claimReplay(ctx, r)
 }
 
+// stsAttempts prepares the per-caller attempt limit of an STS call that
+// presents an MFA code: a locked access key or source IP is refused with
+// Throttling before the code is checked, and both are counted with the
+// user when mfaVerifier checks it.
+func (s *Server) stsAttempts(ctx context.Context, a authn, serial, code string) (context.Context, error) {
+	if a.sigv4 == nil || (serial == "" && code == "") {
+		return ctx, nil
+	}
+	cs := callers{{iam.AttemptKey, a.sigv4.GetAccessKeyId()}}.withIP(a.sigv4.GetSourceIp())
+	if err := s.checkAttempts(ctx, cs); err != nil {
+		return ctx, err
+	}
+	return withAttempts(ctx, cs), nil
+}
+
 func missingAuthentication() error {
 	return invalidCredentials("MissingAuthenticationToken", "the request must carry how the caller authenticated")
 }
@@ -125,6 +140,9 @@ func (s *Server) assumeRole(ctx context.Context, req *iamv1.AssumeRoleRequest, a
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
+	if ctx, err = s.stsAttempts(ctx, a, req.GetSerialNumber(), req.GetTokenCode()); err != nil {
+		return nil, toStatus(ctx, err)
+	}
 	if p.id != pid {
 		return nil, accessDenied("cross-project AssumeRole is not supported")
 	}
@@ -177,6 +195,9 @@ func (s *Server) getSessionToken(ctx context.Context, req *iamv1.GetSessionToken
 	}
 	p, c, err := s.authenticatedCaller(ctx, a, "GetSessionToken")
 	if err != nil {
+		return nil, toStatus(ctx, err)
+	}
+	if ctx, err = s.stsAttempts(ctx, a, req.GetSerialNumber(), req.GetTokenCode()); err != nil {
 		return nil, toStatus(ctx, err)
 	}
 	d := time.Duration(req.GetDurationSeconds()) * time.Second
