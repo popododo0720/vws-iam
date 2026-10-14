@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/encoding/prototext"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
@@ -802,4 +803,71 @@ func TestConsoleSessionAuthentication(t *testing.T) {
 	}
 	_, err = e.token.AssumeRole(ctx, &iamv1.AssumeRoleRequest{Role: role.GetName(), RoleSessionName: "s1", Authentication: console})
 	wantErr(t, err, codes.Unauthenticated, "INVALID_CREDENTIALS", "InvalidClientTokenId")
+}
+
+// TestMfaDeviceLockoutStatus: GetMfaDevice and ListMfaDevices report the
+// stored failed-attempt count and, only while it runs, the lockout
+// (vws-proto#32).
+func TestMfaDeviceLockoutStatus(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	u := e.createUser(t, ctx, "alice")
+	seed, serial, _ := strings.Cut(enableMFA(t, e, ctx, "alice"), "|")
+	key, err := e.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: u.GetName()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kid := key.GetAccessKey().GetName()[strings.LastIndex(key.GetAccessKey().GetName(), "/")+1:]
+	gst := func(code string) error {
+		_, err := e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{SerialNumber: serial, TokenCode: code,
+			Authentication: gstSig(e.stsSign(kid, key.GetSecretAccessKey(), "", "GetSessionToken"))})
+		return err
+	}
+	dev := parentName + "/mfaDevices/alice-phone"
+	status := func(want int32, locked time.Time) {
+		t.Helper()
+		d, err := e.mfa.GetMfaDevice(ctx, &iamv1.GetMfaDeviceRequest{Name: dev})
+		if err != nil {
+			t.Fatal(err)
+		}
+		l, err := e.mfa.ListMfaDevices(ctx, &iamv1.ListMfaDevicesRequest{Parent: parentName})
+		if err != nil || len(l.GetMfaDevices()) != 1 {
+			t.Fatalf("list %v %v", l, err)
+		}
+		for _, st := range []*iamv1.MfaDeviceStatus{d.GetStatus(), l.GetMfaDevices()[0].GetStatus()} {
+			if st.GetFailedAttempts() != want {
+				t.Fatalf("failed_attempts %d, want %d", st.GetFailedAttempts(), want)
+			}
+			if locked.IsZero() != (st.GetLockedUntil() == nil) || (!locked.IsZero() && !st.GetLockedUntil().AsTime().Equal(locked)) {
+				t.Fatalf("locked_until %v, want %v", st.GetLockedUntil(), locked)
+			}
+		}
+	}
+	status(0, time.Time{})
+	wantErr(t, gst("000000"), codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+	status(1, time.Time{})
+	// Neither the seed nor a current code is exposed by Get or List.
+	d, err := e.mfa.GetMfaDevice(ctx, &iamv1.GetMfaDeviceRequest{Name: dev})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := e.mfa.ListMfaDevices(ctx, &iamv1.ListMfaDevicesRequest{Parent: parentName})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, out := range []string{prototext.Format(d), prototext.Format(l)} {
+		if strings.Contains(out, seed) || strings.Contains(out, code(t, e, seed)) {
+			t.Fatalf("MFA device output exposes a seed or code: %s", out)
+		}
+	}
+	for range 4 {
+		wantErr(t, gst("000000"), codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+	}
+	// The 5th failure locks for 15 minutes and starts a new count.
+	status(0, e.now.Add(15*time.Minute))
+	*e.now = e.now.Add(15*time.Minute + time.Second)
+	status(0, time.Time{})
+	if err := gst(code(t, e, seed)); err != nil {
+		t.Fatalf("after lockout: %v", err)
+	}
 }
