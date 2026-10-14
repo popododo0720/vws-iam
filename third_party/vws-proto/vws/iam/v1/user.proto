@@ -71,6 +71,25 @@ service UserService {
     };
   }
 
+  // RevokeUserSessions invalidates every STS session issued so far for
+  // the user (GetSessionToken for a user, AssumeRole for a role), like
+  // the AWS console's "Revoke active sessions". Credentials issued later
+  // are unaffected. Callers need iam:RevokeUserSessions on the user ARN.
+  // Re-running moves status.sessions_revoke_time forward; a request_id
+  // replay returns the original operation.
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  // buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+  rpc RevokeUserSessions(RevokeUserSessionsRequest) returns (google.longrunning.Operation) {
+    option (google.api.http) = {
+      post: "/v1/{name=projects/*/users/*}:revokeSessions"
+      body: "*"
+    };
+    option (google.longrunning.operation_info) = {
+      response_type: "vws.iam.v1.User"
+      metadata_type: "vws.common.v1.OperationMetadata"
+    };
+  }
+
   // SetLoginProfile sets or replaces the console password (argon2id at rest).
   // Not an operation: the password must not be kept in an operation record.
   rpc SetLoginProfile(SetLoginProfileRequest) returns (SetLoginProfileResponse) {
@@ -141,6 +160,9 @@ message UserStatus {
   google.protobuf.Timestamp password_last_used_time = 7;
   // Serial numbers (ARNs) of the enabled MFA devices.
   repeated string mfa_devices = 8;
+  // Sessions issued before this time are refused (RevokeUserSessions).
+  // Unset until the first revocation.
+  google.protobuf.Timestamp sessions_revoke_time = 9;
 }
 
 message GetUserRequest {
@@ -253,3 +275,14 @@ message SetLoginProfileResponse {}
 message DeleteLoginProfileResponse {}
 
 message ChangePasswordResponse {}
+
+message RevokeUserSessionsRequest {
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "vws.iam/User"
+  ];
+  string request_id = 2 [
+    (google.api.field_info).format = UUID4,
+    (google.api.field_behavior) = OPTIONAL
+  ];
+}

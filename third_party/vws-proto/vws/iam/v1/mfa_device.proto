@@ -101,6 +101,11 @@ message MfaDeviceStatus {
   // The user it is enabled for, full resource name. Empty when not enabled.
   string user = 3;
   google.protobuf.Timestamp enable_time = 4;
+  // Wrong codes since the last success or lockout. 5 lock the device.
+  int32 failed_attempts = 5;
+  // Set while the device is locked out (15 minutes after the 5th wrong
+  // code); even a correct code is refused until then. Unset otherwise.
+  google.protobuf.Timestamp locked_until = 6;
 }
 
 message GetMfaDeviceRequest {

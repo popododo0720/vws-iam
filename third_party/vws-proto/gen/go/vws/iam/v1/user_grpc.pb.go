@@ -25,6 +25,7 @@ const (
 	UserService_CreateUser_FullMethodName         = "/vws.iam.v1.UserService/CreateUser"
 	UserService_UpdateUser_FullMethodName         = "/vws.iam.v1.UserService/UpdateUser"
 	UserService_DeleteUser_FullMethodName         = "/vws.iam.v1.UserService/DeleteUser"
+	UserService_RevokeUserSessions_FullMethodName = "/vws.iam.v1.UserService/RevokeUserSessions"
 	UserService_SetLoginProfile_FullMethodName    = "/vws.iam.v1.UserService/SetLoginProfile"
 	UserService_DeleteLoginProfile_FullMethodName = "/vws.iam.v1.UserService/DeleteLoginProfile"
 	UserService_ChangePassword_FullMethodName     = "/vws.iam.v1.UserService/ChangePassword"
@@ -56,6 +57,15 @@ type UserServiceClient interface {
 	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
 	// buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
 	DeleteUser(ctx context.Context, in *DeleteUserRequest, opts ...grpc.CallOption) (*longrunningpb.Operation, error)
+	// RevokeUserSessions invalidates every STS session issued so far for
+	// the user (GetSessionToken for a user, AssumeRole for a role), like
+	// the AWS console's "Revoke active sessions". Credentials issued later
+	// are unaffected. Callers need iam:RevokeUserSessions on the user ARN.
+	// Re-running moves status.sessions_revoke_time forward; a request_id
+	// replay returns the original operation.
+	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+	// buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+	RevokeUserSessions(ctx context.Context, in *RevokeUserSessionsRequest, opts ...grpc.CallOption) (*longrunningpb.Operation, error)
 	// SetLoginProfile sets or replaces the console password (argon2id at rest).
 	// Not an operation: the password must not be kept in an operation record.
 	SetLoginProfile(ctx context.Context, in *SetLoginProfileRequest, opts ...grpc.CallOption) (*SetLoginProfileResponse, error)
@@ -122,6 +132,16 @@ func (c *userServiceClient) DeleteUser(ctx context.Context, in *DeleteUserReques
 	return out, nil
 }
 
+func (c *userServiceClient) RevokeUserSessions(ctx context.Context, in *RevokeUserSessionsRequest, opts ...grpc.CallOption) (*longrunningpb.Operation, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(longrunningpb.Operation)
+	err := c.cc.Invoke(ctx, UserService_RevokeUserSessions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *userServiceClient) SetLoginProfile(ctx context.Context, in *SetLoginProfileRequest, opts ...grpc.CallOption) (*SetLoginProfileResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SetLoginProfileResponse)
@@ -178,6 +198,15 @@ type UserServiceServer interface {
 	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
 	// buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
 	DeleteUser(context.Context, *DeleteUserRequest) (*longrunningpb.Operation, error)
+	// RevokeUserSessions invalidates every STS session issued so far for
+	// the user (GetSessionToken for a user, AssumeRole for a role), like
+	// the AWS console's "Revoke active sessions". Credentials issued later
+	// are unaffected. Callers need iam:RevokeUserSessions on the user ARN.
+	// Re-running moves status.sessions_revoke_time forward; a request_id
+	// replay returns the original operation.
+	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+	// buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+	RevokeUserSessions(context.Context, *RevokeUserSessionsRequest) (*longrunningpb.Operation, error)
 	// SetLoginProfile sets or replaces the console password (argon2id at rest).
 	// Not an operation: the password must not be kept in an operation record.
 	SetLoginProfile(context.Context, *SetLoginProfileRequest) (*SetLoginProfileResponse, error)
@@ -208,6 +237,9 @@ func (UnimplementedUserServiceServer) UpdateUser(context.Context, *UpdateUserReq
 }
 func (UnimplementedUserServiceServer) DeleteUser(context.Context, *DeleteUserRequest) (*longrunningpb.Operation, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteUser not implemented")
+}
+func (UnimplementedUserServiceServer) RevokeUserSessions(context.Context, *RevokeUserSessionsRequest) (*longrunningpb.Operation, error) {
+	return nil, status.Error(codes.Unimplemented, "method RevokeUserSessions not implemented")
 }
 func (UnimplementedUserServiceServer) SetLoginProfile(context.Context, *SetLoginProfileRequest) (*SetLoginProfileResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetLoginProfile not implemented")
@@ -329,6 +361,24 @@ func _UserService_DeleteUser_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _UserService_RevokeUserSessions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevokeUserSessionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).RevokeUserSessions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_RevokeUserSessions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).RevokeUserSessions(ctx, req.(*RevokeUserSessionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _UserService_SetLoginProfile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SetLoginProfileRequest)
 	if err := dec(in); err != nil {
@@ -409,6 +459,10 @@ var UserService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteUser",
 			Handler:    _UserService_DeleteUser_Handler,
+		},
+		{
+			MethodName: "RevokeUserSessions",
+			Handler:    _UserService_RevokeUserSessions_Handler,
 		},
 		{
 			MethodName: "SetLoginProfile",

@@ -25,7 +25,7 @@ func (p project) roleProto(v store.Versioned[iam.Role]) *iamv1.Role {
 			Path: defaultPath(r.Path), AssumeRolePolicy: r.AssumeRolePolicy, MaxSessionDurationSeconds: int32(maxSession(r) / time.Second),
 			AttachedPolicies: p.policyNames(r.AttachedPolicies), InlinePolicies: r.InlinePolicies, Description: r.Description,
 		},
-		Status:     &iamv1.RoleStatus{Observed: ready(r.Generation), Arn: iam.RoleARN(p.id, r), UniqueId: r.ID},
+		Status:     &iamv1.RoleStatus{Observed: ready(r.Generation), Arn: iam.RoleARN(p.id, r), UniqueId: r.ID, SessionsRevokeTime: ts(r.SessionsRevokedBefore)},
 		CreateTime: ts(r.Created), UpdateTime: ts(r.Updated),
 	}
 }
