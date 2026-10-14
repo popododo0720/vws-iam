@@ -57,7 +57,7 @@ func (s *Service) attempt(ctx context.Context, name string, check func(d *iam.Mf
 			return err
 		}
 		if !d.LockedUntil.IsZero() { // lock expired
-			d.LockedUntil, d.FailedAttempts = time.Time{}, 0
+			d.LockedUntil, d.LockedSince, d.FailedAttempts = time.Time{}, time.Time{}, 0
 		}
 		if ok {
 			d.FailedAttempts = 0
@@ -66,7 +66,7 @@ func (s *Service) attempt(ctx context.Context, name string, check func(d *iam.Mf
 		d.FailedAttempts++
 		verr = ErrInvalidCode
 		if d.FailedAttempts >= MaxFailedAttempts {
-			d.LockedUntil, d.FailedAttempts = now.Add(LockoutDuration), 0
+			d.LockedUntil, d.LockedSince, d.FailedAttempts = now.Add(LockoutDuration), now, 0
 			verr = ErrLocked
 		}
 		return nil

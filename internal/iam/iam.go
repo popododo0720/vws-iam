@@ -336,6 +336,10 @@ type MfaDevice struct {
 	// they reach the limit (brute-force guard).
 	FailedAttempts int       `json:"failedAttempts,omitempty"`
 	LockedUntil    time.Time `json:"lockedUntil,omitzero"`
+	// LockedSince is when the running lockout began (the failure that
+	// locked it); renewals never extend LockedUntil past
+	// LockedSince+mfa.MaxLockout (#48).
+	LockedSince time.Time `json:"lockedSince,omitzero"`
 }
 
 func (MfaDevice) Kind() Kind    { return KindMfaDevice }
