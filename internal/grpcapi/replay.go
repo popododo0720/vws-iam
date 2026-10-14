@@ -50,8 +50,11 @@ func (s *Server) claimReplay(ctx context.Context, r *iamv1.AuthenticateRequest) 
 			s.stsSeen.Store(h, exp)
 			return nil
 		}
-		if !errors.Is(err, store.ErrExists) || attempt > 0 {
+		if !errors.Is(err, store.ErrExists) {
 			return toStatus(ctx, err)
+		}
+		if attempt > 0 {
+			return replayed() // another claimer replaced the stale entry first
 		}
 		v, err := store.Get[iam.ReplayEntry](ctx, s.b, h)
 		switch {
