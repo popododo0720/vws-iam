@@ -21,10 +21,26 @@ const (
 	KindPolicy    Kind = "IamPolicy"
 	KindAccessKey Kind = "IamAccessKey"
 	KindMfaDevice Kind = "IamMfaDevice"
+	KindKeyIndex  Kind = "IamAccessKeyIndex"
+	KindSession   Kind = "IamSession"
+	KindOperation Kind = "IamOperation"
 )
 
 // Kinds lists every stored kind.
-var Kinds = []Kind{KindUser, KindGroup, KindRole, KindPolicy, KindAccessKey, KindMfaDevice}
+var Kinds = []Kind{KindUser, KindGroup, KindRole, KindPolicy, KindAccessKey, KindMfaDevice, KindKeyIndex, KindSession, KindOperation}
+
+// Meta is the resource envelope every API resource carries.
+type Meta struct {
+	UID        string            `json:"uid,omitempty"`
+	Generation int64             `json:"generation,omitempty"`
+	Labels     map[string]string `json:"labels,omitempty"`
+	Updated    time.Time         `json:"updated,omitzero"`
+	// RequestID is the request id of the create, for replay after a crash.
+	RequestID string `json:"requestId,omitempty"`
+}
+
+// Envelope returns the envelope; promoted to every resource.
+func (m Meta) Envelope() Meta { return m }
 
 // Object is a stored IAM resource. Key is unique per kind and
 // case-insensitive, like AWS IAM names.
@@ -84,15 +100,17 @@ func checkInline(m map[string]string) error {
 
 // User is an IAM user.
 type User struct {
+	Meta
 	Name             string            `json:"name"`
 	Path             string            `json:"path,omitempty"`
 	ID               string            `json:"id"`
 	Created          time.Time         `json:"created"`
-	Groups           []string          `json:"groups,omitempty"`
 	AttachedPolicies []string          `json:"attachedPolicies,omitempty"`
 	InlinePolicies   map[string]string `json:"inlinePolicies,omitempty"`
 	// PasswordHash is an argon2id PHC string, never a password.
-	PasswordHash string `json:"passwordHash,omitempty"`
+	PasswordHash          string    `json:"passwordHash,omitempty"`
+	PasswordResetRequired bool      `json:"passwordResetRequired,omitempty"`
+	PasswordLastUsed      time.Time `json:"passwordLastUsed,omitzero"`
 	// SessionsRevokedBefore invalidates STS sessions issued until then.
 	SessionsRevokedBefore time.Time `json:"sessionsRevokedBefore,omitzero"`
 }
@@ -102,11 +120,6 @@ func (u User) Key() string { return u.Name }
 func (u User) Validate() error {
 	if err := checkName("user", u.Name, u.Path); err != nil {
 		return err
-	}
-	for _, g := range u.Groups {
-		if !ValidName(g) {
-			return invalid("group name %q", g)
-		}
 	}
 	if u.PasswordHash != "" && !strings.HasPrefix(u.PasswordHash, "$argon2id$") {
 		return invalid("password hash is not argon2id")
@@ -119,10 +132,13 @@ func (u User) Validate() error {
 
 // Group is an IAM group. Membership is stored on the user.
 type Group struct {
-	Name             string            `json:"name"`
-	Path             string            `json:"path,omitempty"`
-	ID               string            `json:"id"`
-	Created          time.Time         `json:"created"`
+	Meta
+	Name    string    `json:"name"`
+	Path    string    `json:"path,omitempty"`
+	ID      string    `json:"id"`
+	Created time.Time `json:"created"`
+	// Members are user names of the same project.
+	Members          []string          `json:"members,omitempty"`
 	AttachedPolicies []string          `json:"attachedPolicies,omitempty"`
 	InlinePolicies   map[string]string `json:"inlinePolicies,omitempty"`
 }
@@ -132,6 +148,13 @@ func (g Group) Key() string { return g.Name }
 func (g Group) Validate() error {
 	if err := checkName("group", g.Name, g.Path); err != nil {
 		return err
+	}
+	seen := map[string]bool{}
+	for _, m := range g.Members {
+		if !ValidName(m) || seen[strings.ToLower(m)] {
+			return invalid("member %q", m)
+		}
+		seen[strings.ToLower(m)] = true
 	}
 	if err := checkAttached(g.AttachedPolicies); err != nil {
 		return err
@@ -147,11 +170,13 @@ const (
 
 // Role is an IAM role with its trust policy.
 type Role struct {
+	Meta
 	Name               string            `json:"name"`
 	Path               string            `json:"path,omitempty"`
 	ID                 string            `json:"id"`
 	Created            time.Time         `json:"created"`
 	AssumeRolePolicy   string            `json:"assumeRolePolicy"`
+	Description        string            `json:"description,omitempty"`
 	MaxSessionDuration time.Duration     `json:"maxSessionDuration,omitempty"`
 	AttachedPolicies   []string          `json:"attachedPolicies,omitempty"`
 	InlinePolicies     map[string]string `json:"inlinePolicies,omitempty"`
@@ -189,12 +214,16 @@ const MaxPolicyVersions = 5
 
 // Policy is a customer managed policy.
 type Policy struct {
-	Name           string          `json:"name"`
-	Path           string          `json:"path,omitempty"`
-	ID             string          `json:"id"`
-	Created        time.Time       `json:"created"`
-	DefaultVersion string          `json:"defaultVersion"`
-	Versions       []PolicyVersion `json:"versions"`
+	Meta
+	Name           string    `json:"name"`
+	Path           string    `json:"path,omitempty"`
+	ID             string    `json:"id"`
+	Created        time.Time `json:"created"`
+	Description    string    `json:"description,omitempty"`
+	DefaultVersion string    `json:"defaultVersion"`
+	// NextVersion numbers the next version (v<NextVersion>); 0 means len(Versions)+1.
+	NextVersion int             `json:"nextVersion,omitempty"`
+	Versions    []PolicyVersion `json:"versions"`
 }
 
 func (Policy) Kind() Kind    { return KindPolicy }
@@ -250,12 +279,17 @@ var accessKeyRE = regexp.MustCompile(`^(AKIA|ASIA)[A-Z2-7]{16}$`)
 
 // AccessKey is a long-term access key of a user.
 type AccessKey struct {
-	ID       string    `json:"id"`
-	UserName string    `json:"userName"`
-	Status   KeyStatus `json:"status"`
-	Created  time.Time `json:"created"`
-	LastUsed time.Time `json:"lastUsed,omitzero"`
-	Secret   Sealed    `json:"secret"`
+	Meta
+	ID              string    `json:"id"`
+	UserName        string    `json:"userName"`
+	Status          KeyStatus `json:"status"`
+	Created         time.Time `json:"created"`
+	LastUsed        time.Time `json:"lastUsed,omitzero"`
+	LastUsedService string    `json:"lastUsedService,omitempty"`
+	LastUsedRegion  string    `json:"lastUsedRegion,omitempty"`
+	// Root marks the project's root credential (bootstrap only).
+	Root   bool   `json:"root,omitempty"`
+	Secret Sealed `json:"secret"`
 }
 
 func (AccessKey) Kind() Kind    { return KindAccessKey }
@@ -264,8 +298,8 @@ func (k AccessKey) Validate() error {
 	if !accessKeyRE.MatchString(k.ID) {
 		return invalid("access key id %q", k.ID)
 	}
-	if !ValidName(k.UserName) {
-		return invalid("user name %q", k.UserName)
+	if k.Root != (k.UserName == "") || (!k.Root && !ValidName(k.UserName)) {
+		return invalid("user name %q (root %v)", k.UserName, k.Root)
 	}
 	if k.Status != KeyActive && k.Status != KeyInactive {
 		return invalid("status %q", k.Status)
@@ -278,11 +312,14 @@ func (k AccessKey) Validate() error {
 
 // MfaDevice is a virtual TOTP device.
 type MfaDevice struct {
-	Name     string    `json:"name"`
-	UserName string    `json:"userName,omitempty"`
-	Enabled  bool      `json:"enabled"`
-	Created  time.Time `json:"created"`
-	Seed     Sealed    `json:"seed"`
+	Meta
+	Name       string    `json:"name"`
+	Path       string    `json:"path,omitempty"`
+	EnableTime time.Time `json:"enableTime,omitzero"`
+	UserName   string    `json:"userName,omitempty"`
+	Enabled    bool      `json:"enabled"`
+	Created    time.Time `json:"created"`
+	Seed       Sealed    `json:"seed"`
 	// LastStep is the last accepted TOTP time step, the replay guard.
 	LastStep int64 `json:"lastStep,omitempty"`
 	// FailedAttempts counts wrong codes in a row; LockedUntil is set when

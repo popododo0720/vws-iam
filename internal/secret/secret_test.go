@@ -107,3 +107,20 @@ func TestLoadDirNeverEchoesKeyMaterial(t *testing.T) {
 		t.Fatalf("bad KEK error %v echoes key material", err)
 	}
 }
+
+func TestFromEnv(t *testing.T) {
+	env := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
+	if _, ok, err := secret.FromEnv(env(nil)); ok || err != nil {
+		t.Fatalf("unset: %v %v", ok, err)
+	}
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	k, ok, err := secret.FromEnv(env(map[string]string{secret.EnvKEK: key, secret.EnvKEKID: "k2"}))
+	if !ok || err != nil || k.Active() != "k2" {
+		t.Fatalf("set: %v %v", ok, err)
+	}
+	for _, m := range []map[string]string{{secret.EnvKEK: key}, {secret.EnvKEKID: "k"}, {secret.EnvKEK: "%%", secret.EnvKEKID: "k"}, {secret.EnvKEK: "AAAA", secret.EnvKEKID: "k"}} {
+		if _, _, err := secret.FromEnv(env(m)); err == nil || strings.Contains(err.Error(), key) {
+			t.Fatalf("%v accepted or leaked: %v", m, err)
+		}
+	}
+}

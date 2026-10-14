@@ -74,6 +74,8 @@ func TestEvaluateAWSExamples(t *testing.T) {
 		{"ArnLike no match", []string{arnLike}, req("iam:PassRole", "*", map[string][]string{"aws:PrincipalArn": {"arn:vws:iam::" + acct + ":role/alice"}}), false, ""},
 		{"StringLike with variable", []string{like}, req("s3:ListBucket", "arn:vws:s3:::b", map[string][]string{"aws:username": {"alice"}, "s3:prefix": {"home/alice/docs"}}), true, ""},
 		{"StringLike other prefix", []string{like}, req("s3:ListBucket", "arn:vws:s3:::b", map[string][]string{"aws:username": {"alice"}, "s3:prefix": {"home/bob/"}}), false, ""},
+		{"mfa age under limit", []string{`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"iam:*","Resource":"*","Condition":{"NumericLessThan":{"aws:MultiFactorAuthAge":"3600"}}}}`}, req("iam:CreateUser", "*", map[string][]string{"aws:MultiFactorAuthAge": {"120"}}), true, ""},
+		{"mfa age over limit", []string{`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"iam:*","Resource":"*","Condition":{"NumericLessThan":{"aws:MultiFactorAuthAge":"3600"}}}}`}, req("iam:CreateUser", "*", map[string][]string{"aws:MultiFactorAuthAge": {"7200"}}), false, ""},
 		{"condition key case-insensitive", []string{region}, req("ec2:RunInstances", "*", map[string][]string{"AWS:REQUESTEDREGION": {"kr-central-1"}}), true, ""},
 	}
 	for _, c := range cases {
@@ -146,6 +148,7 @@ func TestMalformedPolicies(t *testing.T) {
 		`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*","Condition":{"Bool":{"aws:SecureTransport":"yes"}}}}`,
 		`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*","Condition":{"DateLessThan":{"aws:CurrentTime":"tomorrow"}}}}`,
 		`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*","Extra":1}}`,
+		`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*","Condition":{"NumericLessThan":{"aws:MultiFactorAuthAge":"soon"}}}}`,
 		`{"Version":"2012-10-17","Statement":[{"Sid":"a","Effect":"Allow","Action":"*","Resource":"*"},{"Sid":"a","Effect":"Deny","Action":"*","Resource":"*"}]}`,
 		`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*"}} trailing`,
 		`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":[],"Resource":"*"}}`,

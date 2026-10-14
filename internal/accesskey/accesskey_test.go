@@ -58,7 +58,7 @@ func TestSecretIsNeverStoredInPlaintext(t *testing.T) {
 	c := fakeKube()
 	b := kubestore.New(c, "vws-iam")
 	withUser(t, b, "alice")
-	svc := accesskey.New(b, ring(t, "kek-1", map[string][]byte{"kek-1": kek(t)}), nil)
+	svc := accesskey.New(b, b, "proj-a", ring(t, "kek-1", map[string][]byte{"kek-1": kek(t)}), nil)
 	cred, err := svc.Create(context.Background(), "alice")
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +100,7 @@ func TestSecretIsNeverStoredInPlaintext(t *testing.T) {
 func TestInactiveKeyIsRejected(t *testing.T) {
 	b := memstore.New()
 	withUser(t, b, "bob")
-	svc := accesskey.New(b, ring(t, "k", map[string][]byte{"k": kek(t)}), nil)
+	svc := accesskey.New(b, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t)}), nil)
 	ctx := context.Background()
 	cred, err := svc.Create(ctx, "bob")
 	if err != nil {
@@ -133,7 +133,7 @@ func TestAtMostTwoKeysPerUserAndOwnership(t *testing.T) {
 	b := memstore.New()
 	withUser(t, b, "carol")
 	withUser(t, b, "dave")
-	svc := accesskey.New(b, ring(t, "k", map[string][]byte{"k": kek(t)}), nil)
+	svc := accesskey.New(b, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t)}), nil)
 	ctx := context.Background()
 	var ids []string
 	for range 2 {
@@ -162,12 +162,12 @@ func TestKEKRotationReadsOldKeyIDAndRewraps(t *testing.T) {
 	withUser(t, b, "erin")
 	k1, k2 := kek(t), kek(t)
 	ctx := context.Background()
-	cred, err := accesskey.New(b, ring(t, "kek-1", map[string][]byte{"kek-1": k1}), nil).Create(ctx, "erin")
+	cred, err := accesskey.New(b, b, "proj-a", ring(t, "kek-1", map[string][]byte{"kek-1": k1}), nil).Create(ctx, "erin")
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Restart with a rotated keyring: kek-2 active, kek-1 still present.
-	rotated := accesskey.New(b, ring(t, "kek-2", map[string][]byte{"kek-1": k1, "kek-2": k2}), nil)
+	rotated := accesskey.New(b, b, "proj-a", ring(t, "kek-2", map[string][]byte{"kek-1": k1, "kek-2": k2}), nil)
 	got, err := rotated.GetSigningCredential(ctx, cred.AccessKeyID)
 	if err != nil || got.Secret != cred.Secret {
 		t.Fatalf("after rotation: %v", err)
@@ -177,12 +177,12 @@ func TestKEKRotationReadsOldKeyIDAndRewraps(t *testing.T) {
 		t.Fatalf("not rewrapped: %v %q", err, stored.Object.Secret.KeyID)
 	}
 	// kek-1 can now be retired.
-	only2 := accesskey.New(b, ring(t, "kek-2", map[string][]byte{"kek-2": k2}), nil)
+	only2 := accesskey.New(b, b, "proj-a", ring(t, "kek-2", map[string][]byte{"kek-2": k2}), nil)
 	if got, err := only2.GetSigningCredential(ctx, cred.AccessKeyID); err != nil || got.Secret != cred.Secret {
 		t.Fatalf("after retiring kek-1: %v", err)
 	}
 	// A keyring without the KEK cannot open it.
-	other := accesskey.New(b, ring(t, "kek-9", map[string][]byte{"kek-9": kek(t)}), nil)
+	other := accesskey.New(b, b, "proj-a", ring(t, "kek-9", map[string][]byte{"kek-9": kek(t)}), nil)
 	if _, err := other.GetSigningCredential(ctx, cred.AccessKeyID); !errors.Is(err, secret.ErrUnknownKEK) {
 		t.Fatalf("foreign keyring: %v", err)
 	}
@@ -191,20 +191,51 @@ func TestKEKRotationReadsOldKeyIDAndRewraps(t *testing.T) {
 func TestImportKeepsExistingCredentialAndIsIdempotentlyRejected(t *testing.T) {
 	b := memstore.New()
 	withUser(t, b, "root")
-	svc := accesskey.New(b, ring(t, "k", map[string][]byte{"k": kek(t)}), nil)
+	svc := accesskey.New(b, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t)}), nil)
 	ctx := context.Background()
 	id, sec := "AKIAABCDEFGHIJKLMNOP", "0123456789012345678901234567890123456789"
-	if _, err := svc.Import(ctx, "root", id, sec); err != nil {
+	if _, err := svc.Import(ctx, "root", id, sec, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Import(ctx, "root", id, sec); !errors.Is(err, store.ErrExists) {
+	if _, err := svc.Import(ctx, "root", id, sec, false); !errors.Is(err, store.ErrExists) {
 		t.Fatalf("replayed import: %v", err)
 	}
-	if _, err := svc.Import(ctx, "root", "AKIA-bad", sec); !errors.Is(err, iam.ErrInvalid) {
+	if _, err := svc.Import(ctx, "root", "AKIA-bad", sec, false); !errors.Is(err, iam.ErrInvalid) {
 		t.Fatalf("hostile id: %v", err)
 	}
 	got, err := svc.GetSigningCredential(ctx, id)
 	if err != nil || got.Secret != sec {
 		t.Fatalf("imported key: %v", err)
+	}
+}
+
+func TestIndexAndRootKey(t *testing.T) {
+	b := memstore.New()
+	scopedA := store.Scoped(b, "proj-a")
+	withUser(t, scopedA, "alice")
+	svc := accesskey.New(scopedA, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t)}), nil)
+	ctx := context.Background()
+	cred, err := svc.Create(ctx, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, err := accesskey.ProjectOf(ctx, b, cred.AccessKeyID); err != nil || p != "proj-a" {
+		t.Fatalf("index: %q %v", p, err)
+	}
+	root, err := svc.Import(ctx, "", "", "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := svc.GetSigningCredential(ctx, root.AccessKeyID); err != nil || !got.Root {
+		t.Fatalf("root key: %v %s", err, got)
+	}
+	if ks, err := svc.List(ctx, "alice"); err != nil || len(ks) != 1 {
+		t.Fatalf("root key listed under a user: %v %d", err, len(ks))
+	}
+	if err := svc.Delete(ctx, "alice", cred.AccessKeyID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := accesskey.ProjectOf(ctx, b, cred.AccessKeyID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("index survives delete: %v", err)
 	}
 }

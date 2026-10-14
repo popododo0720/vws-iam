@@ -87,7 +87,7 @@ func (e env) caller(t *testing.T, name string) sts.Caller {
 	if c, ok := e.callers[name]; ok {
 		return c
 	}
-	cred, err := accesskey.New(e.b, e.keys, e.clk.now).Create(context.Background(), name)
+	cred, err := accesskey.New(e.b, e.b, acct, e.keys, e.clk.now).Create(context.Background(), name)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func TestCallerIsDerivedServerSide(t *testing.T) {
 			t.Fatalf("%v: %v", c.AccessKeyID, err)
 		}
 	}
-	ak := accesskey.New(e.b, e.keys, e.clk.now)
+	ak := accesskey.New(e.b, e.b, acct, e.keys, e.clk.now)
 	cred, err := ak.Create(ctx, "bob")
 	if err != nil {
 		t.Fatal(err)

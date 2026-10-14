@@ -19,6 +19,8 @@ var (
 	ErrNotFound = errors.New("not found")
 	ErrExists   = errors.New("already exists")
 	ErrConflict = errors.New("version conflict")
+	// ErrUnavailable is a transient backend failure; the call may be retried.
+	ErrUnavailable = errors.New("store unavailable")
 )
 
 // Entry is one stored spec and its version.

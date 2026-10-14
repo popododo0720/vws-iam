@@ -1,0 +1,3 @@
+source github.com/popododo0720/vws-proto tag v0.2.0
+commit dd201bdb2ab898efd7456b4c79465d2f070753a7
+files go.mod go.sum buf.* LICENSE vws/ gen/go/vws/common gen/go/vws/iam (other services omitted)

@@ -22,6 +22,8 @@ type PrincipalKind int
 const (
 	User PrincipalKind = iota
 	Role
+	// Root is the project's root user: not subject to identity policies.
+	Root
 )
 
 // Principal is the authenticated caller.
@@ -84,7 +86,7 @@ func (a *Authorizer) collect(ctx context.Context, owner string, attached []strin
 		if err != nil {
 			return nil, fmt.Errorf("inline policy %s/%s: %w", owner, name, err)
 		}
-		out = append(out, policy.Named{Name: owner + "/" + name, Doc: d})
+		out = append(out, policy.Named{Name: owner + ":inline/" + name, Doc: d})
 	}
 	return out, nil
 }
@@ -105,15 +107,12 @@ func (a *Authorizer) IdentityPolicies(ctx context.Context, p Principal) ([]polic
 		if out, err = a.collect(ctx, arn, u.Object.AttachedPolicies, u.Object.InlinePolicies, out); err != nil {
 			return nil, "", err
 		}
-		for _, gname := range u.Object.Groups {
-			g, err := store.Get[iam.Group](ctx, a.b, gname)
-			if errors.Is(err, store.ErrNotFound) {
-				continue // a deleted group grants nothing
-			}
-			if err != nil {
-				return nil, "", err
-			}
-			if out, err = a.collect(ctx, iam.GroupARN(a.account, g.Object), g.Object.AttachedPolicies, g.Object.InlinePolicies, out); err != nil {
+		groups, err := GroupsOf(ctx, a.b, u.Object.Name)
+		if err != nil {
+			return nil, "", err
+		}
+		for _, g := range groups {
+			if out, err = a.collect(ctx, iam.GroupARN(a.account, g), g.AttachedPolicies, g.InlinePolicies, out); err != nil {
 				return nil, "", err
 			}
 		}
@@ -137,6 +136,9 @@ func (a *Authorizer) IdentityPolicies(ctx context.Context, p Principal) ([]polic
 // carries request keys such as aws:SourceIp and aws:MultiFactorAuthPresent;
 // aws:username, aws:PrincipalArn, aws:userid and aws:CurrentTime are set here.
 func (a *Authorizer) Authorize(ctx context.Context, p Principal, action, resource string, reqCtx map[string][]string) (policy.Decision, error) {
+	if p.Kind == Root {
+		return policy.Decision{Allowed: true, Reason: "root user"}, nil
+	}
 	ids, arn, err := a.IdentityPolicies(ctx, p)
 	if err != nil {
 		return policy.Decision{}, err
@@ -166,4 +168,22 @@ func (a *Authorizer) Authorize(ctx context.Context, p Principal, action, resourc
 	}
 	r := policy.Request{Principal: arn, Account: a.account, Action: action, Resource: resource, Context: c}
 	return policy.Evaluate(r, ids, session), nil
+}
+
+// GroupsOf returns the groups whose members include user.
+func GroupsOf(ctx context.Context, b store.Backend, user string) ([]iam.Group, error) {
+	all, err := store.List[iam.Group](ctx, b)
+	if err != nil {
+		return nil, err
+	}
+	var out []iam.Group
+	for _, g := range all {
+		for _, m := range g.Object.Members {
+			if store.Fold(m) == store.Fold(user) {
+				out = append(out, g.Object)
+				break
+			}
+		}
+	}
+	return out, nil
 }

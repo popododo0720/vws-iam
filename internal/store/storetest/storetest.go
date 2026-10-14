@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -20,12 +21,15 @@ func sealed() iam.Sealed { return iam.Sealed{KeyID: "kek-1", Ciphertext: []byte{
 func Samples() []iam.Object {
 	now := time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)
 	return []iam.Object{
-		iam.User{Name: "Alice", ID: "AIDA1", Created: now, Groups: []string{"admins"}, InlinePolicies: map[string]string{"p": `{}`}},
-		iam.Group{Name: "admins", ID: "AGPA1", Created: now, AttachedPolicies: []string{"arn:vws:iam::000000000000:policy/x"}},
+		iam.User{Name: "Alice", ID: "AIDA1", Created: now, Meta: iam.Meta{UID: "u-1", Generation: 1, Labels: map[string]string{"team": "a"}}, InlinePolicies: map[string]string{"p": `{}`}},
+		iam.Group{Name: "admins", ID: "AGPA1", Created: now, Members: []string{"Alice"}, AttachedPolicies: []string{"arn:vws:iam::000000000000:policy/x"}},
 		iam.Role{Name: "deployer", ID: "AROA1", Created: now, AssumeRolePolicy: `{"Version":"2012-10-17","Statement":[]}`, MaxSessionDuration: time.Hour},
 		iam.Policy{Name: "x", ID: "ANPA1", Created: now, DefaultVersion: "v1", Versions: []iam.PolicyVersion{{ID: "v1", Document: `{}`, Created: now}}},
 		iam.AccessKey{ID: "AKIAABCDEFGHIJKLMNOP", UserName: "Alice", Status: iam.KeyActive, Created: now, Secret: sealed()},
 		iam.MfaDevice{Name: "alice-phone", UserName: "Alice", Created: now, Seed: sealed()},
+		iam.KeyIndex{ID: "AKIAABCDEFGHIJKLMNOP", Project: "proj-a"},
+		iam.Session{Hash: strings.Repeat("ab", 32), Project: "proj-a", UserName: "Alice", AuthTime: now, Expires: now.Add(time.Hour)},
+		iam.Operation{ID: "op-1", Project: "proj-a", Response: []byte{1}, Created: now},
 	}
 }
 
@@ -101,6 +105,18 @@ func Run(t *testing.T, open func(t *testing.T) store.Backend) {
 				c := o
 				c.Created = later
 				roundTrip(t, b, o, c)
+			case iam.KeyIndex:
+				c := o
+				c.Project = "proj-b"
+				roundTrip(t, b, o, c)
+			case iam.Session:
+				c := o
+				c.Expires = later
+				roundTrip(t, b, o, c)
+			case iam.Operation:
+				c := o
+				c.Created = later
+				roundTrip(t, b, o, c)
 			}
 		}
 	})
@@ -134,15 +150,15 @@ func Run(t *testing.T, open func(t *testing.T) store.Backend) {
 	t.Run("ConcurrentMutateLosesNoWrite", func(t *testing.T) {
 		b := open(t)
 		ctx := context.Background()
-		if _, err := store.Create(ctx, b, iam.User{Name: "carol", ID: "1"}); err != nil {
+		if _, err := store.Create(ctx, b, iam.Group{Name: "carol", ID: "1"}); err != nil {
 			t.Fatal(err)
 		}
-		groups := []string{"g1", "g2", "g3", "g4"}
+		groups := []string{"u1", "u2", "u3", "u4"}
 		var wg sync.WaitGroup
 		for _, g := range groups {
 			wg.Go(func() {
-				if _, err := store.Mutate(ctx, b, "carol", func(u *iam.User) error {
-					u.Groups = append(u.Groups, g)
+				if _, err := store.Mutate(ctx, b, "carol", func(u *iam.Group) error {
+					u.Members = append(u.Members, g)
 					return nil
 				}); err != nil {
 					t.Error(err)
@@ -150,12 +166,12 @@ func Run(t *testing.T, open func(t *testing.T) store.Backend) {
 			})
 		}
 		wg.Wait()
-		got, err := store.Get[iam.User](ctx, b, "carol")
+		got, err := store.Get[iam.Group](ctx, b, "carol")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(got.Object.Groups) != len(groups) {
-			t.Fatalf("groups %v, want all of %v", got.Object.Groups, groups)
+		if len(got.Object.Members) != len(groups) {
+			t.Fatalf("members %v, want all of %v", got.Object.Members, groups)
 		}
 	})
 	t.Run("ReopenKeepsState", func(t *testing.T) {

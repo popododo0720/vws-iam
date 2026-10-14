@@ -1,0 +1,189 @@
+syntax = "proto3";
+
+package vws.iam.v1;
+
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/api/field_info.proto";
+import "google/api/resource.proto";
+import "google/longrunning/operations.proto";
+import "google/protobuf/timestamp.proto";
+import "vws/common/v1/resource.proto";
+
+option go_package = "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1;iamv1";
+option java_multiple_files = true;
+option java_outer_classname = "MfaDeviceProto";
+option java_package = "dev.vws.iam.v1";
+
+// MfaDeviceService manages virtual TOTP devices (RFC 6238: SHA-1, 6 digits,
+// 30 s, one step of skew either way; a code is accepted once).
+// The seed is encrypted at rest and returned only by CreateVirtualMfaDevice,
+// which is synchronous for the same reason as CreateAccessKey.
+// Delete is FAILED_PRECONDITION / DEPENDENCY_MISSING while the device is enabled.
+service MfaDeviceService {
+  // AIP-131: the Get response is the resource.
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  rpc GetMfaDevice(GetMfaDeviceRequest) returns (MfaDevice) {
+    option (google.api.http) = {get: "/v1/{name=projects/*/mfaDevices/*}"};
+  }
+
+  rpc ListMfaDevices(ListMfaDevicesRequest) returns (ListMfaDevicesResponse) {
+    option (google.api.http) = {get: "/v1/{parent=projects/*}/mfaDevices"};
+  }
+
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  // buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+  rpc DeleteMfaDevice(DeleteMfaDeviceRequest) returns (google.longrunning.Operation) {
+    option (google.api.http) = {delete: "/v1/{name=projects/*/mfaDevices/*}"};
+    option (google.longrunning.operation_info) = {
+      response_type: "vws.iam.v1.MfaDevice"
+      metadata_type: "vws.common.v1.OperationMetadata"
+    };
+  }
+
+  rpc CreateVirtualMfaDevice(CreateVirtualMfaDeviceRequest) returns (CreateVirtualMfaDeviceResponse) {
+    option (google.api.http) = {
+      post: "/v1/{parent=projects/*}/mfaDevices"
+      body: "*"
+    };
+  }
+
+  // EnableMfaDevice binds the device to a user after two consecutive codes.
+  // Wrong codes are UNAUTHENTICATED / INVALID_CREDENTIALS.
+  rpc EnableMfaDevice(EnableMfaDeviceRequest) returns (EnableMfaDeviceResponse) {
+    option (google.api.http) = {
+      post: "/v1/{name=projects/*/mfaDevices/*}:enable"
+      body: "*"
+    };
+  }
+
+  rpc DeactivateMfaDevice(DeactivateMfaDeviceRequest) returns (DeactivateMfaDeviceResponse) {
+    option (google.api.http) = {
+      post: "/v1/{name=projects/*/mfaDevices/*}:deactivate"
+      body: "*"
+    };
+  }
+}
+
+// MfaDevice is a virtual TOTP device.
+// Fields 1-10 are the shared resource envelope.
+message MfaDevice {
+  option (google.api.resource) = {
+    type: "vws.iam/MfaDevice"
+    pattern: "projects/{project}/mfaDevices/{mfa_device}"
+    plural: "mfaDevices"
+    singular: "mfaDevice"
+  };
+
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+  string uid = 2 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (google.api.field_info).format = UUID4
+  ];
+  int64 generation = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string etag = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+  map<string, string> labels = 5;
+  MfaDeviceSpec spec = 6 [(google.api.field_behavior) = REQUIRED];
+  MfaDeviceStatus status = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp create_time = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp update_time = 9 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp delete_time = 10 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+message MfaDeviceSpec {
+  string path = 1;
+}
+
+message MfaDeviceStatus {
+  vws.common.v1.ObservedState observed = 1;
+  // Serial number: arn:vws:iam::{project}:mfa{path}{mfa_device}
+  string serial_number = 2;
+  // The user it is enabled for, full resource name. Empty when not enabled.
+  string user = 3;
+  google.protobuf.Timestamp enable_time = 4;
+}
+
+message GetMfaDeviceRequest {
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "vws.iam/MfaDevice"
+  ];
+}
+
+message ListMfaDevicesRequest {
+  string parent = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).child_type = "vws.iam/MfaDevice"
+  ];
+  // Server default is 50. Values above 1000 are coerced to 1000.
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListMfaDevicesResponse {
+  repeated MfaDevice mfa_devices = 1;
+  string next_page_token = 2;
+}
+
+message DeleteMfaDeviceRequest {
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "vws.iam/MfaDevice"
+  ];
+  string request_id = 2 [
+    (google.api.field_info).format = UUID4,
+    (google.api.field_behavior) = OPTIONAL
+  ];
+  bool allow_missing = 3 [(google.api.field_behavior) = OPTIONAL];
+  string etag = 4 [(google.api.field_behavior) = OPTIONAL];
+}
+
+message CreateVirtualMfaDeviceRequest {
+  string parent = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).child_type = "vws.iam/MfaDevice"
+  ];
+  // Final path segment. Must match IamName.
+  string mfa_device_id = 2 [(google.api.field_behavior) = REQUIRED];
+  MfaDevice mfa_device = 3 [(google.api.field_behavior) = REQUIRED];
+}
+
+message CreateVirtualMfaDeviceResponse {
+  MfaDevice mfa_device = 1;
+  // RFC 4648 base32 seed. Returned here only.
+  string base32_string_seed = 2;
+  // otpauth://totp/... URI for a QR code. Returned here only.
+  string otpauth_uri = 3;
+}
+
+message EnableMfaDeviceRequest {
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "vws.iam/MfaDevice"
+  ];
+  string user = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "vws.iam/User"
+  ];
+  string authentication_code_1 = 3 [(google.api.field_behavior) = REQUIRED];
+  string authentication_code_2 = 4 [(google.api.field_behavior) = REQUIRED];
+}
+
+message DeactivateMfaDeviceRequest {
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "vws.iam/MfaDevice"
+  ];
+  string user = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "vws.iam/User"
+  ];
+}
+
+message EnableMfaDeviceResponse {
+  MfaDevice mfa_device = 1;
+}
+
+message DeactivateMfaDeviceResponse {
+  MfaDevice mfa_device = 1;
+}

@@ -75,6 +75,8 @@ func translate(err error) error {
 		return store.ErrExists
 	case apierrors.IsConflict(err):
 		return store.ErrConflict
+	case apierrors.IsServerTimeout(err), apierrors.IsTimeout(err), apierrors.IsTooManyRequests(err), apierrors.IsServiceUnavailable(err), apierrors.IsInternalError(err):
+		return fmt.Errorf("%w: %w", store.ErrUnavailable, err)
 	}
 	return fmt.Errorf("kube: %w", err)
 }

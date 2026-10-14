@@ -1,0 +1,289 @@
+syntax = "proto3";
+
+package vws.iam.v1;
+
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1;iamv1";
+option java_multiple_files = true;
+option java_outer_classname = "AuthProto";
+option java_package = "dev.vws.iam.v1";
+
+// AuthService is the cluster-internal authentication and authorization API
+// for VWS services (console-api first). Only callers allowed by the chart's
+// NetworkPolicy reach it; it is never exposed outside the cluster.
+// None of these RPCs is an operation: they write no desired state.
+service AuthService {
+  // Authenticate verifies a SigV4 signature inside vws-iam. The caller
+  // (console-api) builds the string to sign from the request and sends it
+  // with the signature; the secret never leaves vws-iam. Long-term (AKIA)
+  // and temporary (ASIA, with session_token) keys both verify.
+  // Unknown or inactive key, wrong signature, or a credential scope that does
+  // not match the string to sign is UNAUTHENTICATED / INVALID_CREDENTIALS; an
+  // expired temporary key is UNAUTHENTICATED / TOKEN_EXPIRED.
+  rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse) {
+    option (google.api.http) = {
+      post: "/v1/authenticate"
+      body: "*"
+    };
+  }
+
+  // Authorize evaluates the principal's policies for one request.
+  // AWS semantics: an explicit Deny wins, then an Allow, else implicit deny.
+  // A denial is a normal response (decision DENY_*), not an RPC error.
+  rpc Authorize(AuthorizeRequest) returns (AuthorizeResponse) {
+    option (google.api.http) = {
+      post: "/v1/authorize"
+      body: "*"
+    };
+  }
+
+  // Login checks a console password and, when the user has an enabled MFA
+  // device, its code. A wrong password or code is UNAUTHENTICATED /
+  // INVALID_CREDENTIALS; a missing code for an enrolled user is
+  // UNAUTHENTICATED / MFA_REQUIRED. The response session_token backs the
+  // HttpOnly console cookie.
+  rpc Login(LoginRequest) returns (LoginResponse) {
+    option (google.api.http) = {
+      post: "/v1/sessions:login"
+      body: "*"
+    };
+  }
+
+  // ValidateSession resolves a console session token. Expired is
+  // UNAUTHENTICATED / TOKEN_EXPIRED, unknown or revoked is
+  // UNAUTHENTICATED / INVALID_CREDENTIALS.
+  rpc ValidateSession(ValidateSessionRequest) returns (ValidateSessionResponse) {
+    option (google.api.http) = {
+      post: "/v1/sessions:validate"
+      body: "*"
+    };
+  }
+
+  // Logout revokes a console session. Revoking an unknown or expired token
+  // succeeds (idempotent).
+  rpc Logout(LogoutRequest) returns (LogoutResponse) {
+    option (google.api.http) = {
+      post: "/v1/sessions:logout"
+      body: "*"
+    };
+  }
+}
+
+// TokenService is STS: temporary credentials.
+service TokenService {
+  // AssumeRole needs the role's trust policy to allow the caller and the
+  // caller's identity policies to allow sts:AssumeRole on the role ARN;
+  // otherwise PERMISSION_DENIED / ACCESS_DENIED. MFA conditions in either
+  // policy see mfa_authenticated of the caller.
+  rpc AssumeRole(AssumeRoleRequest) returns (AssumeRoleResponse) {
+    option (google.api.http) = {
+      post: "/v1/{role=projects/*/roles/*}:assume"
+      body: "*"
+    };
+  }
+
+  // GetSessionToken returns temporary credentials for a user, MFA-marked
+  // when serial_number and token_code verify. Only a long-term key or the
+  // root user may call it.
+  rpc GetSessionToken(GetSessionTokenRequest) returns (GetSessionTokenResponse) {
+    option (google.api.http) = {
+      post: "/v1/sessionTokens"
+      body: "*"
+    };
+  }
+}
+
+// Principal is the authenticated caller, as resolved by vws-iam.
+message Principal {
+  PrincipalType type = 1;
+  // arn:vws:iam::{project}:root, arn:vws:iam::{project}:user{path}{user}, or
+  // arn:vws:sts::{project}:assumed-role/{role}/{session}.
+  string arn = 2;
+  // Project (AWS account id equivalent).
+  string project = 3;
+  // AIDA... for a user, AROA...:{session} for an assumed role.
+  string unique_id = 4;
+  // The user or role resource name, projects/{project}/users/{user} or
+  // projects/{project}/roles/{role}. Empty for root.
+  string resource = 5 [(google.api.resource_reference).type = "*"];
+  // Session name of an assumed role.
+  string session_name = 6;
+  // aws:MultiFactorAuthPresent.
+  bool mfa_authenticated = 7;
+  // aws:MultiFactorAuthAge is computed from this.
+  google.protobuf.Timestamp auth_time = 8;
+}
+
+enum PrincipalType {
+  PRINCIPAL_TYPE_UNSPECIFIED = 0;
+  PRINCIPAL_TYPE_ROOT = 1;
+  PRINCIPAL_TYPE_USER = 2;
+  PRINCIPAL_TYPE_ASSUMED_ROLE = 3;
+}
+
+// Credentials are temporary STS credentials.
+message Credentials {
+  // "ASIA" followed by 16 uppercase letters and digits.
+  string access_key_id = 1;
+  string secret_access_key = 2;
+  // Opaque, HMAC-signed, expiry embedded. Sent as X-Amz-Security-Token.
+  string session_token = 3;
+  google.protobuf.Timestamp expire_time = 4;
+}
+
+// AuthenticateRequest matches console-api internal/sigv4 AuthRequest field for
+// field (vws-console-api feat/iam-sigv4-authorize).
+message AuthenticateRequest {
+  // Access key id from the Credential of the Authorization header.
+  string access_key_id = 1 [(google.api.field_behavior) = REQUIRED];
+  // yyyymmdd from the credential scope.
+  string date = 2 [(google.api.field_behavior) = REQUIRED];
+  string region = 3 [(google.api.field_behavior) = REQUIRED];
+  // "ec2" or "s3".
+  string service = 4 [(google.api.field_behavior) = REQUIRED];
+  // SigV4 canonical request. vws-iam hashes it and checks that the hash is
+  // the last line of string_to_sign.
+  string canonical_request = 5 [(google.api.field_behavior) = REQUIRED];
+  // "AWS4-HMAC-SHA256", X-Amz-Date, the scope {date}/{region}/{service}/aws4_request,
+  // and the hex SHA-256 of canonical_request, joined by "\n". vws-iam checks
+  // that the scope matches date, region, and service, and that X-Amz-Date is
+  // within 15 minutes of its clock.
+  string string_to_sign = 6 [(google.api.field_behavior) = REQUIRED];
+  // Lowercase hex signature from the request.
+  string signature = 7 [(google.api.field_behavior) = REQUIRED];
+  // X-Amz-Security-Token. Required for an ASIA key, empty for a long-term key.
+  string session_token = 8;
+  // Client address, for aws:SourceIp and audit. Optional; console-api does not send it yet.
+  string source_ip = 9;
+}
+
+// AuthenticateResponse fields 1-3 are what console-api reads (sigv4.Identity).
+message AuthenticateResponse {
+  // Project (AWS account id equivalent).
+  string account = 1;
+  // Principal ARN, for example arn:vws:iam::{project}:root.
+  string arn = 2;
+  bool is_root = 3;
+  // Full principal with MFA and session context (mfa_authenticated, auth_time,
+  // session_name). Additive; console-api may ignore it.
+  Principal principal = 4;
+  // Expiry of a temporary key; unset for a long-term key.
+  google.protobuf.Timestamp expire_time = 5;
+}
+
+message AuthorizeRequest {
+  // The caller, as Authenticate, ValidateSession, or an STS call
+  // returned it. vws-iam re-reads the policies of principal.resource; it does
+  // not trust any other field except mfa_authenticated and auth_time, which
+  // it checks against the session or key that produced them.
+  Principal principal = 1 [(google.api.field_behavior) = REQUIRED];
+  // "<service>:<Action>", for example "ec2:RunInstances" or "s3:PutObject".
+  string action = 2 [(google.api.field_behavior) = REQUIRED];
+  // Resource ARNs the request touches, arn:vws:<service>:<region>:<project>:<type>/<id>.
+  // Empty means "*" (actions without a resource, for example ec2:DescribeInstances).
+  // The decision is ALLOW only when every resource is allowed.
+  repeated string resources = 3;
+  // Condition keys of the request, for example "aws:SourceIp",
+  // "aws:RequestedRegion", "aws:CurrentTime", "ec2:InstanceType". The server
+  // sets aws:MultiFactorAuthPresent, aws:PrincipalArn, and aws:username itself
+  // and ignores those keys here.
+  map<string, ContextValues> context = 4;
+}
+
+message ContextValues {
+  repeated string values = 1;
+}
+
+message AuthorizeResponse {
+  Decision decision = 1;
+  // The statement that decided ALLOW or DENY_EXPLICIT: the policy ARN (or
+  // "{owner arn}:inline/{name}") and the statement Sid or index.
+  string matched_policy = 2;
+  string matched_statement = 3;
+  // Short human-readable reason, safe to show in an AccessDenied message.
+  string reason = 4;
+}
+
+enum Decision {
+  DECISION_UNSPECIFIED = 0;
+  DECISION_ALLOW = 1;
+  DECISION_DENY_EXPLICIT = 2;
+  DECISION_DENY_IMPLICIT = 3;
+}
+
+message LoginRequest {
+  string project = 1 [(google.api.field_behavior) = REQUIRED];
+  // IAM user name, or "root" for the account root user.
+  string user_name = 2 [(google.api.field_behavior) = REQUIRED];
+  string password = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = INPUT_ONLY
+  ];
+  // Six digits when the user has an enabled MFA device.
+  string totp_code = 4 [(google.api.field_behavior) = INPUT_ONLY];
+  // Client address for aws:SourceIp in later Authorize calls and for audit.
+  string source_ip = 5;
+}
+
+message LoginResponse {
+  string session_token = 1;
+  google.protobuf.Timestamp expire_time = 2;
+  Principal principal = 3;
+  // The console must make the user set a new password before anything else.
+  bool password_reset_required = 4;
+}
+
+message ValidateSessionRequest {
+  string session_token = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+message ValidateSessionResponse {
+  Principal principal = 1;
+  google.protobuf.Timestamp expire_time = 2;
+}
+
+message LogoutRequest {
+  string session_token = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+message LogoutResponse {}
+
+message AssumeRoleRequest {
+  string role = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "vws.iam/Role"
+  ];
+  // The caller: from Authenticate or ValidateSession.
+  Principal caller = 2 [(google.api.field_behavior) = REQUIRED];
+  // [\w+=,.@-]{2,64}.
+  string role_session_name = 3 [(google.api.field_behavior) = REQUIRED];
+  // 900 to the role's max_session_duration_seconds. Zero means 3600.
+  int32 duration_seconds = 4;
+  // MFA serial number ARN and its current code, when the trust policy needs MFA.
+  string serial_number = 5;
+  string token_code = 6 [(google.api.field_behavior) = INPUT_ONLY];
+  // sts:ExternalId condition value.
+  string external_id = 7;
+}
+
+message AssumeRoleResponse {
+  Credentials credentials = 1;
+  // The assumed-role principal these credentials resolve to.
+  Principal assumed_role_user = 2;
+}
+
+message GetSessionTokenRequest {
+  Principal caller = 1 [(google.api.field_behavior) = REQUIRED];
+  // 900 to 129600. Zero means 43200.
+  int32 duration_seconds = 2;
+  string serial_number = 3;
+  string token_code = 4 [(google.api.field_behavior) = INPUT_ONLY];
+}
+
+message GetSessionTokenResponse {
+  Credentials credentials = 1;
+}

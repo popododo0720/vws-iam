@@ -27,9 +27,9 @@ func setup(t *testing.T) store.Backend {
 		{ID: "v1", Document: `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*"}}`},
 		{ID: "v2", Document: `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":["s3:Get*","s3:List*"],"Resource":"*"}}`},
 	}})
-	put(t, b, iam.Group{Name: "devs", ID: "2", InlinePolicies: map[string]string{"ec2": `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"ec2:*","Resource":"*"}}`}})
-	put(t, b, iam.Group{Name: "nofleet", ID: "3", InlinePolicies: map[string]string{"deny": `{"Version":"2012-10-17","Statement":{"Sid":"NoTerminate","Effect":"Deny","Action":"ec2:TerminateInstances","Resource":"*"}}`}})
-	put(t, b, iam.User{Name: "alice", ID: "4", Groups: []string{"devs", "nofleet", "gone"}, AttachedPolicies: []string{"arn:vws:iam::" + acct + ":policy/S3Read"}})
+	put(t, b, iam.Group{Name: "devs", ID: "2", Members: []string{"Alice"}, InlinePolicies: map[string]string{"ec2": `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"ec2:*","Resource":"*"}}`}})
+	put(t, b, iam.Group{Name: "nofleet", ID: "3", Members: []string{"alice"}, InlinePolicies: map[string]string{"deny": `{"Version":"2012-10-17","Statement":{"Sid":"NoTerminate","Effect":"Deny","Action":"ec2:TerminateInstances","Resource":"*"}}`}})
+	put(t, b, iam.User{Name: "alice", ID: "4", AttachedPolicies: []string{"arn:vws:iam::" + acct + ":policy/S3Read"}})
 	put(t, b, iam.Role{Name: "reader", ID: "5", AssumeRolePolicy: `{}`, AttachedPolicies: []string{"arn:vws:iam::" + acct + ":policy/S3Read"}})
 	return b
 }
@@ -53,8 +53,11 @@ func TestAuthorizeCombinesUserAndGroups(t *testing.T) {
 			t.Errorf("%s: %+v %v, want %v", c.action, d, err, c.ok)
 		}
 	}
+	if d, err := a.Authorize(ctx, authz.Principal{Kind: authz.Root}, "iam:DeleteUser", "*", nil); err != nil || !d.Allowed {
+		t.Fatalf("root: %+v %v", d, err)
+	}
 	d, err := a.Authorize(ctx, alice, "ec2:TerminateInstances", "*", nil)
-	if err != nil || d.Reason != "explicit deny in arn:vws:iam::"+acct+":group/nofleet/deny/NoTerminate" {
+	if err != nil || d.Reason != "explicit deny in arn:vws:iam::"+acct+":group/nofleet:inline/deny/NoTerminate" || d.Policy != "arn:vws:iam::"+acct+":group/nofleet:inline/deny" || d.Statement != "NoTerminate" || !d.Explicit {
 		t.Fatalf("reason %q %v", d.Reason, err)
 	}
 }
