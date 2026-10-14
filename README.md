@@ -9,6 +9,17 @@ Status: Phase 1 design, see the "IAM Phase 1 design" issue.
 
 License: Apache-2.0
 
+## MFA lockout status
+
+GetMfaDevice and ListMfaDevices report `status.failed_attempts` and
+`status.locked_until`. These are admin fields: like every MfaDevice call
+they are only reached through console-api, which authorizes the caller
+with `Authorize(iam:GetMfaDevice | iam:ListMfaDevices, ...)` first, so
+only an IAM administrator sees them. The counter resets when the device
+locks: the 5th wrong code in a row sets `locked_until` to now+15m and
+`failed_attempts` back to 0. `locked_until` is set only while the lockout
+runs. Neither field carries the seed or a code.
+
 ## Development
 
 ```

@@ -28,7 +28,9 @@ func (p project) mfaProto(d iam.MfaDevice, version string) *iamv1.MfaDevice {
 }
 
 // mfaStatus reports the lockout state of internal/mfa: failed_attempts
-// as stored, locked_until only while the lockout runs (vws-proto#32).
+// as stored (reset to 0 when the device locks), locked_until only while
+// the lockout runs (vws-proto#32). These are admin fields: MfaDevice
+// calls are authorized by console-api before they reach this service.
 func (p project) mfaStatus(d iam.MfaDevice, user string) *iamv1.MfaDeviceStatus {
 	st := &iamv1.MfaDeviceStatus{Observed: ready(d.Generation), SerialNumber: p.mfa.Serial(d.Name), User: user, EnableTime: ts(d.EnableTime),
 		FailedAttempts: int32(min(d.FailedAttempts, mfa.MaxFailedAttempts))} //nolint:gosec // bounded by MaxFailedAttempts
