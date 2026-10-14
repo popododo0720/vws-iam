@@ -61,26 +61,12 @@ func login(ctx context.Context, e *env, user, pw, ip string) error {
 	return err
 }
 
-func withPassword(t *testing.T, e *env, users ...string) {
-	t.Helper()
-	for _, n := range users {
-		u := e.createUser(t, t.Context(), n)
-		ctx, cancel := slowRPC(t.Context())
-		_, err := e.users.SetLoginProfile(ctx, &iamv1.SetLoginProfileRequest{Name: u.GetName(), Password: goodPW})
-		cancel()
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
 func testAttemptLimits(t *testing.T, backend func(*testing.T) store.Backend) {
 	t.Run("PerUserAcrossReplicas", func(t *testing.T) {
 		b := backend(t)
 		now := time.Now().UTC()
 		a, rb := newEnvOn(t, b, &now), newEnvOn(t, b, &now)
-		withPassword(t, a, "alice", "bob")
-		cheapPasswords(t, b, "alice", "bob")
+		withCheapPassword(t, a, b, "alice", "bob")
 		ctx := t.Context()
 		for i := range grpcapi.UserAttemptLimit {
 			e := a
@@ -116,8 +102,10 @@ func testAttemptLimits(t *testing.T, backend func(*testing.T) store.Backend) {
 
 	t.Run("PerSourceIP", func(t *testing.T) {
 		now := time.Now().UTC()
-		e := newEnvOn(t, backend(t), &now)
-		withPassword(t, e, "bob")
+		b := backend(t)
+		e := newEnvOn(t, b, &now)
+		withCheapPassword(t, e, b, "bob")
+		cheapDummyHash(t)
 		ctx := t.Context()
 		const ip = "203.0.113.7"
 		// Spread over many unknown names: each user counter stays at 1.
@@ -330,8 +318,9 @@ func testAttemptLimits(t *testing.T, backend func(*testing.T) store.Backend) {
 
 	t.Run("WindowReset", func(t *testing.T) {
 		now := time.Now().UTC()
-		e := newEnvOn(t, backend(t), &now)
-		withPassword(t, e, "alice")
+		b := backend(t)
+		e := newEnvOn(t, b, &now)
+		withCheapPassword(t, e, b, "alice")
 		ctx := t.Context()
 		for range grpcapi.UserAttemptLimit - 1 {
 			wantBadLogin(t, login(ctx, e, "alice", "wrong password!", ""))
@@ -357,8 +346,7 @@ func testAttemptLimits(t *testing.T, backend func(*testing.T) store.Backend) {
 		b := backend(t)
 		now := time.Now().UTC()
 		a, rb := newEnvOn(t, b, &now), newEnvOn(t, b, &now)
-		withPassword(t, a, "carol")
-		cheapPasswords(t, b, "carol")
+		withCheapPassword(t, a, b, "carol")
 		ctx := t.Context()
 		const n = 3 * grpcapi.UserAttemptLimit
 		errs := make([]error, n)
