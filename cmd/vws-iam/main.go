@@ -248,7 +248,9 @@ func run(ctx context.Context, cfg config) (err error) {
 		return fmt.Errorf("listen: %w", err)
 	}
 	srv := grpc.NewServer(grpcapi.ServerOptions()...)
-	grpcapi.Register(srv, grpcapi.New(backend, keys))
+	api := grpcapi.New(backend, keys)
+	grpcapi.Register(srv, api)
+	go collectReplays(ctx, log, api)
 	hs := grpchealth.NewServer()
 	healthpb.RegisterHealthServer(srv, hs)
 	go watchHealth(ctx, hs, ready)
@@ -283,6 +285,28 @@ func watchHealth(ctx context.Context, hs *grpchealth.Server, ready func(context.
 			return
 		case <-t.C:
 		}
+	}
+}
+
+// collectReplays deletes expired SigV4 replay entries (#33) every few
+// minutes. Each replica runs it; races between them are harmless.
+func collectReplays(ctx context.Context, log *slog.Logger, api *grpcapi.Server) {
+	t := time.NewTicker(5 * time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		cctx, cancel := context.WithTimeout(ctx, time.Minute)
+		n, err := api.GCReplayEntries(cctx)
+		cancel()
+		if err != nil {
+			log.LogAttrs(ctx, slog.LevelWarn, "replay gc", slog.String("error", err.Error()))
+			continue
+		}
+		log.LogAttrs(ctx, slog.LevelDebug, "replay gc", slog.Int("deleted", n))
 	}
 }
 

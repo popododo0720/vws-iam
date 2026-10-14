@@ -30,6 +30,7 @@ func Samples() []iam.Object {
 		iam.KeyIndex{ID: "AKIAABCDEFGHIJKLMNOP", Project: "proj-a"},
 		iam.Session{Hash: strings.Repeat("ab", 32), Project: "proj-a", UserName: "Alice", AuthTime: now, Expires: now.Add(time.Hour)},
 		iam.Operation{ID: "op-1", Project: "proj-a", Response: []byte{1}, Created: now},
+		iam.ReplayEntry{Hash: strings.Repeat("cd", 32), Expires: now.Add(time.Hour)},
 	}
 }
 
@@ -116,6 +117,10 @@ func Run(t *testing.T, open func(t *testing.T) store.Backend) {
 			case iam.Operation:
 				c := o
 				c.Created = later
+				roundTrip(t, b, o, c)
+			case iam.ReplayEntry:
+				c := o
+				c.Expires = later
 				roundTrip(t, b, o, c)
 			}
 		}

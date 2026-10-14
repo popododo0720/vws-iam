@@ -13,7 +13,6 @@ import (
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
-	"github.com/popododo0720/vws-iam/internal/sigv4"
 	"github.com/popododo0720/vws-iam/internal/sts"
 )
 
@@ -51,8 +50,9 @@ func authnOf(sigv4 *iamv1.AuthenticateRequest, console string) (authn, error) {
 // stsSigv4 checks that a forwarded SigV4 request was signed for this STS
 // call, so a request signed for another service or action cannot be
 // replayed here, and that the same signature is not used twice while its
-// X-Amz-Date is inside the sigv4.MaxSkew window.
-func (s *Server) stsSigv4(r *iamv1.AuthenticateRequest, action string) error {
+// X-Amz-Date is inside the sigv4.MaxSkew window, on any replica
+// (claimReplay).
+func (s *Server) stsSigv4(ctx context.Context, r *iamv1.AuthenticateRequest, action string) error {
 	if r.GetService() != "sts" {
 		return accessDenied("the signed request is not an STS call")
 	}
@@ -67,17 +67,7 @@ func (s *Server) stsSigv4(r *iamv1.AuthenticateRequest, action string) error {
 	if a := q.Get("Action"); a != "" && a != action {
 		return accessDenied("the signed request is for " + a + ", not " + action)
 	}
-	now := s.now()
-	s.stsSeen.Range(func(k, v any) bool {
-		if t, ok := v.(time.Time); ok && now.After(t) {
-			s.stsSeen.Delete(k)
-		}
-		return true
-	})
-	if _, dup := s.stsSeen.LoadOrStore(r.GetSignature(), now.Add(2*sigv4.MaxSkew)); dup {
-		return accessDenied("this signed request was already used")
-	}
-	return nil
+	return s.claimReplay(ctx, r)
 }
 
 func missingAuthentication() error {
@@ -94,7 +84,7 @@ func (s *Server) authenticatedCaller(ctx context.Context, a authn, action string
 		if err != nil {
 			return project{}, sts.Caller{}, err
 		}
-		if err := s.stsSigv4(a.sigv4, action); err != nil {
+		if err := s.stsSigv4(ctx, a.sigv4, action); err != nil {
 			return project{}, sts.Caller{}, err
 		}
 		p := s.project(resp.GetAccount())
