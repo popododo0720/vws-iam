@@ -9,6 +9,20 @@ Status: Phase 1 design, see the "IAM Phase 1 design" issue.
 
 License: Apache-2.0
 
+## Session revocation and clocks
+
+RevokeUserSessions and RevokeRoleSessions do not compare replica clocks.
+Each revocation bumps a counter on the user or role inside the store's
+compare-and-swap, and every STS session token records the counter it read
+when it was issued. A session is refused once the stored counter is
+higher, so "issued before the revoke" means "read the counter before the
+revoke committed", whatever each replica's clock says. A session issued
+after the revoke is valid at once, with no grace period.
+`sessions_revoke_time` is still reported: it is the revoking replica's
+clock, never moves backwards, and is informational only. Tokens issued
+before this change carry no counter; for them the old time comparison is
+widened by `sigv4.MaxSkew` (15 minutes) until they expire.
+
 ## MFA lockout status
 
 GetMfaDevice and ListMfaDevices report `status.failed_attempts` and
