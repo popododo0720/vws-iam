@@ -21,6 +21,7 @@ import (
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/policy"
 	"github.com/popododo0720/vws-iam/internal/secret"
+	"github.com/popododo0720/vws-iam/internal/sigv4"
 	"github.com/popododo0720/vws-iam/internal/store"
 )
 
@@ -140,8 +141,12 @@ type session struct {
 	// PrincipalID binds the session to the user or role it was issued for:
 	// a deleted and recreated principal of the same name does not inherit it.
 	PrincipalID string `json:"pid"`
-	// IssuedAt is compared with the principal's SessionsRevokedBefore.
-	IssuedAt    time.Time `json:"iat"`
+	// IssuedAt is compared with the principal's SessionsRevokedBefore
+	// only for tokens without RevokeGen (issued before #46).
+	IssuedAt time.Time `json:"iat"`
+	// RevokeGen is the principal's SessionsRevokeGeneration read from the
+	// store at issue; a revocation bumps it and so rejects this token.
+	RevokeGen   *uint64   `json:"rg,omitempty"`
 	Project     string    `json:"pr"`
 	AuthTime    time.Time `json:"at"`
 	RoleID      string    `json:"ri,omitempty"`
@@ -286,16 +291,22 @@ func (s *Service) verifyMFA(ctx context.Context, c Caller, m MFA) (bool, error) 
 // "Revoke active sessions". Later sessions are unaffected.
 func (s *Service) RevokeSessions(ctx context.Context, kind authz.PrincipalKind, name string) error {
 	now := s.now().UTC()
+	// The generation is bumped inside the store's compare-and-swap, so the
+	// store's write order, not any replica's clock, decides which sessions
+	// came before the revocation. The reported time never moves backwards
+	// even if this replica's clock is behind the previous revoker's.
 	var err error
 	switch kind {
 	case authz.User:
 		_, err = store.Mutate(ctx, s.b, name, func(u *iam.User) error {
-			u.SessionsRevokedBefore = now
+			u.SessionsRevokedBefore = later(u.SessionsRevokedBefore, now)
+			u.SessionsRevokeGeneration++
 			return nil
 		})
 	case authz.Role:
 		_, err = store.Mutate(ctx, s.b, name, func(r *iam.Role) error {
-			r.SessionsRevokedBefore = now
+			r.SessionsRevokedBefore = later(r.SessionsRevokedBefore, now)
+			r.SessionsRevokeGeneration++
 			return nil
 		})
 	default:
@@ -305,6 +316,33 @@ func (s *Service) RevokeSessions(ctx context.Context, kind authz.PrincipalKind, 
 		return fmt.Errorf("revoke sessions of %s: %w", name, err)
 	}
 	return nil
+}
+
+func later(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
+}
+
+// revokeGen reads the principal's current revocation generation from the
+// store. The root user has none.
+func (s *Service) revokeGen(ctx context.Context, kind authz.PrincipalKind, name string) (uint64, error) {
+	switch kind {
+	case authz.User:
+		u, err := store.Get[iam.User](ctx, s.b, name)
+		if err != nil {
+			return 0, fmt.Errorf("session principal: %w", err)
+		}
+		return u.Object.SessionsRevokeGeneration, nil
+	case authz.Role:
+		r, err := store.Get[iam.Role](ctx, s.b, name)
+		if err != nil {
+			return 0, fmt.Errorf("session principal: %w", err)
+		}
+		return r.Object.SessionsRevokeGeneration, nil
+	}
+	return 0, nil
 }
 
 // AssumeRole returns credentials for roleARN if the role's trust policy
@@ -386,7 +424,7 @@ func (s *Service) AssumeRole(ctx context.Context, c Caller, reqCtx map[string][]
 		return Credentials{}, fmt.Errorf("%w: %s does not trust %s", ErrAccessDenied, roleARN, callerARN)
 	}
 	arn := iam.ARN("sts", "", s.account, "assumed-role/"+r.Object.Name+"/"+sessionName)
-	creds, err := s.issue(session{Kind: int(authz.Role), Name: r.Object.Name, ARN: arn, MFA: c.mfa, Policies: policies, Chained: chained, PrincipalID: r.Object.ID, AuthTime: c.authTime, RoleID: r.Object.ID, SessionName: sessionName}, duration)
+	creds, err := s.issue(ctx, session{Kind: int(authz.Role), Name: r.Object.Name, ARN: arn, MFA: c.mfa, Policies: policies, Chained: chained, PrincipalID: r.Object.ID, AuthTime: c.authTime, RoleID: r.Object.ID, SessionName: sessionName}, duration)
 	creds.AssumedRoleARN = arn
 	return creds, err
 }
@@ -414,10 +452,17 @@ func (s *Service) GetSessionToken(ctx context.Context, c Caller, duration time.D
 			return Credentials{}, err
 		}
 	}
-	return s.issue(session{Kind: int(c.principal.Kind), Name: c.principal.Name, ARN: arn, MFA: mfa, PrincipalID: c.principalID, AuthTime: c.authTime}, duration)
+	return s.issue(ctx, session{Kind: int(c.principal.Kind), Name: c.principal.Name, ARN: arn, MFA: mfa, PrincipalID: c.principalID, AuthTime: c.authTime}, duration)
 }
 
-func (s *Service) issue(sess session, d time.Duration) (Credentials, error) {
+func (s *Service) issue(ctx context.Context, sess session, d time.Duration) (Credentials, error) {
+	// Read the generation before the token exists: a revocation that
+	// commits after this read bumps it and rejects the token.
+	gen, err := s.revokeGen(ctx, authz.PrincipalKind(sess.Kind), sess.Name)
+	if err != nil {
+		return Credentials{}, err
+	}
+	sess.RevokeGen = &gen
 	id, err := accesskey.NewKeyID("ASIA")
 	if err != nil {
 		return Credentials{}, err
@@ -463,19 +508,20 @@ func (s *Service) Validate(ctx context.Context, accessKeyID, token string) (Sess
 	}
 	var id string
 	var revoked time.Time
+	var gen uint64
 	switch authz.PrincipalKind(sess.Kind) {
 	case authz.User:
 		u, err := store.Get[iam.User](ctx, s.b, sess.Name)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			return Session{}, fmt.Errorf("session principal: %w", err)
 		}
-		id, revoked = u.Object.ID, u.Object.SessionsRevokedBefore
+		id, revoked, gen = u.Object.ID, u.Object.SessionsRevokedBefore, u.Object.SessionsRevokeGeneration
 	case authz.Role:
 		r, err := store.Get[iam.Role](ctx, s.b, sess.Name)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			return Session{}, fmt.Errorf("session principal: %w", err)
 		}
-		id, revoked = r.Object.ID, r.Object.SessionsRevokedBefore
+		id, revoked, gen = r.Object.ID, r.Object.SessionsRevokedBefore, r.Object.SessionsRevokeGeneration
 	case authz.Root:
 		// The root user has no User object; its sessions end at expiry or
 		// on KEK rotation.
@@ -484,7 +530,7 @@ func (s *Service) Validate(ctx context.Context, accessKeyID, token string) (Sess
 	if id == "" || id != sess.PrincipalID {
 		return Session{}, fmt.Errorf("%w: principal no longer exists", ErrInvalidToken)
 	}
-	if !sess.IssuedAt.After(revoked) && !revoked.IsZero() {
+	if sessionRevoked(sess, revoked, gen) {
 		return Session{}, fmt.Errorf("%w: session revoked", ErrInvalidToken)
 	}
 	p := authz.Principal{Kind: authz.PrincipalKind(sess.Kind), Name: sess.Name, ARN: sess.ARN, SessionPolicies: sess.Policies}
@@ -492,6 +538,19 @@ func (s *Service) Validate(ctx context.Context, accessKeyID, token string) (Sess
 		p.ARN = "" // a GetSessionToken session acts as the user (or root) itself
 	}
 	return Session{AccessKeyID: sess.AccessKeyID, Secret: sess.Secret, Project: sess.Project, AuthTime: sess.AuthTime, RoleID: sess.RoleID, SessionName: sess.SessionName, Principal: p, PrincipalID: sess.PrincipalID, MFA: sess.MFA, IssuedAt: sess.IssuedAt, Expires: sess.Expires}, nil
+}
+
+// sessionRevoked compares generations, which come from the store's write
+// order and need no clock. A token from before #46 has no generation; it
+// falls back to the two replicas' clocks, widened by sigv4.MaxSkew so a
+// revoking replica up to MaxSkew behind still rejects it. That also
+// rejects such a token issued up to MaxSkew after the revocation; they
+// expire within MaxSessionTokenDuration.
+func sessionRevoked(sess session, revoked time.Time, gen uint64) bool {
+	if sess.RevokeGen != nil {
+		return gen > *sess.RevokeGen
+	}
+	return !revoked.IsZero() && !sess.IssuedAt.After(revoked.Add(sigv4.MaxSkew))
 }
 
 func (s *Service) open(accessKeyID, token string) (session, error) {

@@ -113,8 +113,12 @@ type User struct {
 	PasswordHash          string    `json:"passwordHash,omitempty"`
 	PasswordResetRequired bool      `json:"passwordResetRequired,omitempty"`
 	PasswordLastUsed      time.Time `json:"passwordLastUsed,omitzero"`
-	// SessionsRevokedBefore invalidates STS sessions issued until then.
+	// SessionsRevokedBefore is when sessions were last revoked, as read on
+	// the revoking replica's clock. It is reported, not compared (#46).
 	SessionsRevokedBefore time.Time `json:"sessionsRevokedBefore,omitzero"`
+	// SessionsRevokeGeneration counts revocations. A session records the
+	// value it read at issue; a higher stored value revokes it (#46).
+	SessionsRevokeGeneration uint64 `json:"sessionsRevokeGeneration,omitempty"`
 }
 
 func (User) Kind() Kind    { return KindUser }
@@ -182,8 +186,12 @@ type Role struct {
 	MaxSessionDuration time.Duration     `json:"maxSessionDuration,omitempty"`
 	AttachedPolicies   []string          `json:"attachedPolicies,omitempty"`
 	InlinePolicies     map[string]string `json:"inlinePolicies,omitempty"`
-	// SessionsRevokedBefore invalidates STS sessions issued until then.
+	// SessionsRevokedBefore is when sessions were last revoked, as read on
+	// the revoking replica's clock. It is reported, not compared (#46).
 	SessionsRevokedBefore time.Time `json:"sessionsRevokedBefore,omitzero"`
+	// SessionsRevokeGeneration counts revocations. A session records the
+	// value it read at issue; a higher stored value revokes it (#46).
+	SessionsRevokeGeneration uint64 `json:"sessionsRevokeGeneration,omitempty"`
 }
 
 func (Role) Kind() Kind    { return KindRole }
