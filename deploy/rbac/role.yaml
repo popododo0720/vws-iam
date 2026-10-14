@@ -1,0 +1,10 @@
+# vws-iam reads and writes only its own custom resources in its own namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: vws-iam-store
+  namespace: vws-iam
+rules:
+  - apiGroups: [iam.vws.popododo0720.io]
+    resources: [iamusers, iamgroups, iamroles, iampolicies, iamaccesskeys, iammfadevices]
+    verbs: [get, list, create, update, delete]

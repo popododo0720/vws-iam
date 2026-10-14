@@ -1,0 +1,155 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: iamusers.iam.vws.popododo0720.io
+spec:
+  group: iam.vws.popododo0720.io
+  scope: Namespaced
+  names:
+    kind: IamUser
+    listKind: IamUserList
+    plural: iamusers
+    singular: iamuser
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              description: The vws-iam domain object as JSON. Written only by vws-iam. Secrets and seeds are AES-256-GCM ciphertext.
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+          required: [spec]
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: iamgroups.iam.vws.popododo0720.io
+spec:
+  group: iam.vws.popododo0720.io
+  scope: Namespaced
+  names:
+    kind: IamGroup
+    listKind: IamGroupList
+    plural: iamgroups
+    singular: iamgroup
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              description: The vws-iam domain object as JSON. Written only by vws-iam. Secrets and seeds are AES-256-GCM ciphertext.
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+          required: [spec]
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: iamroles.iam.vws.popododo0720.io
+spec:
+  group: iam.vws.popododo0720.io
+  scope: Namespaced
+  names:
+    kind: IamRole
+    listKind: IamRoleList
+    plural: iamroles
+    singular: iamrole
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              description: The vws-iam domain object as JSON. Written only by vws-iam. Secrets and seeds are AES-256-GCM ciphertext.
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+          required: [spec]
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: iampolicies.iam.vws.popododo0720.io
+spec:
+  group: iam.vws.popododo0720.io
+  scope: Namespaced
+  names:
+    kind: IamPolicy
+    listKind: IamPolicyList
+    plural: iampolicies
+    singular: iampolicy
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              description: The vws-iam domain object as JSON. Written only by vws-iam. Secrets and seeds are AES-256-GCM ciphertext.
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+          required: [spec]
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: iamaccesskeys.iam.vws.popododo0720.io
+spec:
+  group: iam.vws.popododo0720.io
+  scope: Namespaced
+  names:
+    kind: IamAccessKey
+    listKind: IamAccessKeyList
+    plural: iamaccesskeys
+    singular: iamaccesskey
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              description: The vws-iam domain object as JSON. Written only by vws-iam. Secrets and seeds are AES-256-GCM ciphertext.
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+          required: [spec]
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: iammfadevices.iam.vws.popododo0720.io
+spec:
+  group: iam.vws.popododo0720.io
+  scope: Namespaced
+  names:
+    kind: IamMfaDevice
+    listKind: IamMfaDeviceList
+    plural: iammfadevices
+    singular: iammfadevice
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              description: The vws-iam domain object as JSON. Written only by vws-iam. Secrets and seeds are AES-256-GCM ciphertext.
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+          required: [spec]

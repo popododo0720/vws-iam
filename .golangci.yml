@@ -1,0 +1,70 @@
+version: "2"
+linters:
+  enable:
+    - bodyclose
+    - depguard
+    - contextcheck
+    - errcheck
+    - errname
+    - errorlint
+    - misspell
+    - nilerr
+    - nilnil
+    - noctx
+    - sloglint
+    - wrapcheck
+  settings:
+    depguard:
+      rules:
+        no-sentry-direct:
+          files: [$all]
+          deny:
+            - pkg: github.com/getsentry/sentry-go
+              desc: use vws-lib/obs/report
+        no-std-log:
+          files: [$all]
+          deny:
+            - pkg: log$
+              desc: use log/slog through vws-lib obs
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+    wrapcheck:
+      ignore-package-globs:
+        - github.com/popododo0720/vws-iam/internal/*
+        - google.golang.org/grpc/status
+        - google.golang.org/grpc/internal/status
+    sloglint:
+      no-mixed-args: true
+      attr-only: true
+      context: all
+      static-msg: true
+      key-naming-case: snake
+  exclusions:
+    generated: lax
+    rules:
+      - path: _test\.go
+        linters:
+          - wrapcheck
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+    paths:
+      - third_party/
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/popododo0720/vws-iam
+  exclusions:
+    generated: lax
+    paths:
+      - third_party/
