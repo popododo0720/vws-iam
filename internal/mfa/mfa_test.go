@@ -321,3 +321,63 @@ func TestEnableFailuresCountTowardLockout(t *testing.T) {
 		t.Fatalf("enable while locked: %v", err)
 	}
 }
+
+// TestLockoutBoundaryLiterals pins the lockout policy to literal values
+// (5 failures, 15 minutes) instead of the package constants.
+func TestLockoutBoundaryLiterals(t *testing.T) {
+	svc, b, clk := setup(t)
+	ctx := context.Background()
+	seed := enroll(t, svc, clk, "alice", "d1")
+	clk.t = clk.t.Add(30 * time.Second)
+	for i := 1; i <= 4; i++ {
+		if err := svc.Verify(ctx, "alice", "d1", "000000"); !errors.Is(err, mfa.ErrInvalidCode) {
+			t.Fatalf("failure %d: %v, want ErrInvalidCode", i, err)
+		}
+	}
+	lockedAt := clk.t
+	if err := svc.Verify(ctx, "alice", "d1", "000000"); !errors.Is(err, mfa.ErrLocked) {
+		t.Fatalf("failure 5: %v, want ErrLocked", err)
+	}
+	d, err := store.Get[iam.MfaDevice](ctx, b, "d1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := lockedAt.Add(15 * time.Minute); !d.Object.LockedUntil.Equal(want) {
+		t.Fatalf("LockedUntil = %v, want %v", d.Object.LockedUntil, want)
+	}
+	clk.t = lockedAt.Add(15*time.Minute - time.Second)
+	if err := svc.Verify(ctx, "alice", "d1", code(seed, clk.t, 0)); !errors.Is(err, mfa.ErrLocked) {
+		t.Fatalf("correct code at lockedAt+15m-1s: %v, want ErrLocked", err)
+	}
+	clk.t = lockedAt.Add(15 * time.Minute)
+	if err := svc.Verify(ctx, "alice", "d1", code(seed, clk.t, 0)); err != nil {
+		t.Fatalf("correct code at lockedAt+15m: %v, want success", err)
+	}
+}
+
+// TestEnableWindowLiterals pins the Enable window to ±1 step of 30s.
+func TestEnableWindowLiterals(t *testing.T) {
+	svc, _, clk := setup(t)
+	ctx := context.Background()
+	at := func(seed []byte, steps int) string {
+		return code(seed, clk.t.Add(time.Duration(steps)*30*time.Second), 0)
+	}
+	for i, tc := range []struct {
+		first, second int
+		ok            bool
+	}{{-1, 0, true}, {0, 1, true}, {-2, -1, false}, {1, 2, false}} {
+		name := fmt.Sprintf("w%d", i)
+		e, err := svc.CreateVirtual(ctx, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seed := seedOf(t, e)
+		err = svc.Enable(ctx, "alice", name, at(seed, tc.first), at(seed, tc.second))
+		if tc.ok && err != nil {
+			t.Errorf("(%+d,%+d): %v, want accepted", tc.first, tc.second, err)
+		}
+		if !tc.ok && !errors.Is(err, mfa.ErrInvalidCode) {
+			t.Errorf("(%+d,%+d): %v, want ErrInvalidCode", tc.first, tc.second, err)
+		}
+	}
+}
