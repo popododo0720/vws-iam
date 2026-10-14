@@ -285,6 +285,10 @@ type MfaDevice struct {
 	Seed     Sealed    `json:"seed"`
 	// LastStep is the last accepted TOTP time step, the replay guard.
 	LastStep int64 `json:"lastStep,omitempty"`
+	// FailedAttempts counts wrong codes in a row; LockedUntil is set when
+	// they reach the limit (brute-force guard).
+	FailedAttempts int       `json:"failedAttempts,omitempty"`
+	LockedUntil    time.Time `json:"lockedUntil,omitzero"`
 }
 
 func (MfaDevice) Kind() Kind    { return KindMfaDevice }
