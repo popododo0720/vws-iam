@@ -25,13 +25,14 @@ import (
 
 	"github.com/popododo0720/vws-iam/internal/grpcapi"
 	"github.com/popododo0720/vws-iam/internal/iam"
+	"github.com/popododo0720/vws-iam/internal/secret"
 	"github.com/popododo0720/vws-iam/internal/store"
 	"github.com/popododo0720/vws-iam/internal/store/kubestore"
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
 )
 
 type config struct {
-	listen, namespace, kubeconfig string
+	listen, namespace, kubeconfig, kekDir string
 }
 
 func parseConfig(args []string, stderr io.Writer) (config, error) {
@@ -41,6 +42,7 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	fs.StringVar(&c.listen, "listen", "127.0.0.1:9095", "gRPC listen address")
 	fs.StringVar(&c.namespace, "namespace", "", "Kubernetes namespace of the IAM custom resources; empty keeps state in memory")
 	fs.StringVar(&c.kubeconfig, "kubeconfig", "", "kubeconfig path; empty uses in-cluster config")
+	fs.StringVar(&c.kekDir, "kek-dir", "", "directory of the mounted vws-iam-kek Secret: one base64 32-byte key per id and an \"active\" file")
 	if err := fs.Parse(args); err != nil {
 		return c, fmt.Errorf("flags: %w", err)
 	}
@@ -89,6 +91,13 @@ func run(ctx context.Context, cfg config) (err error) {
 			err = errors.Join(err, fmt.Errorf("obs shutdown: %w", serr))
 		}
 	}()
+	if cfg.kekDir != "" {
+		keys, err := secret.LoadDir(cfg.kekDir)
+		if err != nil {
+			return err
+		}
+		slog.Default().LogAttrs(ctx, slog.LevelInfo, "loaded KEK keyring", slog.String("active_kek", keys.Active()))
+	}
 	backend, err := openStore(cfg)
 	if err != nil {
 		return err
