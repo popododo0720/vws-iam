@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+package vws.common.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/popododo0720/vws-proto/gen/go/vws/common/v1;commonv1";
+option java_multiple_files = true;
+option java_outer_classname = "OperationProto";
+option java_package = "dev.vws.common.v1";
+
+// OperationMetadata is google.longrunning.Operation.metadata for every
+// mutating RPC in this module. metadata_type is "vws.common.v1.OperationMetadata".
+//
+// The operation name is "projects/{project}/operations/{operation}".
+// {operation} is a server-generated UUID.
+//
+// Durability. The server writes the desired state, then returns the operation
+// name. A restart reads that state and resumes the same operation. Clients
+// poll GetOperation with the same name after a reboot. The operation stays
+// RUNNING until observed.generation catches up to metadata.generation, or until
+// a delete has been fully removed.
+//
+// Idempotency, shared by every resource service:
+//
+// Create, keyed by (parent, resource id):
+//   - Stored desired state matches the request: return a succeeded operation
+//     for the existing resource.
+//   - Stored desired state differs: ALREADY_EXISTS.
+//   - Same request_id and same request fingerprint: return the original operation.
+//   - Same request_id and a different fingerprint: ABORTED / IDEMPOTENCY_CONFLICT.
+//   - request_id is remembered for 24 hours. After that, the resource id rule still applies.
+//
+// Update:
+//   - An identical spec and labels is a no-op. Generation does not change.
+//     The operation succeeds immediately.
+//   - Otherwise the server stores the new desired state, increments generation
+//     when spec changes, and returns a RUNNING operation.
+//   - Label-only changes do not increment generation and complete immediately.
+//   - etag, when set, must match the stored etag or the RPC returns ETAG_MISMATCH.
+//   - allow_missing creates the resource when it is absent.
+//
+// Delete:
+//   - Already deleting: return the in-flight operation.
+//   - Already gone and allow_missing: return a succeeded operation.
+//   - Already gone without allow_missing: NOT_FOUND.
+//   - Otherwise set delete_time, increment generation, and return a RUNNING
+//     operation that completes when the row is removed.
+//
+// Report*Status:
+//   - observed.generation greater than the stored generation: GENERATION_CONFLICT.
+//   - observed.generation lower than the stored observed generation: no-op success.
+//   - Otherwise store the report. When it catches the operation generation, complete that operation.
+//
+// validate_only checks the request and writes nothing. It returns a succeeded
+// operation whose response is unset.
+message OperationMetadata {
+  string resource = 1;
+  OperationVerb verb = 2;
+  int64 generation = 3;
+  string request_id = 4;
+  google.protobuf.Timestamp create_time = 5;
+  google.protobuf.Timestamp end_time = 6;
+}
+
+enum OperationVerb {
+  OPERATION_VERB_UNSPECIFIED = 0;
+  OPERATION_VERB_CREATE = 1;
+  OPERATION_VERB_UPDATE = 2;
+  OPERATION_VERB_DELETE = 3;
+}

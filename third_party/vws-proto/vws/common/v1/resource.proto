@@ -1,0 +1,93 @@
+syntax = "proto3";
+
+package vws.common.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/popododo0720/vws-proto/gen/go/vws/common/v1;commonv1";
+option java_multiple_files = true;
+option java_outer_classname = "ResourceProto";
+option java_package = "dev.vws.common.v1";
+
+// Resource envelope. Every resource message in this module uses these field numbers:
+//
+//	1  name          IDENTIFIER
+//	2  uid           OUTPUT_ONLY UUID
+//	3  generation    OUTPUT_ONLY, starts at 1, increments when spec changes
+//	4  etag          OUTPUT_ONLY concurrency token
+//	5  labels        at most 64 entries
+//	6  spec          REQUIRED desired state
+//	7  status        OUTPUT_ONLY
+//	8  create_time   OUTPUT_ONLY
+//	9  update_time   OUTPUT_ONLY
+//	10 delete_time   OUTPUT_ONLY, set when a delete is accepted
+//
+// status.observed is ObservedState and is field 1 of every status message.
+// Label keys match [a-z][a-z0-9_-]{0,62}. Label values are 0 to 63 bytes of
+// UTF-8 with no ASCII control characters.
+//
+// ResourceId is the final path segment of every resource except Object.
+//
+// Grammar:
+//
+//	[a-z]([a-z0-9-]{0,61}[a-z0-9])?
+//
+// The segment starts with a lowercase letter, ends with a letter or digit,
+// and contains only lowercase letters, digits, and hyphens. Length is 1 to 63.
+// Project, region, and zone identifiers use the same grammar.
+//
+// Object keys do not use this grammar. See vws.storage.v1.Object.
+message ResourceId {
+  string value = 1;
+}
+
+// ObservedState is the node-reported half of every resource status.
+// Field names and numbers are part of the contract. Copy this message by
+// embedding it as `ObservedState observed = 1` inside each status message.
+message ObservedState {
+  ReconciliationState state = 1;
+  // Generation of spec that this report applied. Zero means the node has
+  // not reported yet. The server ignores a report whose generation is lower
+  // than the generation already stored.
+  int64 generation = 2;
+  repeated Condition conditions = 3;
+  // Identity of the node that produced this report. Empty until the first report.
+  string node = 4;
+  string message = 5;
+}
+
+// ReconciliationState is the cross-resource reconcile lifecycle.
+// A stopped instance whose spec asks for stop is READY, not a failure.
+enum ReconciliationState {
+  RECONCILIATION_STATE_UNSPECIFIED = 0;
+  RECONCILIATION_STATE_PENDING = 1;
+  RECONCILIATION_STATE_RECONCILING = 2;
+  RECONCILIATION_STATE_READY = 3;
+  RECONCILIATION_STATE_DELETING = 4;
+  RECONCILIATION_STATE_ERROR = 5;
+}
+
+enum ConditionType {
+  CONDITION_TYPE_UNSPECIFIED = 0;
+  // The resource can be used for its purpose.
+  CONDITION_TYPE_READY = 1;
+  // observed.generation matches the resource generation and spec is applied.
+  CONDITION_TYPE_RECONCILED = 2;
+}
+
+enum ConditionState {
+  CONDITION_STATE_UNSPECIFIED = 0;
+  CONDITION_STATE_TRUE = 1;
+  CONDITION_STATE_FALSE = 2;
+  CONDITION_STATE_UNKNOWN = 3;
+}
+
+message Condition {
+  ConditionType type = 1;
+  ConditionState state = 2;
+  // Machine-readable token, for example "VolumeMissing".
+  string reason = 3;
+  string message = 4;
+  google.protobuf.Timestamp last_transition_time = 5;
+  int64 observed_generation = 6;
+}

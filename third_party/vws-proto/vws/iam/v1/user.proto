@@ -1,0 +1,255 @@
+syntax = "proto3";
+
+package vws.iam.v1;
+
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/api/field_info.proto";
+import "google/api/resource.proto";
+import "google/longrunning/operations.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/timestamp.proto";
+import "vws/common/v1/resource.proto";
+
+option go_package = "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1;iamv1";
+option java_multiple_files = true;
+option java_outer_classname = "UserProto";
+option java_package = "dev.vws.iam.v1";
+
+// UserService manages IAM users of a project (the AWS account).
+// No node reconciles IAM. The server writes the resource and its status
+// (observed.state READY, observed.generation = generation) in one store, so
+// every operation of this service is returned done.
+// Delete is FAILED_PRECONDITION / DEPENDENCY_MISSING while the user has access
+// keys, an MFA device, a login profile, group memberships, or attached or
+// inline policies (AWS DeleteConflict).
+service UserService {
+  // AIP-131: the Get response is the resource.
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  rpc GetUser(GetUserRequest) returns (User) {
+    option (google.api.http) = {get: "/v1/{name=projects/*/users/*}"};
+  }
+
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse) {
+    option (google.api.http) = {get: "/v1/{parent=projects/*}/users"};
+  }
+
+  // AIP-151: every mutation returns google.longrunning.Operation.
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  // buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+  rpc CreateUser(CreateUserRequest) returns (google.longrunning.Operation) {
+    option (google.api.http) = {
+      post: "/v1/{parent=projects/*}/users"
+      body: "user"
+    };
+    option (google.longrunning.operation_info) = {
+      response_type: "vws.iam.v1.User"
+      metadata_type: "vws.common.v1.OperationMetadata"
+    };
+  }
+
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  // buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+  rpc UpdateUser(UpdateUserRequest) returns (google.longrunning.Operation) {
+    option (google.api.http) = {
+      patch: "/v1/{user.name=projects/*/users/*}"
+      body: "user"
+    };
+    option (google.longrunning.operation_info) = {
+      response_type: "vws.iam.v1.User"
+      metadata_type: "vws.common.v1.OperationMetadata"
+    };
+  }
+
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  // buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+  rpc DeleteUser(DeleteUserRequest) returns (google.longrunning.Operation) {
+    option (google.api.http) = {delete: "/v1/{name=projects/*/users/*}"};
+    option (google.longrunning.operation_info) = {
+      response_type: "vws.iam.v1.User"
+      metadata_type: "vws.common.v1.OperationMetadata"
+    };
+  }
+
+  // SetLoginProfile sets or replaces the console password (argon2id at rest).
+  // Not an operation: the password must not be kept in an operation record.
+  rpc SetLoginProfile(SetLoginProfileRequest) returns (SetLoginProfileResponse) {
+    option (google.api.http) = {
+      post: "/v1/{name=projects/*/users/*}:setLoginProfile"
+      body: "*"
+    };
+  }
+
+  rpc DeleteLoginProfile(DeleteLoginProfileRequest) returns (DeleteLoginProfileResponse) {
+    option (google.api.http) = {post: "/v1/{name=projects/*/users/*}:deleteLoginProfile"};
+  }
+
+  // ChangePassword is the user's own change. old_password must verify.
+  rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse) {
+    option (google.api.http) = {
+      post: "/v1/{name=projects/*/users/*}:changePassword"
+      body: "*"
+    };
+  }
+}
+
+// User is an IAM user. The project is the AWS account.
+// Fields 1-10 are the shared resource envelope.
+message User {
+  option (google.api.resource) = {
+    type: "vws.iam/User"
+    pattern: "projects/{project}/users/{user}"
+    plural: "users"
+    singular: "user"
+  };
+
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+  string uid = 2 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (google.api.field_info).format = UUID4
+  ];
+  int64 generation = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string etag = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+  map<string, string> labels = 5;
+  UserSpec spec = 6 [(google.api.field_behavior) = REQUIRED];
+  UserStatus status = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp create_time = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp update_time = 9 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp delete_time = 10 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+message UserSpec {
+  // IAM path, "/" by default. Starts and ends with "/", at most 512 characters.
+  string path = 1;
+  // Managed policies, full resource names projects/{project}/policies/{policy}.
+  // At most 10. Changing this list is AttachUserPolicy / DetachUserPolicy.
+  repeated string attached_policies = 2;
+  // Inline policies: policy name (IamName) -> JSON policy document.
+  map<string, string> inline_policies = 3;
+}
+
+message UserStatus {
+  vws.common.v1.ObservedState observed = 1;
+  // arn:vws:iam::{project}:user{path}{user}
+  string arn = 2;
+  // Stable unique id, "AIDA" followed by 17 uppercase letters and digits. Never reused.
+  string unique_id = 3;
+  // Groups the user belongs to, full resource names. Read from Group.spec.members.
+  repeated string groups = 4;
+  bool login_profile = 5;
+  bool password_reset_required = 6;
+  google.protobuf.Timestamp password_last_used_time = 7;
+  // Serial numbers (ARNs) of the enabled MFA devices.
+  repeated string mfa_devices = 8;
+}
+
+message GetUserRequest {
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "vws.iam/User"
+  ];
+}
+
+message ListUsersRequest {
+  string parent = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).child_type = "vws.iam/User"
+  ];
+  // Server default is 50. Values above 1000 are coerced to 1000.
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListUsersResponse {
+  repeated User users = 1;
+  string next_page_token = 2;
+}
+
+message CreateUserRequest {
+  string parent = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).child_type = "vws.iam/User"
+  ];
+  // Final path segment. Must match IamName (docs/validation.md): [A-Za-z0-9+=,.@_-], 1 to 64 characters, unique per project ignoring case.
+  string user_id = 2 [(google.api.field_behavior) = REQUIRED];
+  User user = 3 [(google.api.field_behavior) = REQUIRED];
+  string request_id = 4 [
+    (google.api.field_info).format = UUID4,
+    (google.api.field_behavior) = OPTIONAL
+  ];
+  bool validate_only = 5 [(google.api.field_behavior) = OPTIONAL];
+}
+
+message UpdateUserRequest {
+  User user = 1 [(google.api.field_behavior) = REQUIRED];
+  // Paths are relative to User. status and output-only fields are rejected.
+  // Omitted mask is treated as "spec,labels".
+  // The user id is the name; AWS UpdateUser NewUserName is not supported in Phase 1.
+  google.protobuf.FieldMask update_mask = 2;
+  string request_id = 3 [
+    (google.api.field_info).format = UUID4,
+    (google.api.field_behavior) = OPTIONAL
+  ];
+  bool validate_only = 4 [(google.api.field_behavior) = OPTIONAL];
+  bool allow_missing = 5 [(google.api.field_behavior) = OPTIONAL];
+}
+
+message DeleteUserRequest {
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "vws.iam/User"
+  ];
+  string request_id = 2 [
+    (google.api.field_info).format = UUID4,
+    (google.api.field_behavior) = OPTIONAL
+  ];
+  bool allow_missing = 3 [(google.api.field_behavior) = OPTIONAL];
+  string etag = 4 [(google.api.field_behavior) = OPTIONAL];
+}
+
+message SetLoginProfileRequest {
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "vws.iam/User"
+  ];
+  // Plaintext once, over the cluster-internal channel. Secret: never stored or logged.
+  // 8 to 128 characters. A weaker password is INVALID_ARGUMENT / INVALID_SPEC.
+  string password = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = INPUT_ONLY,
+    debug_redact = true
+  ];
+  bool password_reset_required = 3;
+}
+
+message DeleteLoginProfileRequest {
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "vws.iam/User"
+  ];
+}
+
+message ChangePasswordRequest {
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "vws.iam/User"
+  ];
+  // Secrets: never log them.
+  // A wrong old password is UNAUTHENTICATED / INVALID_CREDENTIALS.
+  string old_password = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = INPUT_ONLY,
+    debug_redact = true
+  ];
+  string new_password = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = INPUT_ONLY,
+    debug_redact = true
+  ];
+}
+
+message SetLoginProfileResponse {}
+
+message DeleteLoginProfileResponse {}
+
+message ChangePasswordResponse {}

@@ -1,0 +1,186 @@
+syntax = "proto3";
+
+package vws.iam.v1;
+
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/api/field_info.proto";
+import "google/api/resource.proto";
+import "google/longrunning/operations.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/timestamp.proto";
+import "vws/common/v1/resource.proto";
+
+option go_package = "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1;iamv1";
+option java_multiple_files = true;
+option java_outer_classname = "AccessKeyProto";
+option java_package = "dev.vws.iam.v1";
+
+// AccessKeyService manages long-term SigV4 keys of a user.
+// The secret is encrypted at rest (AES-256-GCM under the KEK) and is returned
+// only by CreateAccessKey. CreateAccessKey is synchronous and not an operation,
+// so the secret is never kept in an operation record (an exception to the
+// AIP-151 rule of this module).
+// A user has at most 2 keys; a third is RESOURCE_EXHAUSTED / QUOTA_EXCEEDED.
+// No node reconciles IAM. The server writes the resource and its status
+// (observed.state READY, observed.generation = generation) in one store, so
+// every operation of this service is returned done.
+service AccessKeyService {
+  // AIP-131: the Get response is the resource.
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  rpc GetAccessKey(GetAccessKeyRequest) returns (AccessKey) {
+    option (google.api.http) = {get: "/v1/{name=projects/*/users/*/accessKeys/*}"};
+  }
+
+  rpc ListAccessKeys(ListAccessKeysRequest) returns (ListAccessKeysResponse) {
+    option (google.api.http) = {get: "/v1/{parent=projects/*/users/*}/accessKeys"};
+  }
+
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  // buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+  rpc UpdateAccessKey(UpdateAccessKeyRequest) returns (google.longrunning.Operation) {
+    option (google.api.http) = {
+      patch: "/v1/{access_key.name=projects/*/users/*/accessKeys/*}"
+      body: "access_key"
+    };
+    option (google.longrunning.operation_info) = {
+      response_type: "vws.iam.v1.AccessKey"
+      metadata_type: "vws.common.v1.OperationMetadata"
+    };
+  }
+
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  // buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+  rpc DeleteAccessKey(DeleteAccessKeyRequest) returns (google.longrunning.Operation) {
+    option (google.api.http) = {delete: "/v1/{name=projects/*/users/*/accessKeys/*}"};
+    option (google.longrunning.operation_info) = {
+      response_type: "vws.iam.v1.AccessKey"
+      metadata_type: "vws.common.v1.OperationMetadata"
+    };
+  }
+
+  rpc CreateAccessKey(CreateAccessKeyRequest) returns (CreateAccessKeyResponse) {
+    option (google.api.http) = {
+      post: "/v1/{parent=projects/*/users/*}/accessKeys"
+      body: "*"
+    };
+  }
+}
+
+// AccessKey is a long-term key. The final path segment is the access key id,
+// "AKIA" followed by 16 uppercase letters and digits (not ResourceId).
+// Fields 1-10 are the shared resource envelope.
+message AccessKey {
+  option (google.api.resource) = {
+    type: "vws.iam/AccessKey"
+    pattern: "projects/{project}/users/{user}/accessKeys/{access_key}"
+    plural: "accessKeys"
+    singular: "accessKey"
+  };
+
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+  string uid = 2 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (google.api.field_info).format = UUID4
+  ];
+  int64 generation = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string etag = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+  map<string, string> labels = 5;
+  AccessKeySpec spec = 6 [(google.api.field_behavior) = REQUIRED];
+  AccessKeyStatus status = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp create_time = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp update_time = 9 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp delete_time = 10 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+message AccessKeySpec {
+  AccessKeyState state = 1;
+}
+
+enum AccessKeyState {
+  ACCESS_KEY_STATE_UNSPECIFIED = 0;
+  // Unspecified on create means ACTIVE.
+  ACCESS_KEY_STATE_ACTIVE = 1;
+  // Signatures with an inactive key are refused.
+  ACCESS_KEY_STATE_INACTIVE = 2;
+}
+
+message AccessKeyStatus {
+  vws.common.v1.ObservedState observed = 1;
+  google.protobuf.Timestamp last_used_time = 2;
+  // Service of the last use, for example "ec2" or "s3".
+  string last_used_service = 3;
+  string last_used_region = 4;
+}
+
+message GetAccessKeyRequest {
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "vws.iam/AccessKey"
+  ];
+}
+
+message ListAccessKeysRequest {
+  string parent = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).child_type = "vws.iam/AccessKey"
+  ];
+  // Server default is 50. Values above 1000 are coerced to 1000.
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListAccessKeysResponse {
+  repeated AccessKey access_keys = 1;
+  string next_page_token = 2;
+}
+
+message UpdateAccessKeyRequest {
+  AccessKey access_key = 1 [(google.api.field_behavior) = REQUIRED];
+  // Paths are relative to AccessKey. status and output-only fields are rejected.
+  // Omitted mask is treated as "spec,labels".
+  // Only spec.state may change (UpdateAccessKey Active/Inactive).
+  google.protobuf.FieldMask update_mask = 2;
+  string request_id = 3 [
+    (google.api.field_info).format = UUID4,
+    (google.api.field_behavior) = OPTIONAL
+  ];
+  bool validate_only = 4 [(google.api.field_behavior) = OPTIONAL];
+  bool allow_missing = 5 [(google.api.field_behavior) = OPTIONAL];
+}
+
+message DeleteAccessKeyRequest {
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "vws.iam/AccessKey"
+  ];
+  string request_id = 2 [
+    (google.api.field_info).format = UUID4,
+    (google.api.field_behavior) = OPTIONAL
+  ];
+  bool allow_missing = 3 [(google.api.field_behavior) = OPTIONAL];
+  string etag = 4 [(google.api.field_behavior) = OPTIONAL];
+}
+
+message CreateAccessKeyRequest {
+  string parent = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).child_type = "vws.iam/AccessKey"
+  ];
+  // A repeated request_id within 24 hours is ALREADY_EXISTS, never the
+  // secret again. After a lost response, delete the key and create another.
+  string request_id = 2 [
+    (google.api.field_info).format = UUID4,
+    (google.api.field_behavior) = OPTIONAL
+  ];
+}
+
+message CreateAccessKeyResponse {
+  AccessKey access_key = 1;
+  // 40 characters. Returned here only, never by Get or List.
+  // Secret: never log it.
+  string secret_access_key = 2 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    debug_redact = true
+  ];
+}

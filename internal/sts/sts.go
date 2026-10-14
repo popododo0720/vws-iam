@@ -53,6 +53,7 @@ type Caller struct {
 	principalID string
 	mfa         bool
 	temporary   bool
+	authTime    time.Time
 }
 
 // Principal is the caller's principal.
@@ -63,6 +64,33 @@ func (c Caller) MFA() bool { return c.mfa }
 
 // Temporary reports whether the caller signed with STS credentials.
 func (c Caller) Temporary() bool { return c.temporary }
+
+// AuthTime is when the caller first authenticated; zero means now.
+func (c Caller) AuthTime() time.Time { return c.authTime }
+
+// RootCaller is the project's root user, authenticated by the server
+// (root access key or root console session). mfa and authTime come from
+// that server-side authentication, never from request fields.
+func RootCaller(mfa bool, authTime time.Time) Caller {
+	return Caller{principal: authz.Principal{Kind: authz.Root}, principalID: rootID, mfa: mfa, authTime: authTime}
+}
+
+// rootID is the principal id of the root user, which has no User object.
+const rootID = "root"
+
+// ConsoleCaller is the IAM user of a console session that the server has
+// already validated (grpcapi ValidateSession); mfa and authTime come from
+// that stored session. The user must still exist.
+func (s *Service) ConsoleCaller(ctx context.Context, userName string, mfa bool, authTime time.Time) (Caller, error) {
+	u, err := store.Get[iam.User](ctx, s.b, userName)
+	if errors.Is(err, store.ErrNotFound) {
+		return Caller{}, ErrInvalidToken
+	}
+	if err != nil {
+		return Caller{}, fmt.Errorf("console user: %w", err)
+	}
+	return Caller{principal: authz.Principal{Kind: authz.User, Name: u.Object.Name}, principalID: u.Object.ID, mfa: mfa, authTime: authTime}, nil
+}
 
 // Credential is what a request was signed with. Resolve must only be given
 // a credential whose SigV4 signature the caller has already verified
@@ -113,11 +141,20 @@ type session struct {
 	// a deleted and recreated principal of the same name does not inherit it.
 	PrincipalID string `json:"pid"`
 	// IssuedAt is compared with the principal's SessionsRevokedBefore.
-	IssuedAt time.Time `json:"iat"`
+	IssuedAt    time.Time `json:"iat"`
+	Project     string    `json:"pr"`
+	AuthTime    time.Time `json:"at"`
+	RoleID      string    `json:"ri,omitempty"`
+	SessionName string    `json:"sn,omitempty"`
 }
 
 // Session is a validated temporary session.
 type Session struct {
+	Project  string
+	AuthTime time.Time
+	// RoleID and SessionName are set for an assumed role.
+	RoleID      string
+	SessionName string
 	AccessKeyID string
 	Secret      string
 	Principal   authz.Principal
@@ -132,7 +169,7 @@ func (s Session) String() string { return "Session{" + s.AccessKeyID + " " + s.P
 
 // Caller returns the session as the caller of a further request.
 func (s Session) Caller() Caller {
-	return Caller{principal: s.Principal, principalID: s.PrincipalID, mfa: s.MFA, temporary: true}
+	return Caller{principal: s.Principal, principalID: s.PrincipalID, mfa: s.MFA, temporary: true, authTime: s.AuthTime}
 }
 
 // Context returns the request context keys a session carries.
@@ -212,6 +249,9 @@ func (s *Service) Resolve(ctx context.Context, cred Credential) (Caller, error) 
 	if k.Object.Status != iam.KeyActive {
 		return Caller{}, ErrInvalidToken
 	}
+	if k.Object.Root {
+		return RootCaller(false, time.Time{}), nil
+	}
 	u, err := store.Get[iam.User](ctx, s.b, k.Object.UserName)
 	if errors.Is(err, store.ErrNotFound) {
 		return Caller{}, ErrInvalidToken
@@ -236,7 +276,7 @@ func (s *Service) verifyMFA(ctx context.Context, c Caller, m MFA) (bool, error) 
 		return false, fmt.Errorf("%w: MFA is not available", ErrAccessDenied)
 	}
 	if err := s.mfa.VerifyMFA(ctx, c.principal.Name, m.SerialNumber, m.TokenCode); err != nil {
-		return false, fmt.Errorf("%w: invalid MFA code: %w", ErrAccessDenied, err)
+		return false, fmt.Errorf("%w: MultiFactorAuthentication failed (%s)", ErrAccessDenied, err.Error())
 	}
 	return true, nil
 }
@@ -330,6 +370,9 @@ func (s *Service) AssumeRole(ctx context.Context, c Caller, reqCtx map[string][]
 		return Credentials{}, fmt.Errorf("trust policy of %s: %w", roleARN, err)
 	}
 	callerARN := c.principal.ARN
+	if callerARN == "" && c.principal.Kind == authz.Root {
+		callerARN = iam.ARN("iam", "", s.account, "root")
+	}
 	if callerARN == "" {
 		_, callerARN, err = s.authz.IdentityPolicies(ctx, c.principal)
 		if err != nil {
@@ -343,16 +386,16 @@ func (s *Service) AssumeRole(ctx context.Context, c Caller, reqCtx map[string][]
 		return Credentials{}, fmt.Errorf("%w: %s does not trust %s", ErrAccessDenied, roleARN, callerARN)
 	}
 	arn := iam.ARN("sts", "", s.account, "assumed-role/"+r.Object.Name+"/"+sessionName)
-	creds, err := s.issue(session{Kind: int(authz.Role), Name: r.Object.Name, ARN: arn, MFA: c.mfa, Policies: policies, Chained: chained, PrincipalID: r.Object.ID}, duration)
+	creds, err := s.issue(session{Kind: int(authz.Role), Name: r.Object.Name, ARN: arn, MFA: c.mfa, Policies: policies, Chained: chained, PrincipalID: r.Object.ID, AuthTime: c.authTime, RoleID: r.Object.ID, SessionName: sessionName}, duration)
 	creds.AssumedRoleARN = arn
 	return creds, err
 }
 
 // GetSessionToken returns credentials for a user, typically to carry MFA.
 // SerialNumber and TokenCode, when given, are verified here; only then does
-// the session carry MFA.
+// the session carry MFA (or the root caller authenticated with MFA).
 func (s *Service) GetSessionToken(ctx context.Context, c Caller, duration time.Duration, m MFA) (Credentials, error) {
-	if c.principal.Kind != authz.User || c.temporary || c.principalID == "" {
+	if (c.principal.Kind != authz.User && c.principal.Kind != authz.Root) || c.temporary || c.principalID == "" {
 		return Credentials{}, fmt.Errorf("%w: GetSessionToken needs long-term user credentials", ErrAccessDenied)
 	}
 	if duration == 0 {
@@ -365,11 +408,13 @@ func (s *Service) GetSessionToken(ctx context.Context, c Caller, duration time.D
 	if err != nil {
 		return Credentials{}, err
 	}
-	_, arn, err := s.authz.IdentityPolicies(ctx, c.principal)
-	if err != nil {
-		return Credentials{}, err
+	arn := iam.ARN("iam", "", s.account, "root")
+	if c.principal.Kind == authz.User {
+		if _, arn, err = s.authz.IdentityPolicies(ctx, c.principal); err != nil {
+			return Credentials{}, err
+		}
 	}
-	return s.issue(session{Kind: int(authz.User), Name: c.principal.Name, ARN: arn, MFA: mfa, PrincipalID: c.principalID}, duration)
+	return s.issue(session{Kind: int(c.principal.Kind), Name: c.principal.Name, ARN: arn, MFA: mfa, PrincipalID: c.principalID, AuthTime: c.authTime}, duration)
 }
 
 func (s *Service) issue(sess session, d time.Duration) (Credentials, error) {
@@ -381,7 +426,10 @@ func (s *Service) issue(sess session, d time.Duration) (Credentials, error) {
 	if err != nil {
 		return Credentials{}, err
 	}
-	sess.AccessKeyID, sess.Secret, sess.IssuedAt = id, sec, s.now().UTC()
+	sess.AccessKeyID, sess.Secret, sess.IssuedAt, sess.Project = id, sec, s.now().UTC(), s.account
+	if sess.AuthTime.IsZero() {
+		sess.AuthTime = s.now().UTC().Truncate(time.Second)
+	}
 	sess.Expires = s.now().UTC().Add(d).Truncate(time.Second)
 	b, err := json.Marshal(sess)
 	if err != nil {
@@ -393,6 +441,16 @@ func (s *Service) issue(sess session, d time.Duration) (Credentials, error) {
 	}
 	token := sealed.KeyID + "." + base64.RawURLEncoding.EncodeToString(sealed.Ciphertext)
 	return Credentials{AccessKeyID: id, Secret: sec, SessionToken: token, Expiration: sess.Expires}, nil
+}
+
+// SessionProject opens a session token only to read the project that
+// issued it, so that project's Service can Validate it. It is not a check.
+func SessionProject(keys *secret.Keyring, accessKeyID, token string, now func() time.Time) (string, error) {
+	sess, err := New(nil, keys, nil, "", now).open(accessKeyID, token)
+	if err != nil {
+		return "", err
+	}
+	return sess.Project, nil
 }
 
 // Validate opens a session token presented with accessKeyID. A tampered,
@@ -418,6 +476,10 @@ func (s *Service) Validate(ctx context.Context, accessKeyID, token string) (Sess
 			return Session{}, fmt.Errorf("session principal: %w", err)
 		}
 		id, revoked = r.Object.ID, r.Object.SessionsRevokedBefore
+	case authz.Root:
+		// The root user has no User object; its sessions end at expiry or
+		// on KEK rotation.
+		id = rootID
 	}
 	if id == "" || id != sess.PrincipalID {
 		return Session{}, fmt.Errorf("%w: principal no longer exists", ErrInvalidToken)
@@ -426,10 +488,10 @@ func (s *Service) Validate(ctx context.Context, accessKeyID, token string) (Sess
 		return Session{}, fmt.Errorf("%w: session revoked", ErrInvalidToken)
 	}
 	p := authz.Principal{Kind: authz.PrincipalKind(sess.Kind), Name: sess.Name, ARN: sess.ARN, SessionPolicies: sess.Policies}
-	if p.Kind == authz.User {
-		p.ARN = "" // a GetSessionToken session acts as the user itself
+	if p.Kind != authz.Role {
+		p.ARN = "" // a GetSessionToken session acts as the user (or root) itself
 	}
-	return Session{AccessKeyID: sess.AccessKeyID, Secret: sess.Secret, Principal: p, PrincipalID: sess.PrincipalID, MFA: sess.MFA, IssuedAt: sess.IssuedAt, Expires: sess.Expires}, nil
+	return Session{AccessKeyID: sess.AccessKeyID, Secret: sess.Secret, Project: sess.Project, AuthTime: sess.AuthTime, RoleID: sess.RoleID, SessionName: sess.SessionName, Principal: p, PrincipalID: sess.PrincipalID, MFA: sess.MFA, IssuedAt: sess.IssuedAt, Expires: sess.Expires}, nil
 }
 
 func (s *Service) open(accessKeyID, token string) (session, error) {

@@ -32,6 +32,7 @@ type Credential struct {
 	AccessKeyID string
 	Secret      string
 	UserName    string
+	Root        bool
 }
 
 // String hides the secret from %v and slog.
@@ -41,17 +42,30 @@ func (c Credential) String() string {
 
 // Service manages access keys.
 type Service struct {
-	b    store.Backend
-	keys *secret.Keyring
-	now  func() time.Time
+	b store.Backend
+	// index is the unscoped backend holding the key id -> project index.
+	index   store.Backend
+	project string
+	keys    *secret.Keyring
+	now     func() time.Time
 }
 
-// New returns a service. now may be nil for time.Now.
-func New(b store.Backend, keys *secret.Keyring, now func() time.Time) *Service {
+// New returns the service of project. b is the project's scoped view and
+// index the unscoped backend. now may be nil for time.Now.
+func New(b, index store.Backend, project string, keys *secret.Keyring, now func() time.Time) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{b: b, keys: keys, now: now}
+	return &Service{b: b, index: index, project: project, keys: keys, now: now}
+}
+
+// ProjectOf finds the project of a long-term key id from the index.
+func ProjectOf(ctx context.Context, index store.Backend, id string) (string, error) {
+	x, err := store.Get[iam.KeyIndex](ctx, index, id)
+	if err != nil {
+		return "", err
+	}
+	return x.Object.Project, nil
 }
 
 func aad(id string) string { return string(iam.KindAccessKey) + "/" + id }
@@ -92,12 +106,14 @@ func (s *Service) Create(ctx context.Context, user string) (Credential, error) {
 	if n >= MaxPerUser {
 		return Credential{}, ErrLimitExceeded
 	}
-	return s.Import(ctx, u.Object.Name, "", "")
+	return s.Import(ctx, u.Object.Name, "", "", false)
 }
 
 // Import stores a key with a given id and secret (bootstrap of the
-// existing console-api credential), or generates both when empty.
-func (s *Service) Import(ctx context.Context, user, id, sec string) (Credential, error) {
+// existing console-api credential), or generates both when empty. A root
+// key has no user. The index entry is written first, so a crash leaves at
+// worst an index entry without a key, which authenticates nothing.
+func (s *Service) Import(ctx context.Context, user, id, sec string, root bool) (Credential, error) {
 	var err error
 	if id == "" {
 		if id, err = NewKeyID("AKIA"); err != nil {
@@ -113,7 +129,13 @@ func (s *Service) Import(ctx context.Context, user, id, sec string) (Credential,
 	if err != nil {
 		return Credential{}, err
 	}
-	k := iam.AccessKey{ID: id, UserName: user, Status: iam.KeyActive, Created: s.now().UTC(), Secret: sealed}
+	k := iam.AccessKey{Meta: iam.Meta{UID: iam.NewUID(), Generation: 1}, ID: id, UserName: user, Root: root, Status: iam.KeyActive, Created: s.now().UTC(), Secret: sealed}
+	if err := k.Validate(); err != nil {
+		return Credential{}, err
+	}
+	if _, err := store.Create(ctx, s.index, iam.KeyIndex{ID: id, Project: s.project}); err != nil {
+		return Credential{}, err
+	}
 	if _, err := store.Create(ctx, s.b, k); err != nil {
 		return Credential{}, err
 	}
@@ -133,7 +155,7 @@ func (s *Service) List(ctx context.Context, user string) ([]iam.AccessKey, error
 	}
 	var out []iam.AccessKey
 	for _, k := range all {
-		if store.Fold(k.Object.UserName) == store.Fold(user) {
+		if !k.Object.Root && store.Fold(k.Object.UserName) == store.Fold(user) {
 			k.Object.Secret = iam.Sealed{}
 			out = append(out, k.Object)
 		}
@@ -146,7 +168,7 @@ func (s *Service) owned(ctx context.Context, user, id string) (store.Versioned[i
 	if err != nil {
 		return k, err
 	}
-	if store.Fold(k.Object.UserName) != store.Fold(user) {
+	if k.Object.Root || store.Fold(k.Object.UserName) != store.Fold(user) {
 		return k, store.ErrNotFound
 	}
 	return k, nil
@@ -158,7 +180,11 @@ func (s *Service) SetStatus(ctx context.Context, user, id string, st iam.KeyStat
 		return err
 	}
 	_, err := store.Mutate(ctx, s.b, id, func(k *iam.AccessKey) error {
-		k.Status = st
+		if k.Status != st {
+			k.Status = st
+			k.Generation++
+			k.Updated = s.now().UTC()
+		}
 		return nil
 	})
 	return err
@@ -170,7 +196,29 @@ func (s *Service) Delete(ctx context.Context, user, id string) error {
 	if err != nil {
 		return err
 	}
-	return store.Delete[iam.AccessKey](ctx, s.b, id, k.Version)
+	if err := store.Delete[iam.AccessKey](ctx, s.b, id, k.Version); err != nil {
+		return err
+	}
+	if err := store.Delete[iam.KeyIndex](ctx, s.index, id, ""); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+	return nil
+}
+
+// Get returns one key of user without its sealed secret.
+func (s *Service) Get(ctx context.Context, user, id string) (store.Versioned[iam.AccessKey], error) {
+	k, err := s.owned(ctx, user, id)
+	k.Object.Secret = iam.Sealed{}
+	return k, err
+}
+
+// MarkUsed records the last use of a key. Errors are not fatal to callers.
+func (s *Service) MarkUsed(ctx context.Context, id, service, region string) error {
+	_, err := store.Mutate(ctx, s.b, id, func(k *iam.AccessKey) error {
+		k.LastUsed, k.LastUsedService, k.LastUsedRegion = s.now().UTC().Truncate(time.Second), service, region
+		return nil
+	})
+	return err
 }
 
 // GetSigningCredential returns the secret for SigV4 verification. An
@@ -197,5 +245,5 @@ func (s *Service) GetSigningCredential(ctx context.Context, id string) (Credenti
 			}
 		}
 	}
-	return Credential{AccessKeyID: k.Object.ID, Secret: string(plain), UserName: k.Object.UserName}, nil
+	return Credential{AccessKeyID: k.Object.ID, Secret: string(plain), UserName: k.Object.UserName, Root: k.Object.Root}, nil
 }

@@ -158,7 +158,7 @@ func (s *Service) Enable(ctx context.Context, user, name, code1, code2 string) e
 		if !ok || first+1 > cur+Skew || first+1 <= d.LastStep || !totp.Equal(totp.Code(seed, first+1, totp.Digits), code2) {
 			return false, nil
 		}
-		d.UserName, d.Enabled, d.LastStep = u.Object.Name, true, first+1
+		d.UserName, d.Enabled, d.LastStep, d.EnableTime = u.Object.Name, true, first+1, s.now().UTC()
 		return true, nil
 	})
 }
@@ -169,7 +169,7 @@ func (s *Service) Deactivate(ctx context.Context, user, name string) error {
 		if !d.Enabled || store.Fold(d.UserName) != store.Fold(user) {
 			return ErrNotAssociated
 		}
-		d.Enabled, d.UserName = false, ""
+		d.Enabled, d.UserName, d.EnableTime = false, "", time.Time{}
 		return nil
 	})
 	return err

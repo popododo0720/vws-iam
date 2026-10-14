@@ -124,3 +124,29 @@ func (k *Keyring) Open(s iam.Sealed, aad string) ([]byte, error) {
 
 // NeedsRewrap reports whether s is sealed under an older KEK.
 func (k *Keyring) NeedsRewrap(s iam.Sealed) bool { return s.KeyID != k.active }
+
+// Environment variables of the KEK, filled by a secretKeyRef from the
+// vws-iam-kek Secret.
+const (
+	EnvKEK   = "VWS_IAM_KEK"
+	EnvKEKID = "VWS_IAM_KEK_ID"
+)
+
+// FromEnv builds a one-key keyring from VWS_IAM_KEK (base64 of 32 bytes)
+// and VWS_IAM_KEK_ID. ok is false when neither is set. Key bytes never
+// appear in an error.
+func FromEnv(getenv func(string) string) (k *Keyring, ok bool, err error) {
+	raw, id := strings.TrimSpace(getenv(EnvKEK)), strings.TrimSpace(getenv(EnvKEKID))
+	if raw == "" && id == "" {
+		return nil, false, nil
+	}
+	if raw == "" || id == "" {
+		return nil, true, fmt.Errorf("%s and %s must be set together", EnvKEK, EnvKEKID)
+	}
+	b, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		return nil, true, fmt.Errorf("%s is not base64", EnvKEK)
+	}
+	k, err = NewKeyring(id, map[string][]byte{id: b})
+	return k, true, err
+}

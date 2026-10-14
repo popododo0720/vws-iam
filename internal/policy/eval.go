@@ -2,6 +2,7 @@ package policy
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -15,6 +16,7 @@ const (
 	kindIP
 	kindDate
 	kindNull
+	kindNumeric
 )
 
 type op struct {
@@ -54,6 +56,19 @@ func init() {
 	add("ArnEquals", kindArn, eq)
 	add("ArnLike", kindArn, arnLike)
 	add("IpAddress", kindIP, ip)
+	num := func(cmp func(a, b float64) bool) func(string, string) bool {
+		return func(a, b string) bool {
+			x, err1 := strconv.ParseFloat(a, 64)
+			y, err2 := strconv.ParseFloat(b, 64)
+			return err1 == nil && err2 == nil && cmp(x, y)
+		}
+	}
+	operators["NumericEquals"] = op{kind: kindNumeric, match: num(func(a, b float64) bool { return a == b })}
+	operators["NumericNotEquals"] = op{kind: kindNumeric, negate: true, match: num(func(a, b float64) bool { return a == b })}
+	operators["NumericLessThan"] = op{kind: kindNumeric, match: num(func(a, b float64) bool { return a < b })}
+	operators["NumericLessThanEquals"] = op{kind: kindNumeric, match: num(func(a, b float64) bool { return a <= b })}
+	operators["NumericGreaterThan"] = op{kind: kindNumeric, match: num(func(a, b float64) bool { return a > b })}
+	operators["NumericGreaterThanEquals"] = op{kind: kindNumeric, match: num(func(a, b float64) bool { return a >= b })}
 	operators["Bool"] = op{kind: kindBool, match: fold}
 	operators["Null"] = op{kind: kindNull}
 	operators["DateEquals"] = op{kind: kindDate, match: date(time.Time.Equal)}
@@ -270,28 +285,40 @@ type Named struct {
 // Decision is the result of an evaluation.
 type Decision struct {
 	Allowed bool
-	Reason  string
+	// Explicit is true for an explicit deny.
+	Explicit bool
+	// Policy and Statement name what decided ALLOW or an explicit deny:
+	// the policy name and the statement Sid, or its index as "#n".
+	Policy    string
+	Statement string
+	Reason    string
 }
 
-func label(n Named, s Statement) string {
-	if s.Sid != "" {
-		return n.Name + "/" + s.Sid
+type hit struct{ policy, stmt string }
+
+func (h hit) String() string {
+	if h.policy == "" {
+		return ""
 	}
-	return n.Name
+	return h.policy + "/" + h.stmt
 }
 
 // scan returns the first explicit deny and the first allow in set.
-func scan(set []Named, r Request) (deny, allow string) {
+func scan(set []Named, r Request) (deny, allow hit) {
 	for _, n := range set {
-		for _, s := range n.Doc.Statements {
+		for i, s := range n.Doc.Statements {
 			if !s.applies(r) {
 				continue
 			}
-			if s.Effect == Deny && deny == "" {
-				deny = label(n, s)
+			id := s.Sid
+			if id == "" {
+				id = "#" + strconv.Itoa(i)
 			}
-			if s.Effect == Allow && allow == "" {
-				allow = label(n, s)
+			if s.Effect == Deny && deny.policy == "" {
+				deny = hit{n.Name, id}
+			}
+			if s.Effect == Allow && allow.policy == "" {
+				allow = hit{n.Name, id}
 			}
 		}
 	}
@@ -302,19 +329,19 @@ func scan(set []Named, r Request) (deny, allow string) {
 // session policies that can only narrow the identity's permissions.
 func Evaluate(r Request, identity []Named, sessionPolicies []Named) Decision {
 	deny, allow := scan(identity, r)
-	var sdeny, sallow string
+	var sdeny, sallow hit
 	if sessionPolicies != nil {
 		sdeny, sallow = scan(sessionPolicies, r)
 	}
 	switch {
-	case deny != "":
-		return Decision{Reason: "explicit deny in " + deny}
-	case sdeny != "":
-		return Decision{Reason: "explicit deny in session policy " + sdeny}
-	case allow == "":
+	case deny.policy != "":
+		return Decision{Explicit: true, Policy: deny.policy, Statement: deny.stmt, Reason: "explicit deny in " + deny.String()}
+	case sdeny.policy != "":
+		return Decision{Explicit: true, Policy: sdeny.policy, Statement: sdeny.stmt, Reason: "explicit deny in session policy " + sdeny.String()}
+	case allow.policy == "":
 		return Decision{Reason: fmt.Sprintf("no identity-based policy allows %s on %s", r.Action, r.Resource)}
-	case sessionPolicies != nil && sallow == "":
+	case sessionPolicies != nil && sallow.policy == "":
 		return Decision{Reason: fmt.Sprintf("no session policy allows %s on %s", r.Action, r.Resource)}
 	}
-	return Decision{Allowed: true, Reason: "allowed by " + allow}
+	return Decision{Allowed: true, Policy: allow.policy, Statement: allow.stmt, Reason: "allowed by " + allow.String()}
 }

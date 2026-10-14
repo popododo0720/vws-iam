@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -316,6 +317,10 @@ func checkValues(op string, vals []string) error {
 			}
 		case kindIP:
 			if _, err := parseIP(v); err != nil {
+				return malformed("%s value %q", op, v)
+			}
+		case kindNumeric:
+			if _, err := strconv.ParseFloat(v, 64); err != nil {
 				return malformed("%s value %q", op, v)
 			}
 		case kindDate:

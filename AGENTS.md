@@ -9,7 +9,6 @@ Rules for anyone changing this repository, human or agent. A rule with an enforc
 | `internal/iam` | Domain types (users, groups, roles, managed policies, access keys, MFA devices), validation, and ARNs. Pure. |
 | `internal/store` | The `Backend` interface, typed helpers, and `Mutate` (read, apply, compare-and-swap, retry). `storetest` is the suite every backend passes. |
 | `internal/store/memstore`, `internal/store/kubestore` | The two backends. `kubestore` keeps each object in one `iam.vws.popododo0720.io/v1alpha1` custom resource in the service namespace. |
-| `internal/grpcapi` | The gRPC edge. `vws/iam/v1` comes from vws-proto#24; until then only `grpc.health.v1`. |
 | `internal/secret` | AES-256-GCM sealing under a KEK keyring loaded from the `vws-iam-kek` Secret. The KEK id is stored with each value; associated data binds a value to its owner. |
 | `internal/password` | argon2id PHC hashes. |
 | `internal/accesskey` | Access keys: create (secret returned once), list, status, delete, at most 2 per user, `GetSigningCredential`. |
@@ -19,7 +18,11 @@ Rules for anyone changing this repository, human or agent. A rule with an enforc
 | `internal/totp` | RFC 6238 TOTP (SHA-1, 6 digits, 30 s). Pure. |
 | `internal/mfa` | Virtual MFA devices: create (seed shown once, stored sealed), enable with two consecutive codes within ±1 step, deactivate, delete, list, `Verify` with ±1 step and a replay guard; 5 wrong codes in a row lock the device for 15 minutes (stored, survives restart). |
 | `cmd/vws-iam` | Wiring and flags (`-listen`, `-namespace`, `-kubeconfig`). |
-| `deploy/crds`, `deploy/rbac` | The CRDs and the namespaced store `Role`. The chart lives in vws-deploy. |
+| `deploy/crds`, `deploy/rbac` | The CRDs and the namespaced store `Role`. vws-iam owns the IAM CRD schemas; vws-deploy only syncs them into its chart. |
+| `internal/grpcapi` | vws.iam.v1 gRPC server: done-LRO mutations with request_id replay, AWS error codes in ErrorInfo `aws_code`, Authenticate (SigV4 canonical request, secret stays here), Authorize recheck; AssumeRole/GetSessionToken take the caller only from the request's `authentication` oneof (vws-proto v0.3.0): a SigV4 request re-verified here and resolved by `sts.Resolve`, or a console session token (`console_session_token` is root-only for GetSessionToken). Missing is UNAUTHENTICATED. |
+| `internal/sigv4` | Pure SigV4 verification. |
+| `third_party/vws-proto` | Vendored vws-proto v0.3.0 (9b7e184, see `VENDOR`). |
+| `cmd/vws-iam` | `vws-iam` serves; `vws-iam bootstrap` is the idempotent post-helm Job importing the root key. KEK from `VWS_IAM_KEK`/`VWS_IAM_KEK_ID` (or `-kek-dir`). |
 
 ## Rules
 
@@ -27,7 +30,7 @@ Every row names its enforcer. `TestAgentsRulesNameAnEnforcer` (internal/archtest
 
 | Rule | Enforcer |
 | --- | --- |
-| `internal/iam`, `internal/policy`, and `internal/totp` are pure: nothing from this module, Kubernetes, gRPC, or protobuf. | `TestArchitectureRules` |
+| `internal/iam`, `internal/policy`, `internal/totp`, and `internal/sigv4` are pure: nothing from this module, Kubernetes, gRPC, or protobuf. | `TestArchitectureRules` |
 | `internal/password` imports nothing from this module; `internal/secret` and `internal/store` see only `internal/iam`. | `TestArchitectureRules` |
 | Domain services (`internal/accesskey`, `internal/authz`, `internal/sts`, `internal/mfa`) import no transport. | `TestArchitectureRules` |
 | Kubernetes client packages stay in `internal/store/kubestore`. | `TestArchitectureRules` |
@@ -45,7 +48,8 @@ Every row names its enforcer. `TestAgentsRulesNameAnEnforcer` (internal/archtest
 | Explicit deny beats allow, nothing is allowed by default, a session policy only narrows, and an unknown principal, unknown policy, or malformed stored policy is an error, never an allow. Wildcard matching is linear. | `TestEvaluateAWSExamples`, `TestSessionPolicyOnlyNarrows`, `TestAuthorizeFailsClosed`, `TestMatchIsLinear`, `FuzzParse` |
 | AssumeRole needs both the caller's `sts:AssumeRole` permission and the role's trust; MFA is carried into the session; a session policy narrows; chained sessions last at most 1 h; tokens expire and are tamper-evident. | `TestUntrustedPrincipalIsDenied`, `TestMFAConditionAndPropagation`, `TestSessionPolicyNarrows`, `TestDurationAndNameBounds`, `TestAssumeRoleCredentialsWorkThenExpire`, `TestTokenIsBoundTamperEvidentAndSurvivesRestart` |
 | A `Caller` is built only by `Resolve` or a validated session, never from client fields; client-set `aws:MultiFactorAuthPresent` is dropped; `GetSessionToken`/`AssumeRole` verify SerialNumber + TokenCode before granting MFA; `RevokeSessions` invalidates earlier sessions across restarts. | `TestCallerIsDerivedServerSide`, `TestGetSessionTokenVerifiesMFA`, `TestRevokeSessions` |
-| Wrong codes (Verify and Enable) count toward a stored lockout; a locked device refuses even a correct code until it expires; a success resets the counter. Enable accepts only codes within ±1 step. | `TestFailedAttemptsLockTheDevice`, `TestEnableFailuresCountTowardLockout`, `TestEnableNeedsTwoConsecutiveCodes` |
+| STS over gRPC: no `authentication` is UNAUTHENTICATED; the deprecated `caller` field is ignored; a forwarded SigV4 request must be signed for `sts` and this action, inside the X-Amz-Date window, and is accepted once; MFA codes go through `internal/mfa` (replay guard, lockout). | `TestSTSAuthenticationOneof`, `TestSTSMFAIsVerifiedAndLocksOut`, `TestConsoleSessionAuthentication`, `TestAssumeRole`, `TestLoginMFAAndSessions` |
+| Wrong codes (Verify and Enable) count toward a stored lockout (5 failures, 15 minutes); a locked device refuses even a correct code until it expires; a success resets the counter. Enable accepts only codes within ±1 step. | `TestFailedAttemptsLockTheDevice`, `TestEnableFailuresCountTowardLockout`, `TestEnableNeedsTwoConsecutiveCodes`, `TestLockoutBoundaryLiterals`, `TestEnableWindowLiterals` |
 | TOTP matches the RFC vectors; a code is accepted at most once per device, even under concurrent use; a device belongs to one user; the seed is never stored or listed in plaintext. | `TestRFC6238Vectors`, `TestReusedCodeIsRejected`, `TestConcurrentReplayWinsOnce`, `TestEnableNeedsTwoConsecutiveCodes`, `TestEnrollmentSeedIsSealedAndShownOnce`, `TestMFARequiredPolicyDeniesWithoutMFA` |
 | Only `deploy/crds` and `deploy/rbac` manifests; RBAC is a namespaced `Role` without wildcards. vws-iam owns the IAM CRD schemas; vws-deploy only syncs them. | `TestOnlyRBACAndCRDManifests` |
 | Code is gofmt and goimports clean and passes the `.golangci.yml` linters. `third_party` is excluded. | `golangci-lint` v2.14.0 in CI, `gofmt -l` step in CI |
