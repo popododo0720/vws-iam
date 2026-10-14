@@ -20,7 +20,7 @@ Rules for anyone changing this repository, human or agent. A rule with an enforc
 
 ## Rules
 
-Every row names its enforcer. `scripts/guard-agents.sh judgment` fails on an empty Enforcer cell and prints the Judgment count in CI. Layer rules live in `internal/archtest` (modeled on vws-compute); each rule there must catch a deliberate violation in a probe tree.
+Every row names its enforcer. `TestAgentsRulesNameAnEnforcer` (internal/archtest) fails on an empty Enforcer cell and logs the Judgment count. Layer rules live in `internal/archtest` (modeled on vws-compute); each rule there must catch a deliberate violation in a probe tree.
 
 | Rule | Enforcer |
 | --- | --- |
@@ -43,7 +43,7 @@ Every row names its enforcer. `scripts/guard-agents.sh judgment` fails on an emp
 | Only `deploy/crds` and `deploy/rbac` manifests; RBAC is a namespaced `Role` without wildcards. vws-iam owns the IAM CRD schemas; vws-deploy only syncs them. | `TestOnlyRBACAndCRDManifests` |
 | Code is gofmt and goimports clean and passes the `.golangci.yml` linters. `third_party` is excluded. | `golangci-lint` v2.14.0 in CI, `gofmt -l` step in CI |
 | `go test -race ./...` passes. The envtest test skips unless `KUBEBUILDER_ASSETS` is set. | CI `test` job |
-| Every rule in this table names an enforcer. | `scripts/guard-agents.sh judgment` in CI |
+| Every rule in this table names an enforcer. | `TestAgentsRulesNameAnEnforcer` |
 | A pull request targets `main` and closes an issue. | `scripts/guard-agents.sh pr-base`, `pr-body` (repo-guard) |
 | Work on a feature branch. Never commit to `main`. | `direct-push-watch.yml` (after the fact), Judgment before |
 | Each commit is one logical change and leaves `go test ./...` passing. | Judgment |
@@ -67,4 +67,4 @@ Repository items:
 - Hostile input. Invalid names, paths, unsealed secrets, and non-argon2id hashes are rejected before any write (`TestValidateRejectsHostileInput`, `InvalidObjectIsNotStored`).
 - RBAC. `deploy/rbac/role.yaml` lists only the verbs `kubestore` calls.
 - No AWS account ID digits anywhere in the repository.
-- Checks: `.github/workflows/repo-guard.yml` runs `scripts/guard-agents.sh` on every pull request. `.github/workflows/direct-push-watch.yml` reports a commit that reached `main` without a pull request. Both files are copied as-is from `vws-compute`; the script adds the `judgment` command (#25), to be upstreamed to vws-compute.
+- Checks: `.github/workflows/repo-guard.yml` runs `scripts/guard-agents.sh` on every pull request. `.github/workflows/direct-push-watch.yml` reports a commit that reached `main` without a pull request. Both files are byte-identical across VWS repos; change them only in all repos at once. The Judgment count lives in `TestAgentsRulesNameAnEnforcer`, not in the shared script.

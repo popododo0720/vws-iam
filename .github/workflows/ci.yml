@@ -30,8 +30,6 @@ jobs:
       - name: Architecture rules (internal/archtest)
         run: go test -count=1 -v ./internal/archtest/...
       - run: go test -race ./...
-      - name: AGENTS.md Judgment count
-        run: scripts/guard-agents.sh judgment
 
   lint:
     runs-on: ubuntu-latest
