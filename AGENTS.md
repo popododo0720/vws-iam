@@ -15,7 +15,7 @@ Rules for anyone changing this repository, human or agent. A rule with an enforc
 | `internal/accesskey` | Access keys: create (secret returned once), list, status, delete, at most 2 per user, `GetSigningCredential`. |
 | `internal/policy` | Policy parse/validate (`MalformedPolicyDocument`) and evaluation: explicit Deny > Allow > implicit deny, session policies narrow. Pure. |
 | `internal/authz` | `Authorize`: gathers user, group, and role policies from the store and evaluates them. |
-| `internal/sts` | `AssumeRole` and `GetSessionToken`. The session token is the sealed session (KEK, AES-256-GCM), bound to its `ASIA` key id; `Validate` rejects tampered, mismatched, and expired tokens. |
+| `internal/sts` | `AssumeRole` and `GetSessionToken`. The session token is the sealed session (KEK, AES-256-GCM), bound to its `ASIA` key id and its principal's unique id; `Validate` rejects tampered, mismatched, expired, and revoked tokens. `Resolve` derives the `Caller` (MFA, temporary) server-side; `RevokeSessions` stores a cut-off on the user or role. |
 | `cmd/vws-iam` | Wiring and flags (`-listen`, `-namespace`, `-kubeconfig`). |
 | `deploy/crds`, `deploy/rbac` | The CRDs and the namespaced store `Role`. The chart lives in vws-deploy. |
 
@@ -32,6 +32,7 @@ Rules for anyone changing this repository, human or agent. A rule with an enforc
 | An access key's secret is stored only sealed; listing never returns it; an inactive key gets no signing credential; a KEK rotation still opens old values and rewraps them. | `TestSecretIsNeverStoredInPlaintext`, `TestInactiveKeyIsRejected`, `TestKEKRotationReadsOldKeyIDAndRewraps` |
 | Explicit deny beats allow, nothing is allowed by default, a session policy only narrows, and an unknown principal, unknown policy, or malformed stored policy is an error, never an allow. Wildcard matching is linear. | `TestEvaluateAWSExamples`, `TestSessionPolicyOnlyNarrows`, `TestAuthorizeFailsClosed`, `TestMatchIsLinear`, `FuzzParse` |
 | AssumeRole needs both the caller's `sts:AssumeRole` permission and the role's trust; MFA is carried into the session; a session policy narrows; chained sessions last at most 1 h; tokens expire and are tamper-evident. | `TestUntrustedPrincipalIsDenied`, `TestMFAConditionAndPropagation`, `TestSessionPolicyNarrows`, `TestDurationAndNameBounds`, `TestAssumeRoleCredentialsWorkThenExpire`, `TestTokenIsBoundTamperEvidentAndSurvivesRestart` |
+| A `Caller` is built only by `Resolve` or a validated session, never from client fields; client-set `aws:MultiFactorAuthPresent` is dropped; `GetSessionToken`/`AssumeRole` verify SerialNumber + TokenCode before granting MFA; `RevokeSessions` invalidates earlier sessions across restarts. | `TestCallerIsDerivedServerSide`, `TestGetSessionTokenVerifiesMFA`, `TestRevokeSessions` |
 | Only `deploy/crds` and `deploy/rbac` manifests; RBAC is a namespaced `Role` without wildcards. | `TestOnlyRBACAndCRDManifests` |
 | Code is gofmt and goimports clean and passes the `.golangci.yml` linters. `third_party` is excluded. | `golangci-lint` v2.14.0 in CI |
 | `go test -race ./...` passes. The envtest test skips unless `KUBEBUILDER_ASSETS` is set. | CI |

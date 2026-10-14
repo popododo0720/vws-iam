@@ -93,6 +93,8 @@ type User struct {
 	InlinePolicies   map[string]string `json:"inlinePolicies,omitempty"`
 	// PasswordHash is an argon2id PHC string, never a password.
 	PasswordHash string `json:"passwordHash,omitempty"`
+	// SessionsRevokedBefore invalidates STS sessions issued until then.
+	SessionsRevokedBefore time.Time `json:"sessionsRevokedBefore,omitzero"`
 }
 
 func (User) Kind() Kind    { return KindUser }
@@ -153,6 +155,8 @@ type Role struct {
 	MaxSessionDuration time.Duration     `json:"maxSessionDuration,omitempty"`
 	AttachedPolicies   []string          `json:"attachedPolicies,omitempty"`
 	InlinePolicies     map[string]string `json:"inlinePolicies,omitempty"`
+	// SessionsRevokedBefore invalidates STS sessions issued until then.
+	SessionsRevokedBefore time.Time `json:"sessionsRevokedBefore,omitzero"`
 }
 
 func (Role) Kind() Kind    { return KindRole }
