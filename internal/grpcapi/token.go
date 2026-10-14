@@ -71,18 +71,15 @@ func (s *Server) stsSigv4(ctx context.Context, r *iamv1.AuthenticateRequest, act
 }
 
 // stsAttempts prepares the per-caller attempt limit of an STS call that
-// presents an MFA code: a locked access key or source IP is refused with
-// Throttling before the code is checked, and both are counted with the
-// user when mfaVerifier checks it.
-func (s *Server) stsAttempts(ctx context.Context, a authn, serial, code string) (context.Context, error) {
+// presents an MFA code: the access key and source IP are counted with the
+// user when mfaVerifier checks the code. A locked user, key or IP is
+// refused there with Throttling before the code is checked, and the
+// device lock is renewed (#44).
+func stsAttempts(ctx context.Context, a authn, serial, code string) context.Context {
 	if a.sigv4 == nil || (serial == "" && code == "") {
-		return ctx, nil
+		return ctx
 	}
-	cs := callers{{iam.AttemptKey, a.sigv4.GetAccessKeyId()}}.withIP(a.sigv4.GetSourceIp())
-	if err := s.checkAttempts(ctx, cs); err != nil {
-		return ctx, err
-	}
-	return withAttempts(ctx, cs), nil
+	return withAttempts(ctx, callers{{iam.AttemptKey, a.sigv4.GetAccessKeyId()}}.withIP(a.sigv4.GetSourceIp()))
 }
 
 func missingAuthentication() error {
@@ -140,9 +137,7 @@ func (s *Server) assumeRole(ctx context.Context, req *iamv1.AssumeRoleRequest, a
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
-	if ctx, err = s.stsAttempts(ctx, a, req.GetSerialNumber(), req.GetTokenCode()); err != nil {
-		return nil, toStatus(ctx, err)
-	}
+	ctx = stsAttempts(ctx, a, req.GetSerialNumber(), req.GetTokenCode())
 	if p.id != pid {
 		return nil, accessDenied("cross-project AssumeRole is not supported")
 	}
@@ -197,9 +192,7 @@ func (s *Server) getSessionToken(ctx context.Context, req *iamv1.GetSessionToken
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
-	if ctx, err = s.stsAttempts(ctx, a, req.GetSerialNumber(), req.GetTokenCode()); err != nil {
-		return nil, toStatus(ctx, err)
-	}
+	ctx = stsAttempts(ctx, a, req.GetSerialNumber(), req.GetTokenCode())
 	d := time.Duration(req.GetDurationSeconds()) * time.Second
 	if d == 0 {
 		d = defaultGetSessionToken

@@ -5,6 +5,9 @@ package grpcapi
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +20,7 @@ import (
 
 	"github.com/popododo0720/vws-iam/internal/accesskey"
 	"github.com/popododo0720/vws-iam/internal/authz"
+	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/mfa"
 	"github.com/popododo0720/vws-iam/internal/secret"
 	"github.com/popododo0720/vws-iam/internal/store"
@@ -194,11 +198,27 @@ func (v mfaVerifier) VerifyMFA(ctx context.Context, user, serial, code string) e
 	if extra, ok := ctx.Value(attemptsKey{}).(callers); ok {
 		cs = append(cs, extra...)
 	}
-	return v.s.limitedVerify(ctx, cs, func() error {
-		prefix := v.m.Serial("")
+	prefix := v.m.Serial("")
+	err := v.s.limitedVerify(ctx, cs, func() error {
 		if !strings.HasPrefix(serial, prefix) {
 			return mfa.ErrNotAssociated
 		}
 		return v.m.Verify(ctx, user, strings.TrimPrefix(serial, prefix), code)
 	})
+	if !errors.Is(err, errThrottled) {
+		return err
+	}
+	// An attempt throttled because the user is over its limit is still a
+	// failed MFA attempt (#44): (re)lock the device so its lock runs
+	// LockoutDuration from this attempt, not only until the counter window
+	// ends. A throttle by the source IP or access key alone leaves the
+	// device untouched: those are shared with or held by other callers, and
+	// must not lock a user with no failures of its own. The answer stays
+	// Throttling either way.
+	if name, ok := strings.CutPrefix(serial, prefix); ok && throttledBy(err, iam.AttemptUser) {
+		if lerr := v.m.LockOut(context.WithoutCancel(ctx), user, name); lerr != nil {
+			slog.Default().LogAttrs(ctx, slog.LevelWarn, "mfa lock on throttle failed", slog.String("error", lerr.Error()))
+		}
+	}
+	return fmt.Errorf("%w: %w", sts.ErrThrottling, err)
 }

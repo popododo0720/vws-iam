@@ -110,6 +110,7 @@ var mapping = []struct {
 	{sigv4.ErrScope, codes.Unauthenticated, "INVALID_CREDENTIALS", "IncompleteSignature"},
 	{sigv4.ErrMalformed, codes.Unauthenticated, "INVALID_CREDENTIALS", "IncompleteSignature"},
 	{errThrottled, codes.ResourceExhausted, "QUOTA_EXCEEDED", "Throttling"},
+	{sts.ErrThrottling, codes.ResourceExhausted, "QUOTA_EXCEEDED", "Throttling"},
 	{sts.ErrAccessDenied, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied"},
 	{store.ErrUnavailable, codes.Unavailable, "", "ServiceUnavailable"},
 }

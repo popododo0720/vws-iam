@@ -71,6 +71,9 @@ func setup(t *testing.T) env {
 type fakeMFA struct{}
 
 func (fakeMFA) VerifyMFA(_ context.Context, user, serial, code string) error {
+	if code == "999999" {
+		return fmt.Errorf("%w: limit", sts.ErrThrottling)
+	}
 	if serial != "arn:vws:iam::"+acct+":mfa/"+user || code != "123456" {
 		return errors.New("InvalidAuthenticationCode")
 	}
@@ -397,5 +400,17 @@ func TestRevokeSessions(t *testing.T) {
 	put(t, e.b, iam.Role{Name: "admin", ID: "44", AssumeRolePolicy: `{"Version":"2012-10-17","Statement":{"Effect":"Deny","Principal":"*","Action":"sts:AssumeRole"}}`})
 	if _, err := e.svc.Validate(ctx, fresh.AccessKeyID, fresh.SessionToken); !errors.Is(err, sts.ErrInvalidToken) {
 		t.Fatalf("session of a recreated role: %v", err)
+	}
+}
+
+// TestMFAThrottlingPassesThrough: a throttled verifier answer stays
+// Throttling instead of becoming AccessDenied (#44).
+func TestMFAThrottlingPassesThrough(t *testing.T) {
+	e := setup(t)
+	m := goodMFA("alice")
+	m.TokenCode = "999999"
+	_, err := e.svc.GetSessionToken(context.Background(), e.caller(t, "alice"), time.Hour, m)
+	if !errors.Is(err, sts.ErrThrottling) || errors.Is(err, sts.ErrAccessDenied) {
+		t.Fatalf("err = %v, want Throttling only", err)
 	}
 }

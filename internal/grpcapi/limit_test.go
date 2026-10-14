@@ -15,6 +15,7 @@ import (
 
 	"github.com/popododo0720/vws-iam/internal/grpcapi"
 	"github.com/popododo0720/vws-iam/internal/iam"
+	"github.com/popododo0720/vws-iam/internal/mfa"
 	"github.com/popododo0720/vws-iam/internal/store"
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
 )
@@ -44,9 +45,17 @@ func wantBadLogin(t *testing.T, err error) {
 	wantErr(t, err, codes.Unauthenticated, "INVALID_CREDENTIALS", "InvalidClientTokenId")
 }
 
-// login allows MaxTimeout: argon2id under -race next to envtest is slow.
+// slowRPC is the deadline of a call that runs argon2id (64 MiB, t=3):
+// under -race next to envtest and other packages that alone can take
+// seconds, so it gets the server's MaxTimeout. Without a client deadline
+// the server's DefaultTimeout (10s) applies, which a loaded box can miss
+// (#43).
+func slowRPC(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, grpcapi.MaxTimeout)
+}
+
 func login(ctx context.Context, e *env, user, pw, ip string) error {
-	ctx, cancel := context.WithTimeout(ctx, grpcapi.MaxTimeout)
+	ctx, cancel := slowRPC(ctx)
 	defer cancel()
 	_, err := e.auth.Login(ctx, &iamv1.LoginRequest{Project: proj, UserName: user, Password: pw, SourceIp: ip})
 	return err
@@ -54,10 +63,12 @@ func login(ctx context.Context, e *env, user, pw, ip string) error {
 
 func withPassword(t *testing.T, e *env, users ...string) {
 	t.Helper()
-	ctx := t.Context()
 	for _, n := range users {
-		u := e.createUser(t, ctx, n)
-		if _, err := e.users.SetLoginProfile(ctx, &iamv1.SetLoginProfileRequest{Name: u.GetName(), Password: goodPW}); err != nil {
+		u := e.createUser(t, t.Context(), n)
+		ctx, cancel := slowRPC(t.Context())
+		_, err := e.users.SetLoginProfile(ctx, &iamv1.SetLoginProfileRequest{Name: u.GetName(), Password: goodPW})
+		cancel()
+		if err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -146,6 +157,174 @@ func testAttemptLimits(t *testing.T, backend func(*testing.T) store.Backend) {
 		if err := gst(ctx, e, e.stsSign(kid, key.GetSecretAccessKey(), "", "GetSessionToken")); err != nil {
 			t.Fatalf("plain GetSessionToken: %v", err)
 		}
+	})
+
+	t.Run("STSThrottleRenewsMFALockAcrossReplicas", func(t *testing.T) {
+		// #44: past the per-user limit STS answers Throttling, not
+		// AccessDenied, and the throttled attempt renews the device lock,
+		// so it runs LockoutDuration from the last attempt.
+		b := backend(t)
+		now := time.Now().UTC().Truncate(time.Second)
+		a, rb := newEnvOn(t, b, &now), newEnvOn(t, b, &now)
+		ctx := t.Context()
+		u := a.createUser(t, ctx, "alice")
+		key, err := a.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: u.GetName()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		kid := key.GetAccessKey().GetName()[strings.LastIndex(key.GetAccessKey().GetName(), "/")+1:]
+		pair := strings.SplitN(enableMFA(t, a, ctx, "alice"), "|", 2)
+		seed, serial := pair[0], pair[1]
+		// One signer for both replicas: each request has its own nonce.
+		gstMFA := func(e *env, code string) error {
+			_, err := e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{
+				Authentication: gstSig(a.stsSign(kid, key.GetSecretAccessKey(), "", "GetSessionToken")), SerialNumber: serial, TokenCode: code})
+			return err
+		}
+		t0 := now // after enabling, which moves the clock
+		// Read on the replica that did not take the attempt.
+		lockedUntil := func(e *env) time.Time {
+			t.Helper()
+			d, err := e.mfa.GetMfaDevice(ctx, &iamv1.GetMfaDeviceRequest{Name: parentName + "/mfaDevices/alice-phone"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return d.GetStatus().GetLockedUntil().AsTime()
+		}
+		for i := range grpcapi.UserAttemptLimit {
+			e := a
+			if i%2 == 1 {
+				e = rb
+			}
+			wantErr(t, gstMFA(e, "000000"), codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+		}
+		if got, want := lockedUntil(a), t0.Add(mfa.LockoutDuration); !got.Equal(want) {
+			t.Fatalf("device lock after 5 failures = %v, want %v", got, want)
+		}
+		// Ten minutes later, on the other replica, even the right code is
+		// throttled, and the device lock now runs from this attempt.
+		now = t0.Add(10 * time.Minute)
+		last := now
+		wantThrottled(t, gstMFA(rb, code(t, rb, seed)))
+		wantThrottled(t, gstMFA(a, code(t, a, seed)))
+		if got, want := lockedUntil(rb), last.Add(mfa.LockoutDuration); !got.Equal(want) {
+			t.Fatalf("device lock after throttle = %v, want %v", got, want)
+		}
+		// The counter window is over, but the device is still locked.
+		now = t0.Add(grpcapi.AttemptWindow + time.Minute)
+		wantErr(t, gstMFA(a, code(t, a, seed)), codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+		// 15 minutes after the last attempt the right code works again.
+		now = last.Add(mfa.LockoutDuration + time.Minute)
+		if err := gstMFA(rb, code(t, rb, seed)); err != nil {
+			t.Fatalf("after device lock: %v", err)
+		}
+	})
+
+	t.Run("STSThrottleLocksOnlyForUserLimitAcrossReplicas", func(t *testing.T) {
+		// #44 fix (vws-test r97 3b): a throttle by the source IP or the
+		// access key alone must not touch the device lock or failed_attempts;
+		// only a user over its own limit renews the lock.
+		b := backend(t)
+		now := time.Now().UTC().Truncate(time.Second)
+		a, rb := newEnvOn(t, b, &now), newEnvOn(t, b, &now)
+		ctx := t.Context()
+		const busyIP, otherIP = "198.51.100.60", "198.51.100.61"
+		seed := func(scope, id string, failures int) {
+			t.Helper()
+			c := iam.AttemptCounter{Hash: grpcapi.AttemptCounterHash(scope, id), Scope: scope, Failures: failures, WindowStart: now}
+			if _, err := store.Create(ctx, b, c); err != nil {
+				t.Fatal(err)
+			}
+		}
+		type caller struct {
+			kid, secret, seed, serial, dev string
+		}
+		newCaller := func(name string) caller {
+			u := a.createUser(t, ctx, name)
+			key, err := a.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: u.GetName()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			kn := key.GetAccessKey().GetName()
+			pair := strings.SplitN(enableMFA(t, a, ctx, name), "|", 2)
+			return caller{kn[strings.LastIndex(kn, "/")+1:], key.GetSecretAccessKey(), pair[0], pair[1], parentName + "/mfaDevices/" + name + "-phone"}
+		}
+		gstMFA := func(e *env, c caller, ip, code string) error {
+			r := a.stsSign(c.kid, c.secret, "", "GetSessionToken")
+			r.SourceIp = ip
+			_, err := e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{Authentication: gstSig(r), SerialNumber: c.serial, TokenCode: code})
+			return err
+		}
+		status := func(e *env, c caller) (time.Time, int32) {
+			t.Helper()
+			d, err := e.mfa.GetMfaDevice(ctx, &iamv1.GetMfaDeviceRequest{Name: c.dev})
+			if err != nil {
+				t.Fatal(err)
+			}
+			st := d.GetStatus()
+			if st.GetLockedUntil() == nil {
+				return time.Time{}, st.GetFailedAttempts()
+			}
+			return st.GetLockedUntil().AsTime(), st.GetFailedAttempts()
+		}
+		wantStatus := func(e *env, c caller, lock time.Time, failed int32) {
+			t.Helper()
+			gotLock, gotFailed := status(e, c)
+			if !gotLock.Equal(lock) || gotFailed != failed {
+				t.Fatalf("%s: locked_until %v failed_attempts %d, want %v %d", c.dev, gotLock, gotFailed, lock, failed)
+			}
+		}
+
+		// (a)+(b) IP limit only: one own failure, then the IP is full.
+		ipc := newCaller("ipuser")
+		wantErr(t, gstMFA(a, ipc, otherIP, "000000"), codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+		seed(iam.AttemptIP, busyIP, grpcapi.IPAttemptLimit)
+		wantThrottled(t, gstMFA(rb, ipc, busyIP, code(t, rb, ipc.seed)))
+		wantThrottled(t, gstMFA(a, ipc, busyIP, "000000"))
+		wantStatus(a, ipc, time.Time{}, 1)
+		if err := gstMFA(rb, ipc, otherIP, code(t, rb, ipc.seed)); err != nil {
+			t.Fatalf("right code from another IP after an IP-only throttle: %v", err)
+		}
+
+		// (a)+(b) Key limit only, user at 0 failures. A key cannot fail
+		// apart from its user through the API, so its counter is seeded.
+		kc := newCaller("keyuser")
+		seed(iam.AttemptKey, kc.kid, grpcapi.KeyAttemptLimit)
+		wantThrottled(t, gstMFA(a, kc, otherIP, code(t, a, kc.seed)))
+		wantThrottled(t, gstMFA(rb, kc, otherIP, "000000"))
+		wantStatus(rb, kc, time.Time{}, 0)
+		if err := gst(ctx, a, a.stsSign(kc.kid, kc.secret, "", "GetSessionToken")); err != nil {
+			t.Fatalf("plain GetSessionToken with the key: %v", err)
+		}
+
+		// (c) An existing device lock: an IP-only throttle leaves it, a
+		// user over its limit renews it from that attempt.
+		lc := newCaller("lockuser")
+		t0 := now
+		for range mfa.MaxFailedAttempts {
+			wantErr(t, gstMFA(a, lc, otherIP, "000000"), codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+		}
+		first := t0.Add(mfa.LockoutDuration)
+		wantStatus(rb, lc, first, 0)
+		now = t0.Add(5 * time.Minute)
+		wantThrottled(t, gstMFA(rb, lc, busyIP, code(t, rb, lc.seed)))
+		wantStatus(a, lc, first, 0)
+		// Fill the user counter to its limit with a second key, so
+		// neither key nor any IP is over its own limit.
+		lc2 := lc
+		key2, err := a.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: parentName + "/users/lockuser"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		kn := key2.GetAccessKey().GetName()
+		lc2.kid, lc2.secret = kn[strings.LastIndex(kn, "/")+1:], key2.GetSecretAccessKey()
+		for range grpcapi.UserAttemptLimit - mfa.MaxFailedAttempts {
+			wantErr(t, gstMFA(rb, lc2, "198.51.100.63", "000000"), codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+		}
+		wantStatus(a, lc, first, 0)
+		now = t0.Add(10 * time.Minute)
+		wantThrottled(t, gstMFA(a, lc, "198.51.100.62", code(t, a, lc.seed)))
+		wantStatus(rb, lc, now.Add(mfa.LockoutDuration), 0)
 	})
 
 	t.Run("WindowReset", func(t *testing.T) {
