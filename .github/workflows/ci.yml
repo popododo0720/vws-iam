@@ -1,0 +1,44 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.0"
+      - name: gofmt
+        run: test -z "$(gofmt -l cmd internal)"
+      - name: vendored vws-lib
+        run: VWS_LIB_OFFLINE=1 scripts/vendor-lib.sh check
+      - name: Fetch kube-apiserver and etcd for envtest
+        run: |
+          base=https://github.com/kubernetes-sigs/controller-tools/releases/download/envtest-v1.37.0
+          curl -fsSL -o "$RUNNER_TEMP/envtest.tgz" "$base/envtest-v1.37.0-linux-amd64.tar.gz"
+          curl -fsSL "$base/envtest-v1.37.0-linux-amd64.tar.gz.sha512" | awk -v f="$RUNNER_TEMP/envtest.tgz" '{print $1 "  " f}' | sha512sum -c -
+          mkdir -p "$RUNNER_TEMP/envtest"
+          tar -xzf "$RUNNER_TEMP/envtest.tgz" -C "$RUNNER_TEMP/envtest" --strip-components=2
+          echo "KUBEBUILDER_ASSETS=$RUNNER_TEMP/envtest" >> "$GITHUB_ENV"
+      - run: go test -race ./...
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: guard-agents.sh rejects bad inputs
+        run: scripts/guard-agents.sh selftest
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.0"
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14.0
+          args: --timeout=5m
