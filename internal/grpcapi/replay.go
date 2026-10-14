@@ -94,23 +94,38 @@ func replayed() error { return accessDenied("this signed request was already use
 // GCReplayEntries deletes expired replay entries and returns how many it
 // removed. Every replica may run it; a lost race is not an error.
 func (s *Server) GCReplayEntries(ctx context.Context) (int, error) {
-	vs, err := store.List[iam.ReplayEntry](ctx, s.b)
-	if err != nil {
-		return 0, err
-	}
-	now, n := s.now(), 0
-	for _, v := range vs {
-		if !now.After(v.Object.Expires) {
-			continue
-		}
-		err := store.Delete[iam.ReplayEntry](ctx, s.b, v.Object.Hash, v.Version)
-		switch {
-		case err == nil:
-			n++
-		case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrConflict):
-		default:
+	now := s.now()
+	return gcPaged(ctx, s, func(r iam.ReplayEntry) bool { return now.After(r.Expires) })
+}
+
+// gcPageSize bounds one GC list call (Limit/Continue), so a large backlog
+// is not read into memory at once.
+const gcPageSize = 500
+
+// gcPaged deletes, page by page, every T for which done holds, with its
+// version. NotFound and Conflict are races with another replica.
+func gcPaged[T iam.Object](ctx context.Context, s *Server, done func(T) bool) (int, error) {
+	n, cont := 0, ""
+	for {
+		vs, next, err := store.ListPage[T](ctx, s.b, int64(s.gcPage), cont)
+		if err != nil {
 			return n, err
 		}
+		for _, v := range vs {
+			if !done(v.Object) {
+				continue
+			}
+			err := store.Delete[T](ctx, s.b, v.Object.Key(), v.Version)
+			switch {
+			case err == nil:
+				n++
+			case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrConflict):
+			default:
+				return n, err
+			}
+		}
+		if cont = next; cont == "" {
+			return n, nil
+		}
 	}
-	return n, nil
 }

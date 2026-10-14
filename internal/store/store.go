@@ -43,6 +43,14 @@ type Backend interface {
 	Delete(ctx context.Context, kind iam.Kind, key, version string) error
 }
 
+// Pager is an optional Backend capability: list a kind in pages. cont is
+// "" for the first page; next is "" after the last one. Order across
+// pages is the backend's; every entry that exists for the whole listing
+// is returned once.
+type Pager interface {
+	ListPage(ctx context.Context, kind iam.Kind, limit int64, cont string) (page []Entry, next string, err error)
+}
+
 // Fold is the canonical form of a key: IAM names are case-insensitive.
 func Fold(key string) string { return strings.ToLower(key) }
 
@@ -116,6 +124,33 @@ func List[T iam.Object](ctx context.Context, b Backend) ([]Versioned[T], error) 
 		out = append(out, v)
 	}
 	return out, nil
+}
+
+// ListPage reads one page of T's kind. A Backend without Pager returns
+// everything as one page.
+func ListPage[T iam.Object](ctx context.Context, b Backend, limit int64, cont string) ([]Versioned[T], string, error) {
+	var zero T
+	p, ok := b.(Pager)
+	if !ok {
+		if cont != "" {
+			return nil, "", nil
+		}
+		vs, err := List[T](ctx, b)
+		return vs, "", err
+	}
+	es, next, err := p.ListPage(ctx, zero.Kind(), limit, cont)
+	if err != nil {
+		return nil, "", err
+	}
+	out := make([]Versioned[T], 0, len(es))
+	for _, e := range es {
+		v, err := decode[T](e)
+		if err != nil {
+			return nil, "", err
+		}
+		out = append(out, v)
+	}
+	return out, next, nil
 }
 
 // Delete removes an object; version may be empty to skip the check.

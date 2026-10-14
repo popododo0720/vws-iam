@@ -99,6 +99,25 @@ func (s *Store) List(_ context.Context, kind iam.Kind) ([]store.Entry, error) {
 	return out, nil
 }
 
+// ListPage implements store.Pager: keys in order, the token is the last
+// folded key of the previous page.
+func (s *Store) ListPage(ctx context.Context, kind iam.Kind, limit int64, cont string) ([]store.Entry, string, error) {
+	all, err := s.List(ctx, kind)
+	if err != nil {
+		return nil, "", err
+	}
+	i := sort.Search(len(all), func(i int) bool { return store.Fold(all[i].Key) > cont })
+	if cont == "" {
+		i = 0
+	}
+	all = all[i:]
+	if limit <= 0 || int64(len(all)) <= limit {
+		return all, "", nil
+	}
+	page := all[:limit]
+	return page, store.Fold(page[len(page)-1].Key), nil
+}
+
 // Delete implements store.Backend.
 func (s *Store) Delete(_ context.Context, kind iam.Kind, key, version string) error {
 	s.mu.Lock()

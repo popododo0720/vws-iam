@@ -220,24 +220,8 @@ func (s *Server) bump(ctx context.Context, j subject, delta int) (bool, error) {
 
 // GCAttemptCounters deletes counters whose window and lockout are over.
 func (s *Server) GCAttemptCounters(ctx context.Context) (int, error) {
-	vs, err := store.List[iam.AttemptCounter](ctx, s.b)
-	if err != nil {
-		return 0, err
-	}
-	now, n := s.now(), 0
-	for _, v := range vs {
-		c := v.Object
-		if now.Before(c.WindowStart.Add(AttemptWindow)) || now.Before(c.LockedUntil) {
-			continue
-		}
-		err := store.Delete[iam.AttemptCounter](ctx, s.b, c.Hash, v.Version)
-		switch {
-		case err == nil:
-			n++
-		case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrConflict):
-		default:
-			return n, err
-		}
-	}
-	return n, nil
+	now := s.now()
+	return gcPaged(ctx, s, func(c iam.AttemptCounter) bool {
+		return !now.Before(c.WindowStart.Add(AttemptWindow)) && !now.Before(c.LockedUntil)
+	})
 }

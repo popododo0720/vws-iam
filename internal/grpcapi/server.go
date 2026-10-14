@@ -56,6 +56,8 @@ type Server struct {
 	// (replay.go): replay hash -> time after which it can be forgotten.
 	// It only ever rejects, so it is safe to be stale or empty.
 	stsSeen sync.Map
+	// gcPage is the GC list page size (gcPageSize; tests lower it).
+	gcPage int
 }
 
 // Option configures a Server.
@@ -66,7 +68,7 @@ func WithClock(now func() time.Time) Option { return func(s *Server) { s.now = n
 
 // New returns a Server. b is the unscoped backend; keys seals secrets.
 func New(b store.Backend, keys *secret.Keyring, opts ...Option) *Server {
-	s := &Server{b: b, keys: keys, now: time.Now, m: newMetrics()}
+	s := &Server{b: b, keys: keys, now: time.Now, m: newMetrics(), gcPage: gcPageSize}
 	for _, o := range opts {
 		o(s)
 	}
