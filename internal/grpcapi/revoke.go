@@ -30,7 +30,7 @@ func (s *Server) RevokeUserSessions(ctx context.Context, req *iamv1.RevokeUserSe
 		return op, toStatus(ctx, err)
 	}
 	p := s.project(pid)
-	if err := p.sts.RevokeSessions(ctx, authz.User, id); err != nil {
+	if err := p.sts.RevokeSessionsOnce(ctx, authz.User, id, req.GetRequestId()); err != nil {
 		return nil, toStatus(ctx, err)
 	}
 	v, err := store.Get[iam.User](ctx, p.b, id)
@@ -64,7 +64,7 @@ func (s *Server) RevokeRoleSessions(ctx context.Context, req *iamv1.RevokeRoleSe
 		return op, toStatus(ctx, err)
 	}
 	p := s.project(pid)
-	if err := p.sts.RevokeSessions(ctx, authz.Role, id); err != nil {
+	if err := p.sts.RevokeSessionsOnce(ctx, authz.Role, id, req.GetRequestId()); err != nil {
 		return nil, toStatus(ctx, err)
 	}
 	v, err := store.Get[iam.Role](ctx, p.b, id)

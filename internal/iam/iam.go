@@ -119,7 +119,14 @@ type User struct {
 	// SessionsRevokeGeneration counts revocations. A session records the
 	// value it read at issue; a higher stored value revokes it (#46).
 	SessionsRevokeGeneration uint64 `json:"sessionsRevokeGeneration,omitempty"`
+	// SessionsRevokeRequests holds the request_ids of the latest
+	// revocations (at most MaxRevokeRequests), so a duplicate request
+	// racing its first delivery does not bump the generation twice (#48).
+	SessionsRevokeRequests []string `json:"sessionsRevokeRequests,omitempty"`
 }
+
+// MaxRevokeRequests bounds SessionsRevokeRequests.
+const MaxRevokeRequests = 32
 
 func (User) Kind() Kind    { return KindUser }
 func (u User) Key() string { return u.Name }
@@ -192,6 +199,10 @@ type Role struct {
 	// SessionsRevokeGeneration counts revocations. A session records the
 	// value it read at issue; a higher stored value revokes it (#46).
 	SessionsRevokeGeneration uint64 `json:"sessionsRevokeGeneration,omitempty"`
+	// SessionsRevokeRequests holds the request_ids of the latest
+	// revocations (at most MaxRevokeRequests), so a duplicate request
+	// racing its first delivery does not bump the generation twice (#48).
+	SessionsRevokeRequests []string `json:"sessionsRevokeRequests,omitempty"`
 }
 
 func (Role) Kind() Kind    { return KindRole }
