@@ -44,7 +44,10 @@ func wantBadLogin(t *testing.T, err error) {
 	wantErr(t, err, codes.Unauthenticated, "INVALID_CREDENTIALS", "InvalidClientTokenId")
 }
 
+// login allows MaxTimeout: argon2id under -race next to envtest is slow.
 func login(ctx context.Context, e *env, user, pw, ip string) error {
+	ctx, cancel := context.WithTimeout(ctx, grpcapi.MaxTimeout)
+	defer cancel()
 	_, err := e.auth.Login(ctx, &iamv1.LoginRequest{Project: proj, UserName: user, Password: pw, SourceIp: ip})
 	return err
 }
