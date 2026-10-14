@@ -13,6 +13,8 @@ Rules for anyone changing this repository, human or agent. A rule with an enforc
 | `internal/secret` | AES-256-GCM sealing under a KEK keyring loaded from the `vws-iam-kek` Secret. The KEK id is stored with each value; associated data binds a value to its owner. |
 | `internal/password` | argon2id PHC hashes. |
 | `internal/accesskey` | Access keys: create (secret returned once), list, status, delete, at most 2 per user, `GetSigningCredential`. |
+| `internal/policy` | Policy parse/validate (`MalformedPolicyDocument`) and evaluation: explicit Deny > Allow > implicit deny, session policies narrow. Pure. |
+| `internal/authz` | `Authorize`: gathers user, group, and role policies from the store and evaluates them. |
 | `cmd/vws-iam` | Wiring and flags (`-listen`, `-namespace`, `-kubeconfig`). |
 | `deploy/crds`, `deploy/rbac` | The CRDs and the namespaced store `Role`. The chart lives in vws-deploy. |
 
@@ -20,13 +22,14 @@ Rules for anyone changing this repository, human or agent. A rule with an enforc
 
 | Rule | Enforced by |
 | --- | --- |
-| `internal/iam` imports nothing from this module, Kubernetes, or gRPC. | `TestArchitectureRules` |
+| `internal/iam` and `internal/policy` import nothing from this module, Kubernetes, or gRPC. | `TestArchitectureRules` |
 | Kubernetes client packages stay in `internal/store/kubestore`. | `TestArchitectureRules` |
 | Production packages do not import `testing`. `storetest` is the one exception. | `TestArchitectureRules` |
 | Logs are slog through vws-lib `obs`; no `log`, no direct sentry-go. vws-lib is the vendored copy in `third_party/vws-lib`. | `TestArchitectureRules`, `.golangci.yml` depguard, `scripts/vendor-lib.sh check`, `TestVendoredLib` |
 | Every backend behaves the same: round trip per kind, case-insensitive names, stale writes conflict, invalid objects are never stored, concurrent `Mutate` loses no write. | `storetest.Run` from memstore, kubestore (fake client), and kubestore on envtest with `deploy/crds` |
 | No plaintext secret material is stored: access-key secrets and TOTP seeds are `iam.Sealed` ciphertext, passwords are argon2id hashes. Secrets are never logged. | `Validate`, and the tests of #3 and #6 |
 | An access key's secret is stored only sealed; listing never returns it; an inactive key gets no signing credential; a KEK rotation still opens old values and rewraps them. | `TestSecretIsNeverStoredInPlaintext`, `TestInactiveKeyIsRejected`, `TestKEKRotationReadsOldKeyIDAndRewraps` |
+| Explicit deny beats allow, nothing is allowed by default, a session policy only narrows, and an unknown principal, unknown policy, or malformed stored policy is an error, never an allow. Wildcard matching is linear. | `TestEvaluateAWSExamples`, `TestSessionPolicyOnlyNarrows`, `TestAuthorizeFailsClosed`, `TestMatchIsLinear`, `FuzzParse` |
 | Only `deploy/crds` and `deploy/rbac` manifests; RBAC is a namespaced `Role` without wildcards. | `TestOnlyRBACAndCRDManifests` |
 | Code is gofmt and goimports clean and passes the `.golangci.yml` linters. `third_party` is excluded. | `golangci-lint` v2.14.0 in CI |
 | `go test -race ./...` passes. The envtest test skips unless `KUBEBUILDER_ASSETS` is set. | CI |
