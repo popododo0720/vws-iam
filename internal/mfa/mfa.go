@@ -1,7 +1,8 @@
 // Package mfa manages virtual TOTP MFA devices. The seed is shown once at
 // creation and stored only sealed. Enabling needs two consecutive codes.
 // Each accepted code advances the device's last step, so a code is never
-// accepted twice.
+// accepted twice. MaxFailedAttempts wrong codes in a row lock the device
+// for LockoutDuration; the counter is stored, so a restart does not reset it.
 package mfa
 
 import (
@@ -24,10 +25,63 @@ var (
 	ErrInvalidCode   = errors.New("InvalidAuthenticationCode")
 	ErrEntityInUse   = errors.New("EntityAlreadyExists")
 	ErrNotAssociated = errors.New("NoSuchEntity")
+	// ErrLocked is returned while a device is locked out; even a correct
+	// code is refused then.
+	ErrLocked = errors.New("MFADeviceLocked")
 )
 
-// Skew is the accepted clock drift in steps.
+// Skew is the accepted clock drift in steps, for Verify and for Enable.
 const Skew = 1
+
+// Brute-force limits: a 6-digit code space of 10^6 with ±1 step allows
+// about 3 hits per million guesses, so 5 tries per 15 minutes bounds an
+// online attack to well under 1% per year.
+const (
+	MaxFailedAttempts = 5
+	LockoutDuration   = 15 * time.Minute
+)
+
+// attempt runs check on device name under the lockout policy and persists
+// the outcome: a failure counts (and may lock), a success resets.
+func (s *Service) attempt(ctx context.Context, name string, check func(d *iam.MfaDevice) (bool, error)) error {
+	var verr error
+	_, err := store.Mutate(ctx, s.b, name, func(d *iam.MfaDevice) error {
+		verr = nil
+		now := s.now().UTC()
+		if now.Before(d.LockedUntil) {
+			verr = ErrLocked
+			return errNoWrite
+		}
+		ok, err := check(d)
+		if err != nil {
+			return err
+		}
+		if !d.LockedUntil.IsZero() { // lock expired
+			d.LockedUntil, d.FailedAttempts = time.Time{}, 0
+		}
+		if ok {
+			d.FailedAttempts = 0
+			return nil
+		}
+		d.FailedAttempts++
+		verr = ErrInvalidCode
+		if d.FailedAttempts >= MaxFailedAttempts {
+			d.LockedUntil, d.FailedAttempts = now.Add(LockoutDuration), 0
+			verr = ErrLocked
+		}
+		return nil
+	})
+	if errors.Is(err, errNoWrite) {
+		err = nil
+	}
+	if err != nil {
+		return fmt.Errorf("mfa device %s: %w", name, err)
+	}
+	return verr
+}
+
+// errNoWrite ends a Mutate without writing.
+var errNoWrite = errors.New("no write")
 
 // Enrollment is returned once by CreateVirtual. Never log it.
 type Enrollment struct {
@@ -89,22 +143,24 @@ func (s *Service) Enable(ctx context.Context, user, name, code1, code2 string) e
 	if err != nil {
 		return err
 	}
-	_, err = store.Mutate(ctx, s.b, name, func(d *iam.MfaDevice) error {
+	// Both codes must lie within ±Skew of now: code1 at step cur-1 or cur,
+	// code2 at the next step.
+	return s.attempt(ctx, name, func(d *iam.MfaDevice) (bool, error) {
 		if d.Enabled {
-			return ErrEntityInUse
+			return false, ErrEntityInUse
 		}
 		seed, err := s.seed(*d)
 		if err != nil {
-			return err
+			return false, err
 		}
-		first, ok := totp.Match(seed, code1, s.now(), Skew+1)
-		if !ok || !totp.Equal(totp.Code(seed, first+1, totp.Digits), code2) || first+1 > totp.Step(s.now())+Skew || first+1 <= d.LastStep {
-			return ErrInvalidCode
+		cur := totp.Step(s.now())
+		first, ok := totp.Match(seed, code1, s.now(), Skew)
+		if !ok || first+1 > cur+Skew || first+1 <= d.LastStep || !totp.Equal(totp.Code(seed, first+1, totp.Digits), code2) {
+			return false, nil
 		}
 		d.UserName, d.Enabled, d.LastStep = u.Object.Name, true, first+1
-		return nil
+		return true, nil
 	})
-	return err
 }
 
 // Deactivate unassigns an enabled device from user.
@@ -151,24 +207,23 @@ func (s *Service) List(ctx context.Context, user string) ([]iam.MfaDevice, error
 // Verify checks code for user's enabled device and consumes its step. On
 // success the request carries aws:MultiFactorAuthPresent=true.
 func (s *Service) Verify(ctx context.Context, user, name, code string) error {
-	_, err := store.Mutate(ctx, s.b, name, func(d *iam.MfaDevice) error {
+	return s.attempt(ctx, name, func(d *iam.MfaDevice) (bool, error) {
 		if !d.Enabled || store.Fold(d.UserName) != store.Fold(user) {
-			return ErrNotAssociated
+			return false, ErrNotAssociated
 		}
 		seed, err := s.seed(*d)
 		if err != nil {
-			return err
+			return false, err
 		}
 		step, ok := totp.Match(seed, code, s.now(), Skew)
 		// Mutate rereads on a conflict, so two racing uses of one code
 		// see each other's LastStep and only one wins.
 		if !ok || step <= d.LastStep {
-			return ErrInvalidCode
+			return false, nil
 		}
 		d.LastStep = step
-		return nil
+		return true, nil
 	})
-	return err
 }
 
 // Required reports whether user has an enabled device (login needs a code).
