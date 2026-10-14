@@ -27,7 +27,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/envtest"
           tar -xzf "$RUNNER_TEMP/envtest.tgz" -C "$RUNNER_TEMP/envtest" --strip-components=2
           echo "KUBEBUILDER_ASSETS=$RUNNER_TEMP/envtest" >> "$GITHUB_ENV"
+      - name: Architecture rules (internal/archtest)
+        run: go test -count=1 -v ./internal/archtest/...
       - run: go test -race ./...
+      - name: AGENTS.md Judgment count
+        run: scripts/guard-agents.sh judgment
 
   lint:
     runs-on: ubuntu-latest

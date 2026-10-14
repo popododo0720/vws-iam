@@ -5,6 +5,7 @@
 #   guard-agents.sh pr-base BASE_REF        a pull request must target the main branch
 #   guard-agents.sh pr-body [FILE]          the pull request text (FILE or $PR_BODY) has "Closes #N"
 #   guard-agents.sh push-watch BEFORE AFTER every first-parent commit pushed to main came from a pull request
+#   guard-agents.sh judgment [FILE]         every row of the '## Rules' table names an Enforcer; prints the Judgment count
 #   guard-agents.sh selftest                run the guards on bad inputs; every one must fail
 #
 # Environment: GUARD_MAIN_BRANCH (default main), GUARD_HEADING (default "## Insider-risk guardrails"),
@@ -36,6 +37,24 @@ cmd_agents() {
   if grep -q -E "^$((ITEMS + 1))\. " <<<"$section"; then
     die "agents: '${HEADING}' has more than ${ITEMS} numbered items"
   fi
+}
+
+cmd_judgment() {
+  local file=${1:-AGENTS.md} table total judgment empty
+  [[ -f $file ]] || die "judgment: ${file} does not exist"
+  table=$(awk '
+    $0 == "## Rules" { on = 1; next }
+    on && /^## / { exit }
+    on && /^\|/ { print }' "$file")
+  [[ $(head -n 1 <<<"$table") =~ ^\|\ *Rule\ *\|\ *Enforcer\ *\|$ ]] ||
+    die "judgment: '## Rules' needs a '| Rule | Enforcer |' table"
+  table=$(tail -n +3 <<<"$table")
+  total=$(grep -c . <<<"$table" || true)
+  [[ $total -gt 0 ]] || die "judgment: the rule table is empty"
+  empty=$(awk -F'|' '{ e = $(NF - 1); gsub(/^ +| +$/, "", e); if (e == "") n++ } END { print n + 0 }' <<<"$table")
+  [[ $empty -eq 0 ]] || die "judgment: ${empty} rule(s) name no enforcer; write a test, lint or CI step, or 'Judgment'"
+  judgment=$(awk -F'|' '{ e = $(NF - 1); gsub(/^ +| +$/, "", e); if (e == "Judgment") n++ } END { print n + 0 }' <<<"$table")
+  echo "judgment: ${judgment} of ${total} rules are Judgment (no automated enforcer)"
 }
 
 cmd_pr_base() {
@@ -117,6 +136,17 @@ cmd_selftest() {
   awk -v h="$HEADING" '$0 == h { print "## Other"; next } { print }' "$good" >"$tmp/renamed.md"
   expect_fail "renamed heading" cmd_agents "$tmp/renamed.md"
 
+  { echo "# t"; echo "## Rules"; echo; echo "| Rule | Enforcer |"; echo "| --- | --- |"; echo "| a | \`TestA\` |"; echo "| b | Judgment |"; echo; echo "## next"; } >"$tmp/rules.md"
+  expect_pass "every rule has an enforcer" cmd_judgment "$tmp/rules.md"
+  [[ $(cmd_judgment "$tmp/rules.md") == "judgment: 1 of 2 rules are Judgment (no automated enforcer)" ]] ||
+    die "selftest: judgment count is wrong"
+  echo "ok: judgment count is reported"
+  sed 's/| b | Judgment |/| b |  |/' "$tmp/rules.md" >"$tmp/empty.md"
+  expect_fail "a rule without an enforcer" cmd_judgment "$tmp/empty.md"
+  sed 's/| Rule | Enforcer |/| Rule | Enforced by |/' "$tmp/rules.md" >"$tmp/header.md"
+  expect_fail "a table without the Enforcer column" cmd_judgment "$tmp/header.md"
+  expect_fail "no rule table" cmd_judgment "$good"
+
   expect_pass "base is main" cmd_pr_base "$MAIN"
   expect_fail "base is a stack branch" cmd_pr_base "feature-stack-base"
   expect_fail "empty base" cmd_pr_base ""
@@ -173,6 +203,7 @@ case "$command_name" in
   pr-base) cmd_pr_base "$@" ;;
   pr-body) cmd_pr_body "$@" ;;
   push-watch) cmd_push_watch "$@" ;;
+  judgment) cmd_judgment "$@" ;;
   selftest) cmd_selftest ;;
-  *) die "usage: guard-agents.sh <agents [FILE]|pr-base BASE|pr-body [FILE]|push-watch BEFORE AFTER|selftest>" ;;
+  *) die "usage: guard-agents.sh <agents [FILE]|judgment [FILE]|pr-base BASE|pr-body [FILE]|push-watch BEFORE AFTER|selftest>" ;;
 esac
