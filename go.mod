@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/popododo0720/vws-lib v0.1.1
+	golang.org/x/crypto v0.57.0
 	google.golang.org/grpc v1.84.0
 	k8s.io/api v0.37.1
 	k8s.io/apimachinery v0.37.1
