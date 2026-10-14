@@ -26,6 +26,7 @@ import (
 	"github.com/popododo0720/vws-iam/internal/grpcapi"
 	"github.com/popododo0720/vws-iam/internal/secret"
 	"github.com/popododo0720/vws-iam/internal/sigv4"
+	"github.com/popododo0720/vws-iam/internal/store"
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
 	"github.com/popododo0720/vws-iam/internal/totp"
 )
@@ -46,18 +47,27 @@ type env struct {
 	ops      longrunningpb.OperationsClient
 	now      *time.Time
 	nonce    int
+	api      *grpcapi.Server
 }
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	now := time.Now().UTC()
+	return newEnvOn(t, memstore.New(), &now)
+}
+
+// newEnvOn starts one server (one replica) on b. Envs built on the same
+// b and clock act as replicas of one deployment.
+func newEnvOn(t *testing.T, b store.Backend, now *time.Time) *env {
+	t.Helper()
 	keys, err := secret.NewKeyring("k1", map[string][]byte{"k1": make([]byte, 32)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	lis := bufconn.Listen(1 << 20)
 	srv := grpc.NewServer(grpcapi.ServerOptions()...)
-	grpcapi.Register(srv, grpcapi.New(memstore.New(), keys, grpcapi.WithClock(func() time.Time { return now })))
+	api := grpcapi.New(b, keys, grpcapi.WithClock(func() time.Time { return *now }))
+	grpcapi.Register(srv, api)
 	go func() {
 		if err := srv.Serve(lis); err != nil {
 			t.Error(err)
@@ -79,7 +89,7 @@ func newEnv(t *testing.T) *env {
 	return &env{
 		users: iamv1.NewUserServiceClient(cc), groups: iamv1.NewGroupServiceClient(cc), roles: iamv1.NewRoleServiceClient(cc),
 		policies: iamv1.NewPolicyServiceClient(cc), keys: iamv1.NewAccessKeyServiceClient(cc), mfa: iamv1.NewMfaDeviceServiceClient(cc),
-		auth: iamv1.NewAuthServiceClient(cc), token: iamv1.NewTokenServiceClient(cc), ops: longrunningpb.NewOperationsClient(cc), now: &now,
+		auth: iamv1.NewAuthServiceClient(cc), token: iamv1.NewTokenServiceClient(cc), ops: longrunningpb.NewOperationsClient(cc), now: now, api: api,
 	}
 }
 

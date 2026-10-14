@@ -52,8 +52,9 @@ type Server struct {
 	m    *metrics
 	// marked throttles MarkUsed writes: access key id -> last write time.
 	marked sync.Map
-	// stsSeen holds SigV4 signatures already used for STS: signature ->
-	// time after which it can be forgotten (X-Amz-Date window passed).
+	// stsSeen is a per-replica fast front of the shared replay store
+	// (replay.go): replay hash -> time after which it can be forgotten.
+	// It only ever rejects, so it is safe to be stale or empty.
 	stsSeen sync.Map
 }
 
