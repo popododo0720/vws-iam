@@ -20,11 +20,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	RoleService_GetRole_FullMethodName    = "/vws.iam.v1.RoleService/GetRole"
-	RoleService_ListRoles_FullMethodName  = "/vws.iam.v1.RoleService/ListRoles"
-	RoleService_CreateRole_FullMethodName = "/vws.iam.v1.RoleService/CreateRole"
-	RoleService_UpdateRole_FullMethodName = "/vws.iam.v1.RoleService/UpdateRole"
-	RoleService_DeleteRole_FullMethodName = "/vws.iam.v1.RoleService/DeleteRole"
+	RoleService_GetRole_FullMethodName            = "/vws.iam.v1.RoleService/GetRole"
+	RoleService_ListRoles_FullMethodName          = "/vws.iam.v1.RoleService/ListRoles"
+	RoleService_CreateRole_FullMethodName         = "/vws.iam.v1.RoleService/CreateRole"
+	RoleService_UpdateRole_FullMethodName         = "/vws.iam.v1.RoleService/UpdateRole"
+	RoleService_DeleteRole_FullMethodName         = "/vws.iam.v1.RoleService/DeleteRole"
+	RoleService_RevokeRoleSessions_FullMethodName = "/vws.iam.v1.RoleService/RevokeRoleSessions"
 )
 
 // RoleServiceClient is the client API for RoleService service.
@@ -53,6 +54,15 @@ type RoleServiceClient interface {
 	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
 	// buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
 	DeleteRole(ctx context.Context, in *DeleteRoleRequest, opts ...grpc.CallOption) (*longrunningpb.Operation, error)
+	// RevokeRoleSessions invalidates every STS session issued so far for
+	// the role (GetSessionToken for a user, AssumeRole for a role), like
+	// the AWS console's "Revoke active sessions". Credentials issued later
+	// are unaffected. Callers need iam:RevokeRoleSessions on the role ARN.
+	// Re-running moves status.sessions_revoke_time forward; a request_id
+	// replay returns the original operation.
+	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+	// buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+	RevokeRoleSessions(ctx context.Context, in *RevokeRoleSessionsRequest, opts ...grpc.CallOption) (*longrunningpb.Operation, error)
 }
 
 type roleServiceClient struct {
@@ -113,6 +123,16 @@ func (c *roleServiceClient) DeleteRole(ctx context.Context, in *DeleteRoleReques
 	return out, nil
 }
 
+func (c *roleServiceClient) RevokeRoleSessions(ctx context.Context, in *RevokeRoleSessionsRequest, opts ...grpc.CallOption) (*longrunningpb.Operation, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(longrunningpb.Operation)
+	err := c.cc.Invoke(ctx, RoleService_RevokeRoleSessions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RoleServiceServer is the server API for RoleService service.
 // All implementations must embed UnimplementedRoleServiceServer
 // for forward compatibility.
@@ -139,6 +159,15 @@ type RoleServiceServer interface {
 	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
 	// buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
 	DeleteRole(context.Context, *DeleteRoleRequest) (*longrunningpb.Operation, error)
+	// RevokeRoleSessions invalidates every STS session issued so far for
+	// the role (GetSessionToken for a user, AssumeRole for a role), like
+	// the AWS console's "Revoke active sessions". Credentials issued later
+	// are unaffected. Callers need iam:RevokeRoleSessions on the role ARN.
+	// Re-running moves status.sessions_revoke_time forward; a request_id
+	// replay returns the original operation.
+	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+	// buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+	RevokeRoleSessions(context.Context, *RevokeRoleSessionsRequest) (*longrunningpb.Operation, error)
 	mustEmbedUnimplementedRoleServiceServer()
 }
 
@@ -163,6 +192,9 @@ func (UnimplementedRoleServiceServer) UpdateRole(context.Context, *UpdateRoleReq
 }
 func (UnimplementedRoleServiceServer) DeleteRole(context.Context, *DeleteRoleRequest) (*longrunningpb.Operation, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteRole not implemented")
+}
+func (UnimplementedRoleServiceServer) RevokeRoleSessions(context.Context, *RevokeRoleSessionsRequest) (*longrunningpb.Operation, error) {
+	return nil, status.Error(codes.Unimplemented, "method RevokeRoleSessions not implemented")
 }
 func (UnimplementedRoleServiceServer) mustEmbedUnimplementedRoleServiceServer() {}
 func (UnimplementedRoleServiceServer) testEmbeddedByValue()                     {}
@@ -275,6 +307,24 @@ func _RoleService_DeleteRole_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RoleService_RevokeRoleSessions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevokeRoleSessionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RoleServiceServer).RevokeRoleSessions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RoleService_RevokeRoleSessions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RoleServiceServer).RevokeRoleSessions(ctx, req.(*RevokeRoleSessionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RoleService_ServiceDesc is the grpc.ServiceDesc for RoleService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -301,6 +351,10 @@ var RoleService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteRole",
 			Handler:    _RoleService_DeleteRole_Handler,
+		},
+		{
+			MethodName: "RevokeRoleSessions",
+			Handler:    _RoleService_RevokeRoleSessions_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

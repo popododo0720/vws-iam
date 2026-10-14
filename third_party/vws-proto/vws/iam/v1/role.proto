@@ -70,6 +70,25 @@ service RoleService {
       metadata_type: "vws.common.v1.OperationMetadata"
     };
   }
+
+  // RevokeRoleSessions invalidates every STS session issued so far for
+  // the role (GetSessionToken for a user, AssumeRole for a role), like
+  // the AWS console's "Revoke active sessions". Credentials issued later
+  // are unaffected. Callers need iam:RevokeRoleSessions on the role ARN.
+  // Re-running moves status.sessions_revoke_time forward; a request_id
+  // replay returns the original operation.
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  // buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+  rpc RevokeRoleSessions(RevokeRoleSessionsRequest) returns (google.longrunning.Operation) {
+    option (google.api.http) = {
+      post: "/v1/{name=projects/*/roles/*}:revokeSessions"
+      body: "*"
+    };
+    option (google.longrunning.operation_info) = {
+      response_type: "vws.iam.v1.Role"
+      metadata_type: "vws.common.v1.OperationMetadata"
+    };
+  }
 }
 
 // Role is an IAM role.
@@ -115,6 +134,9 @@ message RoleStatus {
   string arn = 2;
   // "AROA" followed by 17 uppercase letters and digits.
   string unique_id = 3;
+  // Sessions issued before this time are refused (RevokeRoleSessions).
+  // Unset until the first revocation.
+  google.protobuf.Timestamp sessions_revoke_time = 4;
 }
 
 message GetRoleRequest {
@@ -178,4 +200,15 @@ message DeleteRoleRequest {
   ];
   bool allow_missing = 3 [(google.api.field_behavior) = OPTIONAL];
   string etag = 4 [(google.api.field_behavior) = OPTIONAL];
+}
+
+message RevokeRoleSessionsRequest {
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "vws.iam/Role"
+  ];
+  string request_id = 2 [
+    (google.api.field_info).format = UUID4,
+    (google.api.field_behavior) = OPTIONAL
+  ];
 }

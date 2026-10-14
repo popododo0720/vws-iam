@@ -53,7 +53,7 @@ func (p project) userProto(v store.Versioned[iam.User], x userExtras) *iamv1.Use
 		Status: &iamv1.UserStatus{
 			Observed: ready(u.Generation), Arn: iam.UserARN(p.id, u), UniqueId: u.ID,
 			Groups: x.groups[store.Fold(u.Name)], LoginProfile: u.PasswordHash != "", PasswordResetRequired: u.PasswordResetRequired,
-			PasswordLastUsedTime: ts(u.PasswordLastUsed), MfaDevices: x.mfa[store.Fold(u.Name)],
+			PasswordLastUsedTime: ts(u.PasswordLastUsed), MfaDevices: x.mfa[store.Fold(u.Name)], SessionsRevokeTime: ts(u.SessionsRevokedBefore),
 		},
 		CreateTime: ts(u.Created), UpdateTime: ts(u.Updated),
 	}

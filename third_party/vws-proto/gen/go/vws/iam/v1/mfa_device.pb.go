@@ -193,8 +193,13 @@ type MfaDeviceStatus struct {
 	// Serial number: arn:vws:iam::{project}:mfa{path}{mfa_device}
 	SerialNumber string `protobuf:"bytes,2,opt,name=serial_number,json=serialNumber,proto3" json:"serial_number,omitempty"`
 	// The user it is enabled for, full resource name. Empty when not enabled.
-	User          string                 `protobuf:"bytes,3,opt,name=user,proto3" json:"user,omitempty"`
-	EnableTime    *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=enable_time,json=enableTime,proto3" json:"enable_time,omitempty"`
+	User       string                 `protobuf:"bytes,3,opt,name=user,proto3" json:"user,omitempty"`
+	EnableTime *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=enable_time,json=enableTime,proto3" json:"enable_time,omitempty"`
+	// Wrong codes since the last success or lockout. 5 lock the device.
+	FailedAttempts int32 `protobuf:"varint,5,opt,name=failed_attempts,json=failedAttempts,proto3" json:"failed_attempts,omitempty"`
+	// Set while the device is locked out (15 minutes after the 5th wrong
+	// code); even a correct code is refused until then. Unset otherwise.
+	LockedUntil   *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=locked_until,json=lockedUntil,proto3" json:"locked_until,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -253,6 +258,20 @@ func (x *MfaDeviceStatus) GetUser() string {
 func (x *MfaDeviceStatus) GetEnableTime() *timestamppb.Timestamp {
 	if x != nil {
 		return x.EnableTime
+	}
+	return nil
+}
+
+func (x *MfaDeviceStatus) GetFailedAttempts() int32 {
+	if x != nil {
+		return x.FailedAttempts
+	}
+	return 0
+}
+
+func (x *MfaDeviceStatus) GetLockedUntil() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LockedUntil
 	}
 	return nil
 }
@@ -845,13 +864,15 @@ const file_vws_iam_v1_mfa_device_proto_rawDesc = "" +
 	"\x11vws.iam/MfaDevice\x12*projects/{project}/mfaDevices/{mfa_device}*\n" +
 	"mfaDevices2\tmfaDevice\"#\n" +
 	"\rMfaDeviceSpec\x12\x12\n" +
-	"\x04path\x18\x01 \x01(\tR\x04path\"\xc1\x01\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\"\xa9\x02\n" +
 	"\x0fMfaDeviceStatus\x128\n" +
 	"\bobserved\x18\x01 \x01(\v2\x1c.vws.common.v1.ObservedStateR\bobserved\x12#\n" +
 	"\rserial_number\x18\x02 \x01(\tR\fserialNumber\x12\x12\n" +
 	"\x04user\x18\x03 \x01(\tR\x04user\x12;\n" +
 	"\venable_time\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"enableTime\"D\n" +
+	"enableTime\x12'\n" +
+	"\x0ffailed_attempts\x18\x05 \x01(\x05R\x0efailedAttempts\x12=\n" +
+	"\flocked_until\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\vlockedUntil\"D\n" +
 	"\x13GetMfaDeviceRequest\x12-\n" +
 	"\x04name\x18\x01 \x01(\tB\x19\xe0A\x02\xfaA\x13\n" +
 	"\x11vws.iam/MfaDeviceR\x04name\"\x86\x01\n" +
@@ -951,28 +972,29 @@ var file_vws_iam_v1_mfa_device_proto_depIdxs = []int32{
 	14, // 5: vws.iam.v1.MfaDevice.delete_time:type_name -> google.protobuf.Timestamp
 	15, // 6: vws.iam.v1.MfaDeviceStatus.observed:type_name -> vws.common.v1.ObservedState
 	14, // 7: vws.iam.v1.MfaDeviceStatus.enable_time:type_name -> google.protobuf.Timestamp
-	0,  // 8: vws.iam.v1.ListMfaDevicesResponse.mfa_devices:type_name -> vws.iam.v1.MfaDevice
-	0,  // 9: vws.iam.v1.CreateVirtualMfaDeviceRequest.mfa_device:type_name -> vws.iam.v1.MfaDevice
-	0,  // 10: vws.iam.v1.CreateVirtualMfaDeviceResponse.mfa_device:type_name -> vws.iam.v1.MfaDevice
-	0,  // 11: vws.iam.v1.EnableMfaDeviceResponse.mfa_device:type_name -> vws.iam.v1.MfaDevice
-	0,  // 12: vws.iam.v1.DeactivateMfaDeviceResponse.mfa_device:type_name -> vws.iam.v1.MfaDevice
-	3,  // 13: vws.iam.v1.MfaDeviceService.GetMfaDevice:input_type -> vws.iam.v1.GetMfaDeviceRequest
-	4,  // 14: vws.iam.v1.MfaDeviceService.ListMfaDevices:input_type -> vws.iam.v1.ListMfaDevicesRequest
-	6,  // 15: vws.iam.v1.MfaDeviceService.DeleteMfaDevice:input_type -> vws.iam.v1.DeleteMfaDeviceRequest
-	7,  // 16: vws.iam.v1.MfaDeviceService.CreateVirtualMfaDevice:input_type -> vws.iam.v1.CreateVirtualMfaDeviceRequest
-	9,  // 17: vws.iam.v1.MfaDeviceService.EnableMfaDevice:input_type -> vws.iam.v1.EnableMfaDeviceRequest
-	10, // 18: vws.iam.v1.MfaDeviceService.DeactivateMfaDevice:input_type -> vws.iam.v1.DeactivateMfaDeviceRequest
-	0,  // 19: vws.iam.v1.MfaDeviceService.GetMfaDevice:output_type -> vws.iam.v1.MfaDevice
-	5,  // 20: vws.iam.v1.MfaDeviceService.ListMfaDevices:output_type -> vws.iam.v1.ListMfaDevicesResponse
-	16, // 21: vws.iam.v1.MfaDeviceService.DeleteMfaDevice:output_type -> google.longrunning.Operation
-	8,  // 22: vws.iam.v1.MfaDeviceService.CreateVirtualMfaDevice:output_type -> vws.iam.v1.CreateVirtualMfaDeviceResponse
-	11, // 23: vws.iam.v1.MfaDeviceService.EnableMfaDevice:output_type -> vws.iam.v1.EnableMfaDeviceResponse
-	12, // 24: vws.iam.v1.MfaDeviceService.DeactivateMfaDevice:output_type -> vws.iam.v1.DeactivateMfaDeviceResponse
-	19, // [19:25] is the sub-list for method output_type
-	13, // [13:19] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	14, // 8: vws.iam.v1.MfaDeviceStatus.locked_until:type_name -> google.protobuf.Timestamp
+	0,  // 9: vws.iam.v1.ListMfaDevicesResponse.mfa_devices:type_name -> vws.iam.v1.MfaDevice
+	0,  // 10: vws.iam.v1.CreateVirtualMfaDeviceRequest.mfa_device:type_name -> vws.iam.v1.MfaDevice
+	0,  // 11: vws.iam.v1.CreateVirtualMfaDeviceResponse.mfa_device:type_name -> vws.iam.v1.MfaDevice
+	0,  // 12: vws.iam.v1.EnableMfaDeviceResponse.mfa_device:type_name -> vws.iam.v1.MfaDevice
+	0,  // 13: vws.iam.v1.DeactivateMfaDeviceResponse.mfa_device:type_name -> vws.iam.v1.MfaDevice
+	3,  // 14: vws.iam.v1.MfaDeviceService.GetMfaDevice:input_type -> vws.iam.v1.GetMfaDeviceRequest
+	4,  // 15: vws.iam.v1.MfaDeviceService.ListMfaDevices:input_type -> vws.iam.v1.ListMfaDevicesRequest
+	6,  // 16: vws.iam.v1.MfaDeviceService.DeleteMfaDevice:input_type -> vws.iam.v1.DeleteMfaDeviceRequest
+	7,  // 17: vws.iam.v1.MfaDeviceService.CreateVirtualMfaDevice:input_type -> vws.iam.v1.CreateVirtualMfaDeviceRequest
+	9,  // 18: vws.iam.v1.MfaDeviceService.EnableMfaDevice:input_type -> vws.iam.v1.EnableMfaDeviceRequest
+	10, // 19: vws.iam.v1.MfaDeviceService.DeactivateMfaDevice:input_type -> vws.iam.v1.DeactivateMfaDeviceRequest
+	0,  // 20: vws.iam.v1.MfaDeviceService.GetMfaDevice:output_type -> vws.iam.v1.MfaDevice
+	5,  // 21: vws.iam.v1.MfaDeviceService.ListMfaDevices:output_type -> vws.iam.v1.ListMfaDevicesResponse
+	16, // 22: vws.iam.v1.MfaDeviceService.DeleteMfaDevice:output_type -> google.longrunning.Operation
+	8,  // 23: vws.iam.v1.MfaDeviceService.CreateVirtualMfaDevice:output_type -> vws.iam.v1.CreateVirtualMfaDeviceResponse
+	11, // 24: vws.iam.v1.MfaDeviceService.EnableMfaDevice:output_type -> vws.iam.v1.EnableMfaDeviceResponse
+	12, // 25: vws.iam.v1.MfaDeviceService.DeactivateMfaDevice:output_type -> vws.iam.v1.DeactivateMfaDeviceResponse
+	20, // [20:26] is the sub-list for method output_type
+	14, // [14:20] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_vws_iam_v1_mfa_device_proto_init() }

@@ -10,6 +10,7 @@ import (
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
+	"github.com/popododo0720/vws-iam/internal/mfa"
 	"github.com/popododo0720/vws-iam/internal/store"
 )
 
@@ -21,9 +22,22 @@ func (p project) mfaProto(d iam.MfaDevice, version string) *iamv1.MfaDevice {
 	return &iamv1.MfaDevice{
 		Name: name(p.id, "mfaDevices", d.Name), Uid: d.UID, Generation: d.Generation, Etag: version, Labels: labels(d.Labels),
 		Spec:       &iamv1.MfaDeviceSpec{Path: defaultPath(d.Path)},
-		Status:     &iamv1.MfaDeviceStatus{Observed: ready(d.Generation), SerialNumber: p.mfa.Serial(d.Name), User: user, EnableTime: ts(d.EnableTime)},
+		Status:     p.mfaStatus(d, user),
 		CreateTime: ts(d.Created), UpdateTime: ts(d.Updated),
 	}
+}
+
+// mfaStatus reports the lockout state of internal/mfa: failed_attempts
+// as stored (reset to 0 when the device locks), locked_until only while
+// the lockout runs (vws-proto#32). These are admin fields: MfaDevice
+// calls are authorized by console-api before they reach this service.
+func (p project) mfaStatus(d iam.MfaDevice, user string) *iamv1.MfaDeviceStatus {
+	st := &iamv1.MfaDeviceStatus{Observed: ready(d.Generation), SerialNumber: p.mfa.Serial(d.Name), User: user, EnableTime: ts(d.EnableTime),
+		FailedAttempts: int32(min(d.FailedAttempts, mfa.MaxFailedAttempts))} //nolint:gosec // bounded by MaxFailedAttempts
+	if p.now().Before(d.LockedUntil) {
+		st.LockedUntil = ts(d.LockedUntil)
+	}
+	return st
 }
 
 func (p project) mfaGet(ctx context.Context, id string) (*iamv1.MfaDevice, error) {

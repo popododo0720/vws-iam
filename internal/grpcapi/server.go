@@ -91,6 +91,7 @@ func Register(g *grpc.Server, s *Server) {
 // project is one project's view of every domain service.
 type project struct {
 	id    string
+	now   func() time.Time
 	b     store.Backend
 	authz *authz.Authorizer
 	keys  *accesskey.Service
@@ -104,6 +105,7 @@ func (s *Server) project(id string) project {
 	m := mfa.New(b, s.keys, id, s.now)
 	return project{
 		id:    id,
+		now:   s.now,
 		b:     b,
 		authz: az,
 		keys:  accesskey.New(b, s.b, id, s.keys, s.now),
