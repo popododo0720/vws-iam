@@ -80,6 +80,7 @@ func testAttemptLimits(t *testing.T, backend func(*testing.T) store.Backend) {
 		now := time.Now().UTC()
 		a, rb := newEnvOn(t, b, &now), newEnvOn(t, b, &now)
 		withPassword(t, a, "alice", "bob")
+		cheapPasswords(t, b, "alice", "bob")
 		ctx := t.Context()
 		for i := range grpcapi.UserAttemptLimit {
 			e := a
@@ -357,6 +358,7 @@ func testAttemptLimits(t *testing.T, backend func(*testing.T) store.Backend) {
 		now := time.Now().UTC()
 		a, rb := newEnvOn(t, b, &now), newEnvOn(t, b, &now)
 		withPassword(t, a, "carol")
+		cheapPasswords(t, b, "carol")
 		ctx := t.Context()
 		const n = 3 * grpcapi.UserAttemptLimit
 		errs := make([]error, n)
