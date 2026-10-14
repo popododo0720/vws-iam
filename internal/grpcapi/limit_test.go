@@ -45,9 +45,17 @@ func wantBadLogin(t *testing.T, err error) {
 	wantErr(t, err, codes.Unauthenticated, "INVALID_CREDENTIALS", "InvalidClientTokenId")
 }
 
-// login allows MaxTimeout: argon2id under -race next to envtest is slow.
+// slowRPC is the deadline of a call that runs argon2id (64 MiB, t=3):
+// under -race next to envtest and other packages that alone can take
+// seconds, so it gets the server's MaxTimeout. Without a client deadline
+// the server's DefaultTimeout (10s) applies, which a loaded box can miss
+// (#43).
+func slowRPC(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, grpcapi.MaxTimeout)
+}
+
 func login(ctx context.Context, e *env, user, pw, ip string) error {
-	ctx, cancel := context.WithTimeout(ctx, grpcapi.MaxTimeout)
+	ctx, cancel := slowRPC(ctx)
 	defer cancel()
 	_, err := e.auth.Login(ctx, &iamv1.LoginRequest{Project: proj, UserName: user, Password: pw, SourceIp: ip})
 	return err
@@ -55,10 +63,12 @@ func login(ctx context.Context, e *env, user, pw, ip string) error {
 
 func withPassword(t *testing.T, e *env, users ...string) {
 	t.Helper()
-	ctx := t.Context()
 	for _, n := range users {
-		u := e.createUser(t, ctx, n)
-		if _, err := e.users.SetLoginProfile(ctx, &iamv1.SetLoginProfileRequest{Name: u.GetName(), Password: goodPW}); err != nil {
+		u := e.createUser(t, t.Context(), n)
+		ctx, cancel := slowRPC(t.Context())
+		_, err := e.users.SetLoginProfile(ctx, &iamv1.SetLoginProfileRequest{Name: u.GetName(), Password: goodPW})
+		cancel()
+		if err != nil {
 			t.Fatal(err)
 		}
 	}
