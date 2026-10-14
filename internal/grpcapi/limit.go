@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"time"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
@@ -85,6 +86,25 @@ func (c callers) withIP(ip string) callers {
 // errThrottled is a locked-out caller: RESOURCE_EXHAUSTED / Throttling.
 var errThrottled = errors.New("too many failed attempts; try again later")
 
+// throttleError is errThrottled with the scopes (iam.AttemptUser, Key,
+// IP) whose limit refused the attempt, so a caller can tell a user over
+// its limit from a shared IP or key over theirs (#44).
+type throttleError struct{ scopes []string }
+
+func (e *throttleError) Error() string { return errThrottled.Error() }
+
+func (e *throttleError) Is(target error) bool { return target == errThrottled }
+
+// throttled builds the error for the given scopes.
+func throttled(scopes ...string) error { return &throttleError{scopes: scopes} }
+
+// throttledBy reports whether err is a throttle in which scope's limit
+// took part.
+func throttledBy(err error, scope string) bool {
+	var te *throttleError
+	return errors.As(err, &te) && slices.Contains(te.scopes, scope)
+}
+
 // attemptsKey carries the access key and source IP subjects of an STS
 // call to mfaVerifier, which adds the user.
 type attemptsKey struct{}
@@ -118,6 +138,7 @@ func (s *Server) limitedVerify(ctx context.Context, cs callers, verify func() er
 // checkAttempts refuses a caller that is locked out. It only reads.
 func (s *Server) checkAttempts(ctx context.Context, cs callers) error {
 	now := s.now()
+	var scopes []string
 	for _, j := range cs {
 		v, err := store.Get[iam.AttemptCounter](ctx, s.b, j.hash())
 		switch {
@@ -125,8 +146,11 @@ func (s *Server) checkAttempts(ctx context.Context, cs callers) error {
 		case err != nil:
 			return err
 		case lockedOut(v.Object, now):
-			return errThrottled
+			scopes = append(scopes, j.scope)
 		}
+	}
+	if len(scopes) > 0 {
+		return throttled(scopes...)
 	}
 	return nil
 }
@@ -150,7 +174,7 @@ func (s *Server) reserveAttempts(ctx context.Context, cs callers) (callers, erro
 			return held, err
 		}
 		if locked {
-			return held, errThrottled
+			return held, throttled(j.scope)
 		}
 		held = append(held, j)
 	}

@@ -22,10 +22,14 @@ runs. Neither field carries the seed or a code.
 
 An STS call (AssumeRole, GetSessionToken) with an MFA code whose user,
 access key or source IP is over its attempt limit is refused with
-`Throttling` (RESOURCE_EXHAUSTED), not AccessDenied, and that throttled
-attempt renews the device lock: `locked_until` becomes now+15m, so the
-lock lasts 15 minutes from the last attempt rather than ending with the
-attempt-counter window. Console Login does not renew the device lock.
+`Throttling` (RESOURCE_EXHAUSTED), not AccessDenied. Only when the
+user's own counter is over its limit does that throttled attempt renew
+the device lock: `locked_until` becomes now+15m, so the lock lasts 15
+minutes from the last attempt rather than ending with the attempt-counter
+window. A throttle by the source IP or access key alone leaves
+`locked_until` and `failed_attempts` untouched, so the right code from
+another IP or key still works. Console Login does not renew the device
+lock (#48).
 
 ## Development
 
