@@ -364,6 +364,9 @@ func (s *Server) Login(ctx context.Context, req *iamv1.LoginRequest) (resp *iamv
 		}
 		return invalidCredentials("InvalidAuthenticationCode", "invalid MFA code")
 	})
+	if errors.Is(err, errThrottled) {
+		s.renewLoginLock(ctx, p, pid, req.GetUserName())
+	}
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
