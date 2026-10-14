@@ -72,3 +72,21 @@ func (o Operation) Validate() error {
 	}
 	return nil
 }
+
+// ReplayEntry records that a forwarded SigV4 request was used for STS, so
+// every replica refuses it a second time. Key is the SHA-256 hex of the
+// access key id and signature; neither is stored. Expires is when the
+// entry may be garbage-collected: after it, X-Amz-Date is out of window.
+type ReplayEntry struct {
+	Hash    string    `json:"hash"`
+	Expires time.Time `json:"expires"`
+}
+
+func (ReplayEntry) Kind() Kind    { return KindReplay }
+func (r ReplayEntry) Key() string { return r.Hash }
+func (r ReplayEntry) Validate() error {
+	if !hashRE.MatchString(r.Hash) || r.Expires.IsZero() {
+		return invalid("replay entry")
+	}
+	return nil
+}
