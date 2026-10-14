@@ -20,6 +20,13 @@ locks: the 5th wrong code in a row sets `locked_until` to now+15m and
 `failed_attempts` back to 0. `locked_until` is set only while the lockout
 runs. Neither field carries the seed or a code.
 
+An STS call (AssumeRole, GetSessionToken) with an MFA code whose user,
+access key or source IP is over its attempt limit is refused with
+`Throttling` (RESOURCE_EXHAUSTED), not AccessDenied, and that throttled
+attempt renews the device lock: `locked_until` becomes now+15m, so the
+lock lasts 15 minutes from the last attempt rather than ending with the
+attempt-counter window. Console Login does not renew the device lock.
+
 ## Development
 
 ```

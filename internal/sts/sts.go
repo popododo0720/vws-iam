@@ -30,6 +30,9 @@ var (
 	ErrExpired        = errors.New("ExpiredToken")
 	ErrInvalidToken   = errors.New("InvalidClientTokenId")
 	ErrInvalidRequest = errors.New("ValidationError")
+	// ErrThrottling is returned by an MFAVerifier whose caller has hit an
+	// attempt limit; verifyMFA passes it through instead of AccessDenied.
+	ErrThrottling = errors.New("Throttling")
 )
 
 // Duration limits.
@@ -276,6 +279,9 @@ func (s *Service) verifyMFA(ctx context.Context, c Caller, m MFA) (bool, error) 
 		return false, fmt.Errorf("%w: MFA is not available", ErrAccessDenied)
 	}
 	if err := s.mfa.VerifyMFA(ctx, c.principal.Name, m.SerialNumber, m.TokenCode); err != nil {
+		if errors.Is(err, ErrThrottling) {
+			return false, err
+		}
 		return false, fmt.Errorf("%w: MultiFactorAuthentication failed (%s)", ErrAccessDenied, err.Error())
 	}
 	return true, nil

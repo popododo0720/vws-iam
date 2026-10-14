@@ -15,6 +15,7 @@ import (
 
 	"github.com/popododo0720/vws-iam/internal/grpcapi"
 	"github.com/popododo0720/vws-iam/internal/iam"
+	"github.com/popododo0720/vws-iam/internal/mfa"
 	"github.com/popododo0720/vws-iam/internal/store"
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
 )
@@ -145,6 +146,67 @@ func testAttemptLimits(t *testing.T, backend func(*testing.T) store.Backend) {
 		// Without an MFA code the key still works (the limit is on MFA).
 		if err := gst(ctx, e, e.stsSign(kid, key.GetSecretAccessKey(), "", "GetSessionToken")); err != nil {
 			t.Fatalf("plain GetSessionToken: %v", err)
+		}
+	})
+
+	t.Run("STSThrottleRenewsMFALockAcrossReplicas", func(t *testing.T) {
+		// #44: past the per-user limit STS answers Throttling, not
+		// AccessDenied, and the throttled attempt renews the device lock,
+		// so it runs LockoutDuration from the last attempt.
+		b := backend(t)
+		now := time.Now().UTC().Truncate(time.Second)
+		a, rb := newEnvOn(t, b, &now), newEnvOn(t, b, &now)
+		ctx := t.Context()
+		u := a.createUser(t, ctx, "alice")
+		key, err := a.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: u.GetName()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		kid := key.GetAccessKey().GetName()[strings.LastIndex(key.GetAccessKey().GetName(), "/")+1:]
+		pair := strings.SplitN(enableMFA(t, a, ctx, "alice"), "|", 2)
+		seed, serial := pair[0], pair[1]
+		// One signer for both replicas: each request has its own nonce.
+		gstMFA := func(e *env, code string) error {
+			_, err := e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{
+				Authentication: gstSig(a.stsSign(kid, key.GetSecretAccessKey(), "", "GetSessionToken")), SerialNumber: serial, TokenCode: code})
+			return err
+		}
+		t0 := now // after enabling, which moves the clock
+		// Read on the replica that did not take the attempt.
+		lockedUntil := func(e *env) time.Time {
+			t.Helper()
+			d, err := e.mfa.GetMfaDevice(ctx, &iamv1.GetMfaDeviceRequest{Name: parentName + "/mfaDevices/alice-phone"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return d.GetStatus().GetLockedUntil().AsTime()
+		}
+		for i := range grpcapi.UserAttemptLimit {
+			e := a
+			if i%2 == 1 {
+				e = rb
+			}
+			wantErr(t, gstMFA(e, "000000"), codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+		}
+		if got, want := lockedUntil(a), t0.Add(mfa.LockoutDuration); !got.Equal(want) {
+			t.Fatalf("device lock after 5 failures = %v, want %v", got, want)
+		}
+		// Ten minutes later, on the other replica, even the right code is
+		// throttled, and the device lock now runs from this attempt.
+		now = t0.Add(10 * time.Minute)
+		last := now
+		wantThrottled(t, gstMFA(rb, code(t, rb, seed)))
+		wantThrottled(t, gstMFA(a, code(t, a, seed)))
+		if got, want := lockedUntil(rb), last.Add(mfa.LockoutDuration); !got.Equal(want) {
+			t.Fatalf("device lock after throttle = %v, want %v", got, want)
+		}
+		// The counter window is over, but the device is still locked.
+		now = t0.Add(grpcapi.AttemptWindow + time.Minute)
+		wantErr(t, gstMFA(a, code(t, a, seed)), codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+		// 15 minutes after the last attempt the right code works again.
+		now = last.Add(mfa.LockoutDuration + time.Minute)
+		if err := gstMFA(rb, code(t, rb, seed)); err != nil {
+			t.Fatalf("after device lock: %v", err)
 		}
 	})
 

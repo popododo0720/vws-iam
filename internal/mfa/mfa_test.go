@@ -381,3 +381,49 @@ func TestEnableWindowLiterals(t *testing.T) {
 		}
 	}
 }
+
+// TestLockOut is the lock a throttled attempt renews (#44): it runs
+// LockoutDuration from the call, never shortens a lock, resets the
+// counter and leaves another user's device alone.
+func TestLockOut(t *testing.T) {
+	svc, b, clk := setup(t)
+	ctx := context.Background()
+	seed := enroll(t, svc, clk, "alice", "d1")
+	clk.t = clk.t.Add(30 * time.Second)
+	if err := svc.Verify(ctx, "alice", "d1", "000000"); !errors.Is(err, mfa.ErrInvalidCode) {
+		t.Fatal(err)
+	}
+	if err := svc.LockOut(ctx, "bob", "d1"); err != nil {
+		t.Fatal(err)
+	}
+	if d, err := store.Get[iam.MfaDevice](ctx, b, "d1"); err != nil || !d.Object.LockedUntil.IsZero() || d.Object.FailedAttempts != 1 {
+		t.Fatalf("another user's LockOut changed the device: %+v %v", d.Object, err)
+	}
+	first := clk.t
+	if err := svc.LockOut(ctx, "ALICE", "d1"); err != nil {
+		t.Fatal(err)
+	}
+	clk.t = first.Add(5 * time.Minute)
+	if err := svc.LockOut(ctx, "alice", "d1"); err != nil {
+		t.Fatal(err)
+	}
+	d, err := store.Get[iam.MfaDevice](ctx, b, "d1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := clk.t
+	if want := last.Add(mfa.LockoutDuration); !d.Object.LockedUntil.Equal(want) || d.Object.FailedAttempts != 0 {
+		t.Fatalf("LockedUntil %v failed %d, want %v and 0", d.Object.LockedUntil, d.Object.FailedAttempts, want)
+	}
+	clk.t = first.Add(mfa.LockoutDuration + time.Second) // first lock over, last not
+	if err := svc.Verify(ctx, "alice", "d1", code(seed, clk.t, 0)); !errors.Is(err, mfa.ErrLocked) {
+		t.Fatalf("still locked from the last call: %v", err)
+	}
+	if err := svc.LockOut(ctx, "alice", "missing"); err != nil {
+		t.Fatalf("missing device: %v", err)
+	}
+	clk.t = last.Add(mfa.LockoutDuration)
+	if err := svc.Verify(ctx, "alice", "d1", code(seed, clk.t, 0)); err != nil {
+		t.Fatalf("after the lock: %v", err)
+	}
+}
