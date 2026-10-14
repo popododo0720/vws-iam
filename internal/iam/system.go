@@ -90,3 +90,37 @@ func (r ReplayEntry) Validate() error {
 	}
 	return nil
 }
+
+// Attempt counter scopes: who failed authentication attempts are counted
+// for, besides the per-device MFA lockout.
+const (
+	AttemptUser = "user"
+	AttemptKey  = "key"
+	AttemptIP   = "ip"
+)
+
+// AttemptCounter counts failed Login, MFA and STS-MFA attempts of one
+// caller (a user, an access key or a source IP) in a fixed window, shared
+// by every replica. Key is the SHA-256 hex of the scope and the caller;
+// the user name, key id and IP are not stored.
+type AttemptCounter struct {
+	Hash        string    `json:"hash"`
+	Scope       string    `json:"scope"`
+	Failures    int       `json:"failures"`
+	WindowStart time.Time `json:"windowStart"`
+	LockedUntil time.Time `json:"lockedUntil,omitzero"`
+}
+
+func (AttemptCounter) Kind() Kind    { return KindAttempt }
+func (a AttemptCounter) Key() string { return a.Hash }
+func (a AttemptCounter) Validate() error {
+	switch a.Scope {
+	case AttemptUser, AttemptKey, AttemptIP:
+	default:
+		return invalid("attempt counter scope %q", a.Scope)
+	}
+	if !hashRE.MatchString(a.Hash) || a.Failures < 0 || a.WindowStart.IsZero() {
+		return invalid("attempt counter")
+	}
+	return nil
+}

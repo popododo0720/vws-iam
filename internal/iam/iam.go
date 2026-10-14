@@ -25,10 +25,11 @@ const (
 	KindSession   Kind = "IamSession"
 	KindOperation Kind = "IamOperation"
 	KindReplay    Kind = "IamReplayEntry"
+	KindAttempt   Kind = "IamAttemptCounter"
 )
 
 // Kinds lists every stored kind.
-var Kinds = []Kind{KindUser, KindGroup, KindRole, KindPolicy, KindAccessKey, KindMfaDevice, KindKeyIndex, KindSession, KindOperation, KindReplay}
+var Kinds = []Kind{KindUser, KindGroup, KindRole, KindPolicy, KindAccessKey, KindMfaDevice, KindKeyIndex, KindSession, KindOperation, KindReplay, KindAttempt}
 
 // Meta is the resource envelope every API resource carries.
 type Meta struct {
