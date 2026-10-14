@@ -74,7 +74,7 @@ func TestArchitectureRules(t *testing.T) {
 		for _, im := range f.imports {
 			kube := strings.HasPrefix(im, "k8s.io/") || strings.HasPrefix(im, "sigs.k8s.io/")
 			switch {
-			case (f.pkg == "internal/iam" || f.pkg == "internal/policy") && !f.test && (strings.HasPrefix(im, module) || kube || strings.HasPrefix(im, "google.golang.org/")):
+			case (f.pkg == "internal/iam" || f.pkg == "internal/policy" || f.pkg == "internal/totp") && !f.test && (strings.HasPrefix(im, module) || kube || strings.HasPrefix(im, "google.golang.org/")):
 				t.Errorf("%s: internal/iam is pure but imports %s", f.path, im)
 			case kube && !f.test && f.pkg != "internal/store/kubestore":
 				t.Errorf("%s: Kubernetes import %s outside internal/store/kubestore", f.path, im)
