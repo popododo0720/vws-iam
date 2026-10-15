@@ -57,7 +57,7 @@ func (s *Service) attempt(ctx context.Context, name string, check func(d *iam.Mf
 			return err
 		}
 		if !d.LockedUntil.IsZero() { // lock expired
-			d.LockedUntil, d.FailedAttempts = time.Time{}, 0
+			d.LockedUntil, d.LockedSince, d.FailedAttempts = time.Time{}, time.Time{}, 0
 		}
 		if ok {
 			d.FailedAttempts = 0
@@ -66,7 +66,7 @@ func (s *Service) attempt(ctx context.Context, name string, check func(d *iam.Mf
 		d.FailedAttempts++
 		verr = ErrInvalidCode
 		if d.FailedAttempts >= MaxFailedAttempts {
-			d.LockedUntil, d.FailedAttempts = now.Add(LockoutDuration), 0
+			d.LockedUntil, d.LockedSince, d.FailedAttempts = now.Add(LockoutDuration), now, 0
 			verr = ErrLocked
 		}
 		return nil
@@ -224,31 +224,6 @@ func (s *Service) Verify(ctx context.Context, user, name, code string) error {
 		d.LastStep = step
 		return true, nil
 	})
-}
-
-// LockOut locks user's enabled device name for LockoutDuration from now,
-// as after MaxFailedAttempts wrong codes, without checking a code. It is
-// used when an attempt was refused by a per-caller limit, so the lock runs
-// from the last attempt. A device that is not the user's is left alone.
-func (s *Service) LockOut(ctx context.Context, user, name string) error {
-	_, err := store.Mutate(ctx, s.b, name, func(d *iam.MfaDevice) error {
-		if !d.Enabled || store.Fold(d.UserName) != store.Fold(user) {
-			return errNoWrite
-		}
-		until := s.now().UTC().Add(LockoutDuration)
-		if !until.After(d.LockedUntil) {
-			return errNoWrite
-		}
-		d.LockedUntil, d.FailedAttempts = until, 0
-		return nil
-	})
-	if errors.Is(err, errNoWrite) || errors.Is(err, store.ErrNotFound) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("mfa device %s: %w", name, err)
-	}
-	return nil
 }
 
 // Required reports whether user has an enabled device (login needs a code).

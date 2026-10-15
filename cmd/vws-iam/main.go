@@ -200,7 +200,7 @@ func bootstrapRoot(ctx context.Context, b store.Backend, keys *secret.Keyring, c
 }
 
 func run(ctx context.Context, cfg config) (err error) {
-	shutdown, err := obs.Setup(ctx, obs.ForService(grpcapi.ServiceName))
+	shutdown, err := obs.Setup(ctx, obs.ForService(grpcapi.ServiceName), withVersion())
 	if err != nil {
 		return fmt.Errorf("obs setup: %w", err)
 	}

@@ -364,6 +364,7 @@ func (s *Server) Login(ctx context.Context, req *iamv1.LoginRequest) (resp *iamv
 		}
 		return invalidCredentials("InvalidAuthenticationCode", "invalid MFA code")
 	})
+	renewLoginLock(ctx, p, req.GetUserName(), err)
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
