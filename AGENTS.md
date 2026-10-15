@@ -64,7 +64,7 @@ Every row names its enforcer. `TestAgentsRulesNameAnEnforcer` (internal/archtest
 | Code is gofmt and goimports clean and passes the `.golangci.yml` linters. `third_party` is excluded. | `golangci-lint` v2.14.0 in CI, `gofmt -l` step in CI |
 | `go test -race ./...` passes. The envtest test skips unless `KUBEBUILDER_ASSETS` is set. | CI `test` job |
 | Every rule in this table names an enforcer. | `TestAgentsRulesNameAnEnforcer` |
-| A pull request targets `main` and closes an issue. | `scripts/guard-agents.sh pr-base`, `pr-body` (repo-guard) |
+| A pull request targets `main`, its body says `Part of #N`, and neither the body nor a commit closes an issue. | `scripts/guard-agents.sh pr-base`, `pr-body` (repo-guard) |
 | Work on a feature branch. Never commit to `main`. | `direct-push-watch.yml` (after the fact), Judgment before |
 | Each commit is one logical change and leaves `go test ./...` passing. | Judgment |
 | The repo is English only (see "English only"); Hangul only in files `.github/english-allowlist` lists with a reason. | `scripts/check-english.sh` (CI `english` job) |
@@ -78,7 +78,7 @@ Write everything in this repo in English: README, code comments, docs, AGENTS.md
 Bots are insider risks too. These rules have no exceptions. Design: `popododo0720/vws-deploy#33`.
 
 1. **Independent verification.** The bot or model that wrote a change does not verify it. Another bot or a person does. This is process, and CI cannot enforce it.
-2. **Record.** Every change is an issue, then a PR with `Closes #N`, then commits. The PR body says what changed, how it was verified, and what was not verified. No force-push or history rewrite without the user's approval.
+2. **Record.** Every change is an issue, then a PR with `Part of #N`, then commits. The PR body says what changed, how it was verified, and what was not verified. No force-push or history rewrite without the user's approval.
 3. **Failing tests.** A new feature is not tested on the happy path alone. It has at least one case each for power loss or restart, idempotent replay, and hostile or boundary input. Otherwise the PR says why one is impossible.
 4. **Least privilege.** No push to `main`. Every change is one PR from its own branch off `main`. No stacked PRs and no local merges. Tokens are scoped to this repository. RBAC covers only what the code calls, in a namespaced Role where possible (`vws-deploy` `docs/rbac.md`).
 5. **Separate audit.** The author, the verifier, and the merge decision are different. The author never merges its own PR. Merge only when the base is `main` and every check on the head commit is success.

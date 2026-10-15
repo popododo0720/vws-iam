@@ -198,7 +198,10 @@ func testSTSLockRenewal(t *testing.T, backend func(*testing.T) store.Backend) {
 	seed, serial, _ := strings.Cut(enableMFA(t, a, ctx, "alice"), "|")
 	gstMFA := func(e *env, code string) error {
 		_, err := e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{
-			Authentication: gstSig(a.stsSign(kid, key.GetSecretAccessKey(), "", "GetSessionToken")), SerialNumber: serial, TokenCode: code})
+			Authentication: gstSig(a.stsSign(kid, key.GetSecretAccessKey(), "", "GetSessionToken")),
+			SerialNumber:   serial,
+			TokenCode:      code,
+		})
 		return err
 	}
 	// tripUser puts alice's user counter at its limit in a fresh window,
