@@ -129,7 +129,7 @@ func (s *Server) CreatePolicy(ctx context.Context, req *iamv1.CreatePolicyReques
 	if err != nil {
 		return nil, err
 	}
-	if err := checkID(req.GetPolicyId(), "policy"); err != nil {
+	if err := checkPolicyID(req.GetPolicyId()); err != nil {
 		return nil, err
 	}
 	p := s.project(pid)

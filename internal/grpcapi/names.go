@@ -47,7 +47,14 @@ func name(project, collection, id string) string {
 
 func checkID(id, what string) error {
 	if !iam.ValidName(id) {
-		return invalidID(what + " id " + quote(id) + " must match [A-Za-z0-9+=,.@_-]{1,64}")
+		return invalidID(what + " id " + quote(id) + " must match " + iam.ResourceNamePattern())
+	}
+	return nil
+}
+
+func checkPolicyID(id string) error {
+	if !iam.ValidPolicyName(id) {
+		return invalidID("policy id " + quote(id) + " must match " + iam.PolicyNamePattern())
 	}
 	return nil
 }

@@ -44,3 +44,86 @@ func TestARNs(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestPolicyNameLength(t *testing.T) {
+	policy := func(name string) iam.Policy {
+		return iam.Policy{Name: name, DefaultVersion: "v1", Versions: []iam.PolicyVersion{{ID: "v1"}}}
+	}
+	for _, name := range []string{"a", strings.Repeat("a", 64), strings.Repeat("a", 65), strings.Repeat("a", 128), "A.z+9=,_@-"} {
+		if err := policy(name).Validate(); err != nil {
+			t.Errorf("%d-character policy: %v", len(name), err)
+		}
+	}
+	a129 := strings.Repeat("a", 129)
+	err := policy(a129).Validate()
+	want := `invalid: policy name "` + a129 + `"`
+	if err == nil || err.Error() != want || !errors.Is(err, iam.ErrInvalid) {
+		t.Errorf("129-character policy: %v", err)
+	}
+	for _, name := range []string{"", "bad name", "a/b"} {
+		err := policy(name).Validate()
+		want := `invalid: policy name "` + name + `"`
+		if err == nil || err.Error() != want {
+			t.Errorf("policy %q: %v, want %s", name, err, want)
+		}
+	}
+	if err := policy(strings.Repeat("é", 64)).Validate(); !errors.Is(err, iam.ErrInvalid) {
+		t.Errorf("non-ASCII policy: %v", err)
+	}
+	err = policy(strings.Repeat("a", 1<<20)).Validate()
+	if !errors.Is(err, iam.ErrInvalid) {
+		t.Errorf("1 MiB policy: nil=%v", err == nil)
+	}
+}
+
+func TestOtherNamesStayAt64(t *testing.T) {
+	n64 := strings.Repeat("n", 64)
+	n65 := strings.Repeat("n", 65)
+	seal := iam.Sealed{KeyID: "kek-1", Ciphertext: []byte{1, 2, 3}}
+	trust := `{"Version":"2012-10-17","Statement":[]}`
+	expires := time.Date(2026, 10, 14, 1, 0, 0, 0, time.UTC)
+	hash := strings.Repeat("ab", 32)
+	keyID := "AKIAABCDEFGHIJKLMNOP"
+	cases := []struct {
+		name string
+		ok   iam.Object
+		bad  iam.Object
+	}{
+		{"user", iam.User{Name: n64}, iam.User{Name: n65}},
+		{"group", iam.Group{Name: n64}, iam.Group{Name: n65}},
+		{
+			"role",
+			iam.Role{Name: n64, AssumeRolePolicy: trust, MaxSessionDuration: time.Hour},
+			iam.Role{Name: n65, AssumeRolePolicy: trust, MaxSessionDuration: time.Hour},
+		},
+		{"mfa device", iam.MfaDevice{Name: n64, Seed: seal}, iam.MfaDevice{Name: n65, Seed: seal}},
+		{
+			"access key",
+			iam.AccessKey{ID: keyID, UserName: n64, Status: iam.KeyActive, Secret: seal},
+			iam.AccessKey{ID: keyID, UserName: n65, Status: iam.KeyActive, Secret: seal},
+		},
+		{
+			"session",
+			iam.Session{Hash: hash, Project: "proj-a", UserName: n64, Expires: expires},
+			iam.Session{Hash: hash, Project: "proj-a", UserName: n65, Expires: expires},
+		},
+		{
+			"inline policy",
+			iam.User{Name: "user", InlinePolicies: map[string]string{n64: "{}"}},
+			iam.User{Name: "user", InlinePolicies: map[string]string{n65: "{}"}},
+		},
+		{
+			"group member",
+			iam.Group{Name: "group", Members: []string{n64}},
+			iam.Group{Name: "group", Members: []string{n65}},
+		},
+	}
+	for _, tc := range cases {
+		if err := tc.ok.Validate(); err != nil {
+			t.Errorf("%s of 64: %v", tc.name, err)
+		}
+		if err := tc.bad.Validate(); !errors.Is(err, iam.ErrInvalid) {
+			t.Errorf("%s of 65: %v", tc.name, err)
+		}
+	}
+}
