@@ -41,8 +41,10 @@ func (s *Server) RevokeUserSessions(ctx context.Context, req *iamv1.RevokeUserSe
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
-	op, err := s.done(ctx, opArgs{project: pid, method: method, requestID: req.GetRequestId(), req: req, resource: resp.GetName(),
-		verb: commonv1.OperationVerb_OPERATION_VERB_UPDATE, generation: v.Object.Generation, response: resp})
+	op, err := s.done(ctx, opArgs{
+		project: pid, method: method, requestID: req.GetRequestId(), req: req, resource: resp.GetName(),
+		verb: commonv1.OperationVerb_OPERATION_VERB_UPDATE, generation: v.Object.Generation, response: resp,
+	})
 	return op, toStatus(ctx, err)
 }
 
@@ -72,7 +74,9 @@ func (s *Server) RevokeRoleSessions(ctx context.Context, req *iamv1.RevokeRoleSe
 		return nil, toStatus(ctx, err)
 	}
 	resp := p.roleProto(v)
-	op, err := s.done(ctx, opArgs{project: pid, method: method, requestID: req.GetRequestId(), req: req, resource: resp.GetName(),
-		verb: commonv1.OperationVerb_OPERATION_VERB_UPDATE, generation: v.Object.Generation, response: resp})
+	op, err := s.done(ctx, opArgs{
+		project: pid, method: method, requestID: req.GetRequestId(), req: req, resource: resp.GetName(),
+		verb: commonv1.OperationVerb_OPERATION_VERB_UPDATE, generation: v.Object.Generation, response: resp,
+	})
 	return op, toStatus(ctx, err)
 }

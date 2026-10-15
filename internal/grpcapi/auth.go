@@ -389,8 +389,10 @@ func (s *Server) Login(ctx context.Context, req *iamv1.LoginRequest) (resp *iamv
 	}
 	return &iamv1.LoginResponse{
 		SessionToken: tok, ExpireTime: timestamppb.New(sess.Expires), PasswordResetRequired: u.Object.PasswordResetRequired,
-		Principal: &iamv1.Principal{Type: iamv1.PrincipalType_PRINCIPAL_TYPE_USER, Arn: iam.UserARN(pid, u.Object), Project: pid, UniqueId: u.Object.ID,
-			Resource: name(pid, "users", u.Object.Name), MfaAuthenticated: mfaOK, AuthTime: timestamppb.New(now)},
+		Principal: &iamv1.Principal{
+			Type: iamv1.PrincipalType_PRINCIPAL_TYPE_USER, Arn: iam.UserARN(pid, u.Object), Project: pid, UniqueId: u.Object.ID,
+			Resource: name(pid, "users", u.Object.Name), MfaAuthenticated: mfaOK, AuthTime: timestamppb.New(now),
+		},
 	}, nil
 }
 

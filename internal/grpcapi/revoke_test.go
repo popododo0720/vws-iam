@@ -67,8 +67,13 @@ func testRevokeSessions(t *testing.T, b store.Backend) {
 	ctx := t.Context()
 	// alice may assume deployer.
 	pol := a.createPolicy(t, ctx, "assume", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sts:AssumeRole","Resource":"*"}]}`)
-	if _, err := a.users.UpdateUser(ctx, &iamv1.UpdateUserRequest{User: &iamv1.User{Name: parentName + "/users/alice", Spec: &iamv1.UserSpec{AttachedPolicies: []string{pol.GetName()}}},
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.attached_policies"}}}); err != nil {
+	if _, err := a.users.UpdateUser(ctx, &iamv1.UpdateUserRequest{
+		User: &iamv1.User{
+			Name: parentName + "/users/alice",
+			Spec: &iamv1.UserSpec{AttachedPolicies: []string{pol.GetName()}},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.attached_policies"}},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:vws:iam::acme:user/alice"},"Action":"sts:AssumeRole"}]}`
@@ -163,8 +168,10 @@ func TestRevokeSessionsAuthz(t *testing.T) {
 		{"Sid":"Alice","Effect":"Allow","Action":"iam:RevokeUserSessions","Resource":"arn:vws:iam::acme:user/alice"},
 		{"Sid":"Roles","Effect":"Allow","Action":"iam:RevokeRoleSessions","Resource":"arn:vws:iam::acme:role/*"},
 		{"Sid":"NotProd","Effect":"Deny","Action":"iam:RevokeRoleSessions","Resource":"arn:vws:iam::acme:role/prod"}]}`)
-	if _, err := e.users.UpdateUser(ctx, &iamv1.UpdateUserRequest{User: &iamv1.User{Name: admin.GetName(), Spec: &iamv1.UserSpec{AttachedPolicies: []string{pol.GetName()}}},
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.attached_policies"}}}); err != nil {
+	if _, err := e.users.UpdateUser(ctx, &iamv1.UpdateUserRequest{
+		User:       &iamv1.User{Name: admin.GetName(), Spec: &iamv1.UserSpec{AttachedPolicies: []string{pol.GetName()}}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.attached_policies"}},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	pr := &iamv1.Principal{Type: iamv1.PrincipalType_PRINCIPAL_TYPE_USER, Arn: admin.GetStatus().GetArn(), Project: proj, UniqueId: admin.GetStatus().GetUniqueId(), Resource: admin.GetName()}

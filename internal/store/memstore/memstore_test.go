@@ -3,7 +3,6 @@ package memstore_test
 import (
 	"context"
 	"errors"
-
 	"testing"
 
 	"github.com/popododo0720/vws-iam/internal/iam"

@@ -32,8 +32,10 @@ func (p project) mfaProto(d iam.MfaDevice, version string) *iamv1.MfaDevice {
 // the lockout runs (vws-proto#32). These are admin fields: MfaDevice
 // calls are authorized by console-api before they reach this service.
 func (p project) mfaStatus(d iam.MfaDevice, user string) *iamv1.MfaDeviceStatus {
-	st := &iamv1.MfaDeviceStatus{Observed: ready(d.Generation), SerialNumber: p.mfa.Serial(d.Name), User: user, EnableTime: ts(d.EnableTime),
-		FailedAttempts: int32(min(d.FailedAttempts, mfa.MaxFailedAttempts))} //nolint:gosec // bounded by MaxFailedAttempts
+	st := &iamv1.MfaDeviceStatus{
+		Observed: ready(d.Generation), SerialNumber: p.mfa.Serial(d.Name), User: user, EnableTime: ts(d.EnableTime),
+		FailedAttempts: int32(min(d.FailedAttempts, mfa.MaxFailedAttempts)),
+	} //nolint:gosec // bounded by MaxFailedAttempts
 	if p.now().Before(d.LockedUntil) {
 		st.LockedUntil = ts(d.LockedUntil)
 	}

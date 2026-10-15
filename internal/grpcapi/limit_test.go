@@ -133,7 +133,10 @@ func testAttemptLimits(t *testing.T, backend func(*testing.T) store.Backend) {
 		seed, serial := pair[0], pair[1]
 		gstMFA := func(code string) error {
 			_, err := e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{
-				Authentication: gstSig(e.stsSign(kid, key.GetSecretAccessKey(), "", "GetSessionToken")), SerialNumber: serial, TokenCode: code})
+				Authentication: gstSig(e.stsSign(kid, key.GetSecretAccessKey(), "", "GetSessionToken")),
+				SerialNumber:   serial,
+				TokenCode:      code,
+			})
 			return err
 		}
 		for range grpcapi.KeyAttemptLimit {
@@ -167,7 +170,10 @@ func testAttemptLimits(t *testing.T, backend func(*testing.T) store.Backend) {
 		// One signer for both replicas: each request has its own nonce.
 		gstMFA := func(e *env, code string) error {
 			_, err := e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{
-				Authentication: gstSig(a.stsSign(kid, key.GetSecretAccessKey(), "", "GetSessionToken")), SerialNumber: serial, TokenCode: code})
+				Authentication: gstSig(a.stsSign(kid, key.GetSecretAccessKey(), "", "GetSessionToken")),
+				SerialNumber:   serial,
+				TokenCode:      code,
+			})
 			return err
 		}
 		t0 := now // after enabling, which moves the clock

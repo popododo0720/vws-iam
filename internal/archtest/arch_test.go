@@ -79,8 +79,10 @@ var packageRules = []struct {
 	{"internal/totp", func(imp string) bool { return isModule(imp) || transport(imp) }, "TOTP is pure"},
 	{"internal/sts", transport, "domain services import no transport"},
 	{"internal/sigv4", func(imp string) bool { return isModule(imp) || transport(imp) }, "SigV4 verification is pure"},
-	{"internal/grpcapi", hasPrefix(module+"/internal/store/kubestore", module+"/internal/store/memstore"),
-		"the server uses the store.Backend contract, not a backend's internals"},
+	{
+		"internal/grpcapi", hasPrefix(module+"/internal/store/kubestore", module+"/internal/store/memstore"),
+		"the server uses the store.Backend contract, not a backend's internals",
+	},
 }
 
 // ownerRules confine an import to the directories that own it.
@@ -91,8 +93,16 @@ var ownerRules = []struct {
 }{
 	{hasPrefix("database/sql"), nil, "no SQL: state lives in custom resources"},
 	{func(imp string) bool { return imp == "log" || hasPrefix("github.com/getsentry")(imp) }, nil, "logs are slog through vws-lib obs"},
-	{hasPrefix("google.golang.org/protobuf", "google.golang.org/genproto", "github.com/popododo0720/vws-proto", "cloud.google.com/go/longrunning"),
-		[]string{"internal/grpcapi"}, "wire types stay in grpcapi"},
+	{
+		hasPrefix(
+			"google.golang.org/protobuf",
+			"google.golang.org/genproto",
+			"github.com/popododo0720/vws-proto",
+			"cloud.google.com/go/longrunning",
+		),
+		[]string{"internal/grpcapi"},
+		"wire types stay in grpcapi",
+	},
 	{hasPrefix("google.golang.org/grpc"), []string{"internal/grpcapi", "cmd/vws-iam"}, "gRPC stays at the edge"},
 	{hasPrefix("k8s.io", "sigs.k8s.io"), []string{"internal/store/kubestore"}, "Kubernetes client types stay in the custom resource store"},
 	{hasPrefix("github.com/popododo0720/vws-lib"), []string{"internal/grpcapi", "cmd/vws-iam"}, "observability is wired at the edge"},
