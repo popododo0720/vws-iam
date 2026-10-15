@@ -24,6 +24,7 @@ func TestBuildVersion(t *testing.T) {
 	}{
 		{"linker wins", "v0.5.0", info("(devel)", "false"), true, "v0.5.0"},
 		{"tagged module version wins", "", info("v0.4.1", "false"), true, "v0.4.1"},
+		{"pre-release tag wins", "", info("v0.4.1-rc.1", "false"), true, "v0.4.1-rc.1"},
 		{"pseudo-version falls through", "", info("v0.0.0-20261015160424-c4ded37d70e1", "false"), true, "c4ded37d70e1"},
 		{"pseudo-version after a tag falls through", "", info("v0.4.2-0.20261015160424-c4ded37d70e1", "false"), true, "c4ded37d70e1"},
 		{"dirty pseudo-version", "", info("v0.0.0-20261015160424-c4ded37d70e1+dirty", "true"), true, "c4ded37d70e1-dirty"},
