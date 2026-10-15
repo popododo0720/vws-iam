@@ -891,3 +891,87 @@ func TestMfaDeviceLockoutStatus(t *testing.T) {
 		t.Fatalf("after lockout: %v", err)
 	}
 }
+
+func TestCreatePolicyNameLength(t *testing.T) {
+	doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*"}]}`
+	t.Run("128", func(t *testing.T) {
+		ctx := t.Context()
+		now := time.Now().UTC()
+		b := memstore.New()
+		e := newEnvOn(t, b, &now)
+		name := strings.Repeat("a", 128)
+		req := &iamv1.CreatePolicyRequest{
+			Parent: parentName, PolicyId: name, RequestId: "6f1c2d1e-0000-4000-8000-000000000128",
+			Policy: &iamv1.Policy{Spec: &iamv1.PolicySpec{Document: doc}},
+		}
+		op1, err := e.policies.CreatePolicy(ctx, req)
+		if err != nil {
+			t.Fatalf("128-character policy: %v", err)
+		}
+		pol := unpack(t, op1, &iamv1.Policy{})
+		if pol.GetName() != parentName+"/policies/"+name {
+			t.Fatalf("name %q", pol.GetName())
+		}
+		if pol.GetStatus().GetArn() != "arn:vws:iam::acme:policy/"+name {
+			t.Fatalf("arn %q", pol.GetStatus().GetArn())
+		}
+		op2, err := e.policies.CreatePolicy(ctx, req)
+		if err != nil || op2.GetName() != op1.GetName() {
+			t.Fatalf("replay: %v %v", op2.GetName(), err)
+		}
+		e2 := newEnvOn(t, b, &now)
+		got, err := e2.policies.GetPolicy(ctx, &iamv1.GetPolicyRequest{Name: parentName + "/policies/" + name})
+		if err != nil {
+			t.Fatalf("second server: %v", err)
+		}
+		if got.GetStatus().GetArn() != "arn:vws:iam::acme:policy/"+name {
+			t.Fatalf("second server arn %q", got.GetStatus().GetArn())
+		}
+		u := e.createUser(t, ctx, "alice")
+		if _, err := e.users.UpdateUser(ctx, &iamv1.UpdateUserRequest{
+			User:       &iamv1.User{Name: u.GetName(), Spec: &iamv1.UserSpec{AttachedPolicies: []string{pol.GetName()}}},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.attached_policies"}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		stored, err := e.users.GetUser(ctx, &iamv1.GetUserRequest{Name: u.GetName()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := stored.GetSpec().GetAttachedPolicies(); len(n) != 1 || n[0] != pol.GetName() {
+			t.Fatalf("attached %q", n)
+		}
+	})
+	t.Run("rejected", func(t *testing.T) {
+		e := newEnv(t)
+		ctx := t.Context()
+		for _, id := range []string{strings.Repeat("b", 129), "", "bad name"} {
+			_, err := e.policies.CreatePolicy(ctx, &iamv1.CreatePolicyRequest{
+				Parent: parentName, PolicyId: id, Policy: &iamv1.Policy{Spec: &iamv1.PolicySpec{Document: doc}},
+			})
+			wantErr(t, err, codes.InvalidArgument, "INVALID_RESOURCE_ID", "ValidationError")
+			want := `policy id "` + id + `" must match [A-Za-z0-9+=,.@_-]{1,128}`
+			if got := status.Convert(err).Message(); got != want {
+				t.Errorf("message %q, want %q", got, want)
+			}
+		}
+		u := e.createUser(t, ctx, "alice")
+		userID := strings.Repeat("u", 65)
+		_, err := e.users.CreateUser(ctx, &iamv1.CreateUserRequest{
+			Parent: parentName, UserId: userID, User: &iamv1.User{Spec: &iamv1.UserSpec{}},
+		})
+		wantErr(t, err, codes.InvalidArgument, "INVALID_RESOURCE_ID", "ValidationError")
+		if got, want := status.Convert(err).Message(), `user id "`+userID+`" must match [A-Za-z0-9+=,.@_-]{1,64}`; got != want {
+			t.Errorf("message %q, want %q", got, want)
+		}
+		inline := strings.Repeat("p", 65)
+		_, err = e.users.UpdateUser(ctx, &iamv1.UpdateUserRequest{
+			User:       &iamv1.User{Name: u.GetName(), Spec: &iamv1.UserSpec{InlinePolicies: map[string]string{inline: doc}}},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.inline_policies"}},
+		})
+		wantErr(t, err, codes.InvalidArgument, "INVALID_SPEC", "ValidationError")
+		if got, want := status.Convert(err).Message(), `inline policy name "`+inline+`"`; got != want {
+			t.Errorf("message %q, want %q", got, want)
+		}
+	})
+}

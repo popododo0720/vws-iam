@@ -5,7 +5,9 @@ package kubestore
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base32"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -36,9 +38,21 @@ func GVK(kind iam.Kind) schema.GroupVersionKind {
 
 var enc = base32.HexEncoding.WithPadding(base32.NoPadding)
 
+// maxDNS1123Name is the Kubernetes subdomain limit.
+const maxDNS1123Name = 253
+
 // objectName maps a case-insensitive IAM key to a DNS-1123 subdomain.
+// A key whose base32 form fits keeps that form, so an object stored
+// before the hash fallback is still found. A longer key is h plus the
+// SHA-256 hex of the folded key. That form cannot collide with a k name.
 func objectName(key string) string {
-	return "k" + strings.ToLower(enc.EncodeToString([]byte(store.Fold(key))))
+	folded := store.Fold(key)
+	name := "k" + strings.ToLower(enc.EncodeToString([]byte(folded)))
+	if len(name) <= maxDNS1123Name {
+		return name
+	}
+	sum := sha256.Sum256([]byte(folded))
+	return "h" + hex.EncodeToString(sum[:])
 }
 
 // Store is a store.Backend on a controller-runtime client.

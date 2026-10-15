@@ -237,6 +237,41 @@ func Run(t *testing.T, open func(t *testing.T) store.Backend) {
 			t.Fatal(err)
 		}
 	})
+	t.Run("PolicyName128RoundTrip", func(t *testing.T) {
+		b := open(t)
+		ctx := context.Background()
+		now := time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)
+		name := strings.Repeat("P", 128)
+		pol := iam.Policy{
+			Name: name, ID: "ANPA1", Created: now, DefaultVersion: "v1",
+			Versions: []iam.PolicyVersion{{ID: "v1", Document: `{}`, Created: now}},
+		}
+		if _, err := store.Create(ctx, b, pol); err != nil {
+			t.Fatalf("create 128-character policy: %v", err)
+		}
+		got, err := store.Get[iam.Policy](ctx, b, strings.Repeat("p", 128))
+		if err != nil {
+			t.Fatalf("get folded name: %v", err)
+		}
+		if got.Object.Name != name {
+			t.Fatalf("name %q", got.Object.Name)
+		}
+		if _, err := store.Create(ctx, b, pol); !errors.Is(err, store.ErrExists) {
+			t.Fatalf("second create: %v", err)
+		}
+		long := pol
+		long.Name = strings.Repeat("P", 129)
+		if _, err := store.Create(ctx, b, long); !errors.Is(err, iam.ErrInvalid) {
+			t.Fatalf("create 129-character policy: %v", err)
+		}
+		all, err := store.List[iam.Policy](ctx, b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(all) != 1 || all[0].Object.Name != name {
+			t.Fatalf("list %d policies", len(all))
+		}
+	})
 }
 
 func mustJSON(t *testing.T, v any) string {

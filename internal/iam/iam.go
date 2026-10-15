@@ -55,26 +55,57 @@ type Object interface {
 // ErrInvalid wraps every validation failure.
 var ErrInvalid = errors.New("invalid")
 
+// The hyphen is last so the class treats it as a literal.
+const nameAlphabet = "A-Za-z0-9+=,.@_-"
+
+const (
+	maxNameLen       = 64
+	MaxPolicyNameLen = 128
+)
+
+func namePattern(max int) string {
+	return fmt.Sprintf("[%s]{1,%d}", nameAlphabet, max)
+}
+
+func ResourceNamePattern() string { return namePattern(maxNameLen) }
+
+func PolicyNamePattern() string { return namePattern(MaxPolicyNameLen) }
+
 var (
-	nameRE = regexp.MustCompile(`^[A-Za-z0-9+=,.@_-]{1,64}$`)
-	pathRE = regexp.MustCompile(`^/([\x21-\x7e]{0,510}/)?$`)
+	nameRE       = regexp.MustCompile("^" + ResourceNamePattern() + "$")
+	policyNameRE = regexp.MustCompile("^" + PolicyNamePattern() + "$")
+	pathRE       = regexp.MustCompile(`^/([\x21-\x7e]{0,510}/)?$`)
 )
 
 func invalid(format string, a ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalid, fmt.Sprintf(format, a...))
 }
 
-// ValidName reports whether s is an IAM user, group, role, or policy name.
+// ValidName reports whether s is an IAM name other than a managed policy name.
 func ValidName(s string) bool { return nameRE.MatchString(s) }
+
+// ValidPolicyName reports whether s is a managed policy name.
+func ValidPolicyName(s string) bool { return policyNameRE.MatchString(s) }
+
+func checkPath(what, path string) error {
+	if path != "" && !pathRE.MatchString(path) {
+		return invalid("%s path %q", what, path)
+	}
+	return nil
+}
 
 func checkName(what, name, path string) error {
 	if !ValidName(name) {
 		return invalid("%s name %q", what, name)
 	}
-	if path != "" && !pathRE.MatchString(path) {
-		return invalid("%s path %q", what, path)
+	return checkPath(what, path)
+}
+
+func checkPolicyName(name, path string) error {
+	if !ValidPolicyName(name) {
+		return invalid("policy name %q", name)
 	}
-	return nil
+	return checkPath("policy", path)
 }
 
 func checkAttached(arns []string) error {
@@ -250,7 +281,7 @@ type Policy struct {
 func (Policy) Kind() Kind    { return KindPolicy }
 func (p Policy) Key() string { return p.Name }
 func (p Policy) Validate() error {
-	if err := checkName("policy", p.Name, p.Path); err != nil {
+	if err := checkPolicyName(p.Name, p.Path); err != nil {
 		return err
 	}
 	if len(p.Versions) == 0 || len(p.Versions) > MaxPolicyVersions {
