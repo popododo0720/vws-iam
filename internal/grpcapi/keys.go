@@ -29,8 +29,10 @@ func (p project) keyProto(k iam.AccessKey, version string) *iamv1.AccessKey {
 	return &iamv1.AccessKey{
 		Name: keyName(p.id, k.UserName, k.ID), Uid: k.UID, Generation: k.Generation, Etag: version, Labels: labels(k.Labels),
 		Spec: &iamv1.AccessKeySpec{State: keyState(k.Status)},
-		Status: &iamv1.AccessKeyStatus{Observed: ready(k.Generation), LastUsedTime: ts(k.LastUsed),
-			LastUsedService: k.LastUsedService, LastUsedRegion: k.LastUsedRegion},
+		Status: &iamv1.AccessKeyStatus{
+			Observed: ready(k.Generation), LastUsedTime: ts(k.LastUsed),
+			LastUsedService: k.LastUsedService, LastUsedRegion: k.LastUsedRegion,
+		},
 		CreateTime: ts(k.Created), UpdateTime: ts(k.Updated),
 	}
 }

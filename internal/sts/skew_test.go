@@ -85,8 +85,11 @@ func testRevokeSkew(t *testing.T, backend func(*testing.T) store.Backend) {
 				t.Fatal(err)
 			}
 			put(t, b, iam.User{Name: "alice", ID: "1", InlinePolicies: map[string]string{"assume": assumeAny}})
-			put(t, b, iam.Role{Name: "admin", ID: "4", MaxSessionDuration: 12 * time.Hour,
-				AssumeRolePolicy: `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Principal":{"AWS":"arn:vws:iam::` + acct + `:user/alice"},"Action":"sts:AssumeRole"}}`})
+			put(t, b, iam.Role{
+				Name: "admin", ID: "4", MaxSessionDuration: 12 * time.Hour,
+				AssumeRolePolicy: `{"Version":"2012-10-17","Statement":{"Effect":"Allow",` +
+					`"Principal":{"AWS":"arn:vws:iam::` + acct + `:user/alice"},"Action":"sts:AssumeRole"}}`,
+			})
 			base := time.Now().UTC()
 			mk := func(off time.Duration) replica {
 				clk := &clock{t: base.Add(off)}

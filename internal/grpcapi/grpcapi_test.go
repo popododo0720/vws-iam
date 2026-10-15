@@ -144,8 +144,10 @@ func (e *env) createPolicy(t *testing.T, ctx context.Context, n, doc string) *ia
 func TestUserLifecycleAndOperations(t *testing.T) {
 	e := newEnv(t)
 	ctx := t.Context()
-	req := &iamv1.CreateUserRequest{Parent: parentName, UserId: "alice", RequestId: "6f1c2d1e-0000-4000-8000-000000000001",
-		User: &iamv1.User{Labels: map[string]string{"team": "a"}, Spec: &iamv1.UserSpec{Path: "/eng/"}}}
+	req := &iamv1.CreateUserRequest{
+		Parent: parentName, UserId: "alice", RequestId: "6f1c2d1e-0000-4000-8000-000000000001",
+		User: &iamv1.User{Labels: map[string]string{"team": "a"}, Spec: &iamv1.UserSpec{Path: "/eng/"}},
+	}
 
 	// validate_only writes nothing.
 	vreq := proto.CloneOf(req)
@@ -289,8 +291,10 @@ func (e *env) sign(id, secretKey, token string) *iamv1.AuthenticateRequest {
 	canonical := "GET\n/\n\nhost:s3.vws.local\nx-amz-date:" + amz + "\n\nhost;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 	h := sha256.Sum256([]byte(canonical))
 	sts := "AWS4-HMAC-SHA256\n" + amz + "\n" + date + "/kr-1/s3/aws4_request\n" + hex.EncodeToString(h[:])
-	return &iamv1.AuthenticateRequest{AccessKeyId: id, Date: date, Region: "kr-1", Service: "s3", CanonicalRequest: canonical,
-		StringToSign: sts, Signature: sigv4.Sign([]byte(secretKey), date, "kr-1", "s3", sts), SessionToken: token}
+	return &iamv1.AuthenticateRequest{
+		AccessKeyId: id, Date: date, Region: "kr-1", Service: "s3", CanonicalRequest: canonical,
+		StringToSign: sts, Signature: sigv4.Sign([]byte(secretKey), date, "kr-1", "s3", sts), SessionToken: token,
+	}
 }
 
 // stsSign signs an STS request as a client would; console-api forwards
@@ -303,8 +307,10 @@ func (e *env) stsSign(id, secretKey, token, action string) *iamv1.AuthenticateRe
 	canonical := "POST\n/\nAction=" + action + "&Nonce=" + strconv.Itoa(e.nonce) + "&Version=2011-06-15\nhost:sts.vws.local\nx-amz-date:" + amz + "\n\nhost;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 	h := sha256.Sum256([]byte(canonical))
 	sts := "AWS4-HMAC-SHA256\n" + amz + "\n" + date + "/kr-1/sts/aws4_request\n" + hex.EncodeToString(h[:])
-	return &iamv1.AuthenticateRequest{AccessKeyId: id, Date: date, Region: "kr-1", Service: "sts", CanonicalRequest: canonical,
-		StringToSign: sts, Signature: sigv4.Sign([]byte(secretKey), date, "kr-1", "sts", sts), SessionToken: token}
+	return &iamv1.AuthenticateRequest{
+		AccessKeyId: id, Date: date, Region: "kr-1", Service: "sts", CanonicalRequest: canonical,
+		StringToSign: sts, Signature: sigv4.Sign([]byte(secretKey), date, "kr-1", "sts", sts), SessionToken: token,
+	}
 }
 
 func gstSig(r *iamv1.AuthenticateRequest) *iamv1.GetSessionTokenRequest_Sigv4 {
@@ -323,8 +329,10 @@ func TestAuthenticateAuthorize(t *testing.T) {
 		{"Sid":"Read","Effect":"Allow","Action":"s3:GetObject","Resource":"*"},
 		{"Sid":"NoSecret","Effect":"Deny","Action":"s3:GetObject","Resource":"arn:vws:s3:::secret/*"},
 		{"Sid":"NeedMFA","Effect":"Allow","Action":"s3:DeleteObject","Resource":"*","Condition":{"Bool":{"aws:MultiFactorAuthPresent":"true"}}}]}`)
-	if _, err := e.users.UpdateUser(ctx, &iamv1.UpdateUserRequest{User: &iamv1.User{Name: u.GetName(), Spec: &iamv1.UserSpec{AttachedPolicies: []string{pol.GetName()}}},
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.attached_policies"}}}); err != nil {
+	if _, err := e.users.UpdateUser(ctx, &iamv1.UpdateUserRequest{
+		User:       &iamv1.User{Name: u.GetName(), Spec: &iamv1.UserSpec{AttachedPolicies: []string{pol.GetName()}}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.attached_policies"}},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	k, err := e.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: u.GetName()})
@@ -410,8 +418,10 @@ func enableMFA(t *testing.T, e *env, ctx context.Context, user string) string {
 		t.Fatal(err)
 	}
 	step := totp.Step(*e.now)
-	if _, err := e.mfa.EnableMfaDevice(ctx, &iamv1.EnableMfaDeviceRequest{Name: d.GetMfaDevice().GetName(), User: parentName + "/users/" + user,
-		AuthenticationCode_1: totp.Code(seed, step-1, totp.Digits), AuthenticationCode_2: totp.Code(seed, step, totp.Digits)}); err != nil {
+	if _, err := e.mfa.EnableMfaDevice(ctx, &iamv1.EnableMfaDeviceRequest{
+		Name: d.GetMfaDevice().GetName(), User: parentName + "/users/" + user,
+		AuthenticationCode_1: totp.Code(seed, step-1, totp.Digits), AuthenticationCode_2: totp.Code(seed, step, totp.Digits),
+	}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := e.mfa.GetMfaDevice(ctx, &iamv1.GetMfaDeviceRequest{Name: d.GetMfaDevice().GetName()})
@@ -523,8 +533,10 @@ func TestAssumeRole(t *testing.T) {
 	ctx := t.Context()
 	u := e.createUser(t, ctx, "alice")
 	pol := e.createPolicy(t, ctx, "assume", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sts:AssumeRole","Resource":"*"}]}`)
-	if _, err := e.users.UpdateUser(ctx, &iamv1.UpdateUserRequest{User: &iamv1.User{Name: u.GetName(), Spec: &iamv1.UserSpec{AttachedPolicies: []string{pol.GetName()}}},
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.attached_policies"}}}); err != nil {
+	if _, err := e.users.UpdateUser(ctx, &iamv1.UpdateUserRequest{
+		User:       &iamv1.User{Name: u.GetName(), Spec: &iamv1.UserSpec{AttachedPolicies: []string{pol.GetName()}}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.attached_policies"}},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:vws:iam::acme:user/alice"},"Action":"sts:AssumeRole","Condition":{"StringEquals":{"sts:ExternalId":"ext-1"}}}]}`
@@ -747,12 +759,16 @@ func TestSTSMFAIsVerifiedAndLocksOut(t *testing.T) {
 	}
 	kid := key.GetAccessKey().GetName()[strings.LastIndex(key.GetAccessKey().GetName(), "/")+1:]
 	gst := func(code string) error {
-		_, err := e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{SerialNumber: serial, TokenCode: code,
-			Authentication: gstSig(e.stsSign(kid, key.GetSecretAccessKey(), "", "GetSessionToken"))})
+		_, err := e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{
+			SerialNumber: serial, TokenCode: code,
+			Authentication: gstSig(e.stsSign(kid, key.GetSecretAccessKey(), "", "GetSessionToken")),
+		})
 		return err
 	}
-	_, err = e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{SerialNumber: serial,
-		Authentication: gstSig(e.stsSign(kid, key.GetSecretAccessKey(), "", "GetSessionToken"))})
+	_, err = e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{
+		SerialNumber:   serial,
+		Authentication: gstSig(e.stsSign(kid, key.GetSecretAccessKey(), "", "GetSessionToken")),
+	})
 	wantErr(t, err, codes.InvalidArgument, "INVALID_SPEC", "ValidationError")
 	for range 5 {
 		wantErr(t, gst("000000"), codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
@@ -772,8 +788,10 @@ func TestConsoleSessionAuthentication(t *testing.T) {
 	ctx := t.Context()
 	u := e.createUser(t, ctx, "alice")
 	pol := e.createPolicy(t, ctx, "assume", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sts:AssumeRole","Resource":"*"}]}`)
-	if _, err := e.users.UpdateUser(ctx, &iamv1.UpdateUserRequest{User: &iamv1.User{Name: u.GetName(), Spec: &iamv1.UserSpec{AttachedPolicies: []string{pol.GetName()}}},
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.attached_policies"}}}); err != nil {
+	if _, err := e.users.UpdateUser(ctx, &iamv1.UpdateUserRequest{
+		User:       &iamv1.User{Name: u.GetName(), Spec: &iamv1.UserSpec{AttachedPolicies: []string{pol.GetName()}}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.attached_policies"}},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.users.SetLoginProfile(ctx, &iamv1.SetLoginProfileRequest{Name: u.GetName(), Password: "correct horse battery"}); err != nil {
@@ -819,8 +837,10 @@ func TestMfaDeviceLockoutStatus(t *testing.T) {
 	}
 	kid := key.GetAccessKey().GetName()[strings.LastIndex(key.GetAccessKey().GetName(), "/")+1:]
 	gst := func(code string) error {
-		_, err := e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{SerialNumber: serial, TokenCode: code,
-			Authentication: gstSig(e.stsSign(kid, key.GetSecretAccessKey(), "", "GetSessionToken"))})
+		_, err := e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{
+			SerialNumber: serial, TokenCode: code,
+			Authentication: gstSig(e.stsSign(kid, key.GetSecretAccessKey(), "", "GetSessionToken")),
+		})
 		return err
 	}
 	dev := parentName + "/mfaDevices/alice-phone"
