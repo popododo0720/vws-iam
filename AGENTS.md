@@ -67,6 +67,11 @@ Every row names its enforcer. `TestAgentsRulesNameAnEnforcer` (internal/archtest
 | A pull request targets `main` and closes an issue. | `scripts/guard-agents.sh pr-base`, `pr-body` (repo-guard) |
 | Work on a feature branch. Never commit to `main`. | `direct-push-watch.yml` (after the fact), Judgment before |
 | Each commit is one logical change and leaves `go test ./...` passing. | Judgment |
+| The repo is English only (see "English only"); Hangul only in files `.github/english-allowlist` lists with a reason. | `scripts/check-english.sh` (CI `english` job) |
+
+## English only
+
+Write everything in this repo in English: README, code comments, docs, AGENTS.md, QUALITY.md, PR and issue templates, commit messages, PR and issue bodies, review comments and `Verified-by` sections. The `english` job in CI runs `scripts/check-english.sh`: `files` fails on a tracked file with Hangul unless `.github/english-allowlist` lists it as `<glob> <reason>` (only test data and user-facing UI strings belong there), and `text` and `commits` reject Hangul in the PR body and the PR's commit messages with no exception.
 
 ## Insider-risk guardrails
 
