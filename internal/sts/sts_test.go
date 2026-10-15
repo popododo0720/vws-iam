@@ -55,12 +55,20 @@ func setup(t *testing.T) env {
 	put(t, b, iam.User{Name: "alice", ID: "1", InlinePolicies: map[string]string{"assume": assumeAny}})
 	put(t, b, iam.User{Name: "eve", ID: "2", InlinePolicies: map[string]string{"assume": assumeAny}})
 	put(t, b, iam.User{Name: "bob", ID: "3"})
-	put(t, b, iam.Role{Name: "admin", ID: "4", MaxSessionDuration: 12 * time.Hour,
+	put(t, b, iam.Role{
+		Name: "admin", ID: "4", MaxSessionDuration: 12 * time.Hour,
 		AssumeRolePolicy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":["arn:vws:iam::` + acct + `:user/alice","arn:vws:iam::` + acct + `:user/bob"]},"Action":"sts:AssumeRole"}]}`,
-		InlinePolicies:   map[string]string{"all": `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*"}}`}})
-	put(t, b, iam.Role{Name: "mfa-only", ID: "5",
+		InlinePolicies: map[string]string{
+			"all": `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*"}}`,
+		},
+	})
+	put(t, b, iam.Role{
+		Name: "mfa-only", ID: "5",
 		AssumeRolePolicy: `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Principal":{"AWS":"` + acct + `"},"Action":"sts:AssumeRole","Condition":{"Bool":{"aws:MultiFactorAuthPresent":"true"}}}}`,
-		InlinePolicies:   map[string]string{"ec2": `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"ec2:*","Resource":"*"}}`}})
+		InlinePolicies: map[string]string{
+			"ec2": `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"ec2:*","Resource":"*"}}`,
+		},
+	})
 	clk := &clock{t: time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)}
 	az := authz.New(b, acct, clk.now)
 	return env{callers: map[string]sts.Caller{}, b: b, clk: clk, svc: sts.New(b, keys, az, acct, clk.now, sts.WithMFA(fakeMFA{})), az: az, keys: keys}

@@ -62,7 +62,12 @@ func (p project) policyProto(ctx context.Context, v store.Versioned[iam.Policy])
 	}
 	return &iamv1.Policy{
 		Name: name(p.id, "policies", pol.Name), Uid: pol.UID, Generation: pol.Generation, Etag: v.Version, Labels: labels(pol.Labels),
-		Spec:       &iamv1.PolicySpec{Path: defaultPath(pol.Path), Description: pol.Description, Document: pol.Default(), DefaultVersion: pol.DefaultVersion},
+		Spec: &iamv1.PolicySpec{
+			Path:           defaultPath(pol.Path),
+			Description:    pol.Description,
+			Document:       pol.Default(),
+			DefaultVersion: pol.DefaultVersion,
+		},
 		Status:     &iamv1.PolicyStatus{Observed: ready(pol.Generation), Arn: arn, UniqueId: pol.ID, AttachmentCount: int32(n)}, //nolint:gosec // bounded by entity count
 		CreateTime: ts(pol.Created), UpdateTime: ts(pol.Updated),
 	}, nil
@@ -243,9 +248,19 @@ func (s *Server) DeletePolicy(ctx context.Context, req *iamv1.DeletePolicyReques
 	resp := &iamv1.Policy{Name: req.GetName()}
 	if v.Object.Name != "" {
 		pol := v.Object
-		resp = &iamv1.Policy{Name: req.GetName(), Uid: pol.UID, Generation: pol.Generation, Labels: labels(pol.Labels),
-			Spec:   &iamv1.PolicySpec{Path: defaultPath(pol.Path), Description: pol.Description, Document: pol.Default(), DefaultVersion: pol.DefaultVersion},
-			Status: &iamv1.PolicyStatus{Observed: ready(pol.Generation), Arn: iam.PolicyARN(p.id, pol), UniqueId: pol.ID}, CreateTime: ts(pol.Created), UpdateTime: ts(pol.Updated), DeleteTime: timestamppb.New(s.now())}
+		resp = &iamv1.Policy{
+			Name: req.GetName(), Uid: pol.UID, Generation: pol.Generation, Labels: labels(pol.Labels),
+			Spec: &iamv1.PolicySpec{
+				Path:           defaultPath(pol.Path),
+				Description:    pol.Description,
+				Document:       pol.Default(),
+				DefaultVersion: pol.DefaultVersion,
+			},
+			Status:     &iamv1.PolicyStatus{Observed: ready(pol.Generation), Arn: iam.PolicyARN(p.id, pol), UniqueId: pol.ID},
+			CreateTime: ts(pol.Created),
+			UpdateTime: ts(pol.Updated),
+			DeleteTime: timestamppb.New(s.now()),
+		}
 	}
 	op, err := s.done(ctx, opArgs{project: pid, method: "DeletePolicy", requestID: req.GetRequestId(), req: req, resource: req.GetName(), verb: commonv1.OperationVerb_OPERATION_VERB_DELETE, generation: v.Object.Generation, response: resp})
 	return op, toStatus(ctx, err)
