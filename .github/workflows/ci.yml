@@ -19,6 +19,8 @@ jobs:
         run: test -z "$(gofmt -l cmd internal)"
       - name: vendored vws-lib
         run: VWS_LIB_OFFLINE=1 scripts/vendor-lib.sh check
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - name: Fetch kube-apiserver and etcd for envtest
         run: |
           base=https://github.com/kubernetes-sigs/controller-tools/releases/download/envtest-v1.37.0
