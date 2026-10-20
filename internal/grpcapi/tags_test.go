@@ -246,3 +246,51 @@ func TestPolicyTagsOnSharedStore(t *testing.T) {
 		t.Fatalf("second replica reads %v", got)
 	}
 }
+
+// AWS changes a policy's UpdateDate only when a new version is created, not
+// when a tag is added or removed.
+func TestPolicyTagsKeepUpdateDate(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	pol := e.createPolicy(t, ctx, "dates", tagPolicyDoc)
+	created := pol.GetUpdateTime().AsTime()
+	add := &iamv1.TagPolicyRequest{Name: pol.GetName(), Tags: []*iamv1.Tag{tag("env", "prod")}}
+	*e.now = e.now.Add(time.Hour)
+	if _, err := e.policies.TagPolicy(ctx, add); err != nil {
+		t.Fatal(err)
+	}
+	after, err := e.policies.GetPolicy(ctx, &iamv1.GetPolicyRequest{Name: pol.GetName()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.GetUpdateTime().AsTime().Equal(created) {
+		t.Fatalf("tagging moved UpdateTime to %v, want %v", after.GetUpdateTime().AsTime(), created)
+	}
+	*e.now = e.now.Add(time.Hour)
+	remove := &iamv1.UntagPolicyRequest{Name: pol.GetName(), TagKeys: []string{"env"}}
+	if _, err := e.policies.UntagPolicy(ctx, remove); err != nil {
+		t.Fatal(err)
+	}
+	after, err = e.policies.GetPolicy(ctx, &iamv1.GetPolicyRequest{Name: pol.GetName()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.GetUpdateTime().AsTime().Equal(created) {
+		t.Fatalf("untagging moved UpdateTime to %v, want %v", after.GetUpdateTime().AsTime(), created)
+	}
+	// A new version does move it, so the test can catch a stale UpdateTime.
+	version := &iamv1.CreatePolicyVersionRequest{
+		Parent:        pol.GetName(),
+		PolicyVersion: &iamv1.PolicyVersion{Spec: &iamv1.PolicyVersionSpec{Document: tagPolicyDoc}},
+	}
+	if _, err := e.policies.CreatePolicyVersion(ctx, version); err != nil {
+		t.Fatal(err)
+	}
+	after, err = e.policies.GetPolicy(ctx, &iamv1.GetPolicyRequest{Name: pol.GetName()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.GetUpdateTime().AsTime().After(created) {
+		t.Fatalf("a new version did not move UpdateTime: %v", after.GetUpdateTime().AsTime())
+	}
+}

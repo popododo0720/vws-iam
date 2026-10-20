@@ -72,7 +72,7 @@ func (s *Server) TagPolicy(ctx context.Context, req *iamv1.TagPolicyRequest) (*l
 			return quota("a policy can have at most " + strconv.Itoa(iam.MaxPolicyTags) + " tags")
 		}
 		pol.Tags = merged
-		pol.Updated = s.now().UTC()
+		// AWS changes a policy's UpdateDate only for a new version, not for a tag change.
 		return nil
 	}, nil)
 	if err != nil {
@@ -119,7 +119,7 @@ func (s *Server) UntagPolicy(ctx context.Context, req *iamv1.UntagPolicyRequest)
 			delete(kept, key)
 		}
 		pol.Tags = kept
-		pol.Updated = s.now().UTC()
+		// AWS changes a policy's UpdateDate only for a new version, not for a tag change.
 		return nil
 	}, nil)
 	if err != nil {
