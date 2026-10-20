@@ -55,6 +55,12 @@ func invalidSpec(msg string) error {
 	return fail(codes.InvalidArgument, "INVALID_SPEC", "ValidationError", msg)
 }
 
+// invalidInput is AWS InvalidInput: a well-formed request with an invalid
+// value, such as a tag outside the AWS tag alphabet.
+func invalidInput(msg string) error {
+	return fail(codes.InvalidArgument, "INVALID_SPEC", "InvalidInput", msg)
+}
+
 func invalidID(msg string) error {
 	return fail(codes.InvalidArgument, "INVALID_RESOURCE_ID", "ValidationError", msg)
 }

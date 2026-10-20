@@ -1,3 +1,3 @@
-source github.com/popododo0720/vws-proto tag v0.4.0
-commit 4125b9623d702580c46850c33c38b9685f129906
+source github.com/popododo0720/vws-proto branch feat/iam-policy-tags
+commit 8fa2ce8e3d4e19dbb89686009226bbd8d61dfcff
 files go.mod go.sum buf.* LICENSE vws/common vws/iam gen/go/vws/common gen/go/vws/iam (other services omitted)

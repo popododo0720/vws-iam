@@ -28,6 +28,10 @@ option java_package = "dev.vws.iam.v1";
 // A policy keeps at most 5 versions; a sixth is RESOURCE_EXHAUSTED /
 // QUOTA_EXCEEDED. Delete of a policy is FAILED_PRECONDITION /
 // DEPENDENCY_MISSING while it is attached. The default version cannot be deleted.
+// A policy keeps at most 50 tags, stored with the policy and not in its
+// envelope labels (AWS tag keys and values allow characters and lengths the
+// envelope labels do not). Tag and Untag are INVALID_ARGUMENT / INVALID_SPEC
+// for an invalid tag, and RESOURCE_EXHAUSTED / QUOTA_EXCEEDED past 50 tags.
 service PolicyService {
   // AIP-131: the Get response is the resource.
   // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
@@ -108,6 +112,37 @@ service PolicyService {
       response_type: "vws.iam.v1.PolicyVersion"
       metadata_type: "vws.common.v1.OperationMetadata"
     };
+  }
+
+  // AIP-151: every mutation returns google.longrunning.Operation.
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  // buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+  rpc TagPolicy(TagPolicyRequest) returns (google.longrunning.Operation) {
+    option (google.api.http) = {
+      post: "/v1/{name=projects/*/policies/*}:tag"
+      body: "*"
+    };
+    option (google.longrunning.operation_info) = {
+      response_type: "vws.iam.v1.Policy"
+      metadata_type: "vws.common.v1.OperationMetadata"
+    };
+  }
+
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  // buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+  rpc UntagPolicy(UntagPolicyRequest) returns (google.longrunning.Operation) {
+    option (google.api.http) = {
+      post: "/v1/{name=projects/*/policies/*}:untag"
+      body: "*"
+    };
+    option (google.longrunning.operation_info) = {
+      response_type: "vws.iam.v1.Policy"
+      metadata_type: "vws.common.v1.OperationMetadata"
+    };
+  }
+
+  rpc ListPolicyTags(ListPolicyTagsRequest) returns (ListPolicyTagsResponse) {
+    option (google.api.http) = {get: "/v1/{name=projects/*/policies/*}:tags"};
   }
 }
 
@@ -311,4 +346,63 @@ message DeletePolicyVersionRequest {
   ];
   bool allow_missing = 3 [(google.api.field_behavior) = OPTIONAL];
   string etag = 4 [(google.api.field_behavior) = OPTIONAL];
+}
+
+// Tag is one key-value tag on an IAM policy, as in AWS IAM.
+message Tag {
+  // 1-128 characters of letters, digits, spaces and _ . : / = + - @.
+  // A key may not begin with aws:.
+  string key = 1 [(google.api.field_behavior) = REQUIRED];
+  // 0-256 characters of the same alphabet. A value may not begin with
+  // aws:. Both are case sensitive for a policy.
+  string value = 2 [(google.api.field_behavior) = REQUIRED];
+}
+
+// TagPolicy adds or overwrites tags on a managed policy. The whole request
+// fails and stores nothing when one tag is invalid, a key repeats, or the
+// policy would keep more than 50 tags. The response is the Policy.
+message TagPolicyRequest {
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "vws.iam/Policy"
+  ];
+  // 1-50 tags.
+  repeated Tag tags = 2 [(google.api.field_behavior) = REQUIRED];
+  string request_id = 3 [
+    (google.api.field_info).format = UUID4,
+    (google.api.field_behavior) = OPTIONAL
+  ];
+  bool validate_only = 4 [(google.api.field_behavior) = OPTIONAL];
+}
+
+// UntagPolicy removes the named keys from a managed policy. A key that is
+// not attached is ignored. The response is the Policy.
+message UntagPolicyRequest {
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "vws.iam/Policy"
+  ];
+  // 1-50 keys, 1-128 characters each, same alphabet as Tag.key.
+  repeated string tag_keys = 2 [(google.api.field_behavior) = REQUIRED];
+  string request_id = 3 [
+    (google.api.field_info).format = UUID4,
+    (google.api.field_behavior) = OPTIONAL
+  ];
+  bool validate_only = 4 [(google.api.field_behavior) = OPTIONAL];
+}
+
+// ListPolicyTags lists a policy's tags sorted by key. page_size defaults to
+// 100; values above 1000 are coerced to 1000.
+message ListPolicyTagsRequest {
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "vws.iam/Policy"
+  ];
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListPolicyTagsResponse {
+  repeated Tag tags = 1;
+  string next_page_token = 2;
 }

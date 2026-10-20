@@ -1193,6 +1193,320 @@ func (x *DeletePolicyVersionRequest) GetEtag() string {
 	return ""
 }
 
+// Tag is one key-value tag on an IAM policy, as in AWS IAM.
+type Tag struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 1-128 characters of letters, digits, spaces and _ . : / = + - @.
+	// A key may not begin with aws:.
+	Key string `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	// 0-256 characters of the same alphabet. A value may not begin with
+	// aws:. Both are case sensitive for a policy.
+	Value         string `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Tag) Reset() {
+	*x = Tag{}
+	mi := &file_vws_iam_v1_policy_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Tag) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Tag) ProtoMessage() {}
+
+func (x *Tag) ProtoReflect() protoreflect.Message {
+	mi := &file_vws_iam_v1_policy_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Tag.ProtoReflect.Descriptor instead.
+func (*Tag) Descriptor() ([]byte, []int) {
+	return file_vws_iam_v1_policy_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *Tag) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *Tag) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
+// TagPolicy adds or overwrites tags on a managed policy. The whole request
+// fails and stores nothing when one tag is invalid, a key repeats, or the
+// policy would keep more than 50 tags. The response is the Policy.
+type TagPolicyRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// 1-50 tags.
+	Tags          []*Tag `protobuf:"bytes,2,rep,name=tags,proto3" json:"tags,omitempty"`
+	RequestId     string `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	ValidateOnly  bool   `protobuf:"varint,4,opt,name=validate_only,json=validateOnly,proto3" json:"validate_only,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TagPolicyRequest) Reset() {
+	*x = TagPolicyRequest{}
+	mi := &file_vws_iam_v1_policy_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TagPolicyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TagPolicyRequest) ProtoMessage() {}
+
+func (x *TagPolicyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_vws_iam_v1_policy_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TagPolicyRequest.ProtoReflect.Descriptor instead.
+func (*TagPolicyRequest) Descriptor() ([]byte, []int) {
+	return file_vws_iam_v1_policy_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *TagPolicyRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *TagPolicyRequest) GetTags() []*Tag {
+	if x != nil {
+		return x.Tags
+	}
+	return nil
+}
+
+func (x *TagPolicyRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *TagPolicyRequest) GetValidateOnly() bool {
+	if x != nil {
+		return x.ValidateOnly
+	}
+	return false
+}
+
+// UntagPolicy removes the named keys from a managed policy. A key that is
+// not attached is ignored. The response is the Policy.
+type UntagPolicyRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// 1-50 keys, 1-128 characters each, same alphabet as Tag.key.
+	TagKeys       []string `protobuf:"bytes,2,rep,name=tag_keys,json=tagKeys,proto3" json:"tag_keys,omitempty"`
+	RequestId     string   `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	ValidateOnly  bool     `protobuf:"varint,4,opt,name=validate_only,json=validateOnly,proto3" json:"validate_only,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UntagPolicyRequest) Reset() {
+	*x = UntagPolicyRequest{}
+	mi := &file_vws_iam_v1_policy_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UntagPolicyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UntagPolicyRequest) ProtoMessage() {}
+
+func (x *UntagPolicyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_vws_iam_v1_policy_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UntagPolicyRequest.ProtoReflect.Descriptor instead.
+func (*UntagPolicyRequest) Descriptor() ([]byte, []int) {
+	return file_vws_iam_v1_policy_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *UntagPolicyRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *UntagPolicyRequest) GetTagKeys() []string {
+	if x != nil {
+		return x.TagKeys
+	}
+	return nil
+}
+
+func (x *UntagPolicyRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *UntagPolicyRequest) GetValidateOnly() bool {
+	if x != nil {
+		return x.ValidateOnly
+	}
+	return false
+}
+
+// ListPolicyTags lists a policy's tags sorted by key. page_size defaults to
+// 100; values above 1000 are coerced to 1000.
+type ListPolicyTagsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	PageSize      int32                  `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	PageToken     string                 `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListPolicyTagsRequest) Reset() {
+	*x = ListPolicyTagsRequest{}
+	mi := &file_vws_iam_v1_policy_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListPolicyTagsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListPolicyTagsRequest) ProtoMessage() {}
+
+func (x *ListPolicyTagsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_vws_iam_v1_policy_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListPolicyTagsRequest.ProtoReflect.Descriptor instead.
+func (*ListPolicyTagsRequest) Descriptor() ([]byte, []int) {
+	return file_vws_iam_v1_policy_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *ListPolicyTagsRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ListPolicyTagsRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+func (x *ListPolicyTagsRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
+type ListPolicyTagsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tags          []*Tag                 `protobuf:"bytes,1,rep,name=tags,proto3" json:"tags,omitempty"`
+	NextPageToken string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListPolicyTagsResponse) Reset() {
+	*x = ListPolicyTagsResponse{}
+	mi := &file_vws_iam_v1_policy_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListPolicyTagsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListPolicyTagsResponse) ProtoMessage() {}
+
+func (x *ListPolicyTagsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_vws_iam_v1_policy_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListPolicyTagsResponse.ProtoReflect.Descriptor instead.
+func (*ListPolicyTagsResponse) Descriptor() ([]byte, []int) {
+	return file_vws_iam_v1_policy_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *ListPolicyTagsResponse) GetTags() []*Tag {
+	if x != nil {
+		return x.Tags
+	}
+	return nil
+}
+
+func (x *ListPolicyTagsResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
+}
+
 var File_vws_iam_v1_policy_proto protoreflect.FileDescriptor
 
 const file_vws_iam_v1_policy_proto_rawDesc = "" +
@@ -1315,7 +1629,33 @@ const file_vws_iam_v1_policy_proto_rawDesc = "" +
 	"\n" +
 	"request_id\x18\x02 \x01(\tB\v\xe0A\x01\xe2\x8c\xcf\xd7\b\x02\b\x01R\trequestId\x12(\n" +
 	"\rallow_missing\x18\x03 \x01(\bB\x03\xe0A\x01R\fallowMissing\x12\x17\n" +
-	"\x04etag\x18\x04 \x01(\tB\x03\xe0A\x01R\x04etag2\xfc\v\n" +
+	"\x04etag\x18\x04 \x01(\tB\x03\xe0A\x01R\x04etag\"7\n" +
+	"\x03Tag\x12\x15\n" +
+	"\x03key\x18\x01 \x01(\tB\x03\xe0A\x02R\x03key\x12\x19\n" +
+	"\x05value\x18\x02 \x01(\tB\x03\xe0A\x02R\x05value\"\xbe\x01\n" +
+	"\x10TagPolicyRequest\x12*\n" +
+	"\x04name\x18\x01 \x01(\tB\x16\xe0A\x02\xfaA\x10\n" +
+	"\x0evws.iam/PolicyR\x04name\x12(\n" +
+	"\x04tags\x18\x02 \x03(\v2\x0f.vws.iam.v1.TagB\x03\xe0A\x02R\x04tags\x12*\n" +
+	"\n" +
+	"request_id\x18\x03 \x01(\tB\v\xe0A\x01\xe2\x8c\xcf\xd7\b\x02\b\x01R\trequestId\x12(\n" +
+	"\rvalidate_only\x18\x04 \x01(\bB\x03\xe0A\x01R\fvalidateOnly\"\xb6\x01\n" +
+	"\x12UntagPolicyRequest\x12*\n" +
+	"\x04name\x18\x01 \x01(\tB\x16\xe0A\x02\xfaA\x10\n" +
+	"\x0evws.iam/PolicyR\x04name\x12\x1e\n" +
+	"\btag_keys\x18\x02 \x03(\tB\x03\xe0A\x02R\atagKeys\x12*\n" +
+	"\n" +
+	"request_id\x18\x03 \x01(\tB\v\xe0A\x01\xe2\x8c\xcf\xd7\b\x02\b\x01R\trequestId\x12(\n" +
+	"\rvalidate_only\x18\x04 \x01(\bB\x03\xe0A\x01R\fvalidateOnly\"\x7f\n" +
+	"\x15ListPolicyTagsRequest\x12*\n" +
+	"\x04name\x18\x01 \x01(\tB\x16\xe0A\x02\xfaA\x10\n" +
+	"\x0evws.iam/PolicyR\x04name\x12\x1b\n" +
+	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\x03 \x01(\tR\tpageToken\"e\n" +
+	"\x16ListPolicyTagsResponse\x12#\n" +
+	"\x04tags\x18\x01 \x03(\v2\x0f.vws.iam.v1.TagR\x04tags\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken2\xf1\x0f\n" +
 	"\rPolicyService\x12g\n" +
 	"\tGetPolicy\x12\x1c.vws.iam.v1.GetPolicyRequest\x1a\x12.vws.iam.v1.Policy\"(\x82\xd3\xe4\x93\x02\"\x12 /v1/{name=projects/*/policies/*}\x12{\n" +
 	"\fListPolicies\x12\x1f.vws.iam.v1.ListPoliciesRequest\x1a .vws.iam.v1.ListPoliciesResponse\"(\x82\xd3\xe4\x93\x02\"\x12 /v1/{parent=projects/*}/policies\x12\xb7\x01\n" +
@@ -1330,7 +1670,12 @@ const file_vws_iam_v1_policy_proto_rawDesc = "" +
 	"\x13CreatePolicyVersion\x12&.vws.iam.v1.CreatePolicyVersionRequest\x1a\x1d.google.longrunning.Operation\"\x81\x01\xcaA;\n" +
 	"\x18vws.iam.v1.PolicyVersion\x12\x1fvws.common.v1.OperationMetadata\x82\xd3\xe4\x93\x02=:\x0epolicy_version\"+/v1/{parent=projects/*/policies/*}/versions\x12\xcf\x01\n" +
 	"\x13DeletePolicyVersion\x12&.vws.iam.v1.DeletePolicyVersionRequest\x1a\x1d.google.longrunning.Operation\"q\xcaA;\n" +
-	"\x18vws.iam.v1.PolicyVersion\x12\x1fvws.common.v1.OperationMetadata\x82\xd3\xe4\x93\x02-*+/v1/{name=projects/*/policies/*/versions/*}BZ\n" +
+	"\x18vws.iam.v1.PolicyVersion\x12\x1fvws.common.v1.OperationMetadata\x82\xd3\xe4\x93\x02-*+/v1/{name=projects/*/policies/*/versions/*}\x12\xb0\x01\n" +
+	"\tTagPolicy\x12\x1c.vws.iam.v1.TagPolicyRequest\x1a\x1d.google.longrunning.Operation\"f\xcaA4\n" +
+	"\x11vws.iam.v1.Policy\x12\x1fvws.common.v1.OperationMetadata\x82\xd3\xe4\x93\x02):\x01*\"$/v1/{name=projects/*/policies/*}:tag\x12\xb6\x01\n" +
+	"\vUntagPolicy\x12\x1e.vws.iam.v1.UntagPolicyRequest\x1a\x1d.google.longrunning.Operation\"h\xcaA4\n" +
+	"\x11vws.iam.v1.Policy\x12\x1fvws.common.v1.OperationMetadata\x82\xd3\xe4\x93\x02+:\x01*\"&/v1/{name=projects/*/policies/*}:untag\x12\x86\x01\n" +
+	"\x0eListPolicyTags\x12!.vws.iam.v1.ListPolicyTagsRequest\x1a\".vws.iam.v1.ListPolicyTagsResponse\"-\x82\xd3\xe4\x93\x02'\x12%/v1/{name=projects/*/policies/*}:tagsBZ\n" +
 	"\x0edev.vws.iam.v1B\vPolicyProtoP\x01Z9github.com/popododo0720/vws-proto/gen/go/vws/iam/v1;iamv1b\x06proto3"
 
 var (
@@ -1345,7 +1690,7 @@ func file_vws_iam_v1_policy_proto_rawDescGZIP() []byte {
 	return file_vws_iam_v1_policy_proto_rawDescData
 }
 
-var file_vws_iam_v1_policy_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_vws_iam_v1_policy_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_vws_iam_v1_policy_proto_goTypes = []any{
 	(*Policy)(nil),                     // 0: vws.iam.v1.Policy
 	(*PolicySpec)(nil),                 // 1: vws.iam.v1.PolicySpec
@@ -1364,57 +1709,70 @@ var file_vws_iam_v1_policy_proto_goTypes = []any{
 	(*ListPolicyVersionsResponse)(nil), // 14: vws.iam.v1.ListPolicyVersionsResponse
 	(*CreatePolicyVersionRequest)(nil), // 15: vws.iam.v1.CreatePolicyVersionRequest
 	(*DeletePolicyVersionRequest)(nil), // 16: vws.iam.v1.DeletePolicyVersionRequest
-	nil,                                // 17: vws.iam.v1.Policy.LabelsEntry
-	nil,                                // 18: vws.iam.v1.PolicyVersion.LabelsEntry
-	(*timestamppb.Timestamp)(nil),      // 19: google.protobuf.Timestamp
-	(*v1.ObservedState)(nil),           // 20: vws.common.v1.ObservedState
-	(*fieldmaskpb.FieldMask)(nil),      // 21: google.protobuf.FieldMask
-	(*longrunningpb.Operation)(nil),    // 22: google.longrunning.Operation
+	(*Tag)(nil),                        // 17: vws.iam.v1.Tag
+	(*TagPolicyRequest)(nil),           // 18: vws.iam.v1.TagPolicyRequest
+	(*UntagPolicyRequest)(nil),         // 19: vws.iam.v1.UntagPolicyRequest
+	(*ListPolicyTagsRequest)(nil),      // 20: vws.iam.v1.ListPolicyTagsRequest
+	(*ListPolicyTagsResponse)(nil),     // 21: vws.iam.v1.ListPolicyTagsResponse
+	nil,                                // 22: vws.iam.v1.Policy.LabelsEntry
+	nil,                                // 23: vws.iam.v1.PolicyVersion.LabelsEntry
+	(*timestamppb.Timestamp)(nil),      // 24: google.protobuf.Timestamp
+	(*v1.ObservedState)(nil),           // 25: vws.common.v1.ObservedState
+	(*fieldmaskpb.FieldMask)(nil),      // 26: google.protobuf.FieldMask
+	(*longrunningpb.Operation)(nil),    // 27: google.longrunning.Operation
 }
 var file_vws_iam_v1_policy_proto_depIdxs = []int32{
-	17, // 0: vws.iam.v1.Policy.labels:type_name -> vws.iam.v1.Policy.LabelsEntry
+	22, // 0: vws.iam.v1.Policy.labels:type_name -> vws.iam.v1.Policy.LabelsEntry
 	1,  // 1: vws.iam.v1.Policy.spec:type_name -> vws.iam.v1.PolicySpec
 	2,  // 2: vws.iam.v1.Policy.status:type_name -> vws.iam.v1.PolicyStatus
-	19, // 3: vws.iam.v1.Policy.create_time:type_name -> google.protobuf.Timestamp
-	19, // 4: vws.iam.v1.Policy.update_time:type_name -> google.protobuf.Timestamp
-	19, // 5: vws.iam.v1.Policy.delete_time:type_name -> google.protobuf.Timestamp
-	20, // 6: vws.iam.v1.PolicyStatus.observed:type_name -> vws.common.v1.ObservedState
-	18, // 7: vws.iam.v1.PolicyVersion.labels:type_name -> vws.iam.v1.PolicyVersion.LabelsEntry
+	24, // 3: vws.iam.v1.Policy.create_time:type_name -> google.protobuf.Timestamp
+	24, // 4: vws.iam.v1.Policy.update_time:type_name -> google.protobuf.Timestamp
+	24, // 5: vws.iam.v1.Policy.delete_time:type_name -> google.protobuf.Timestamp
+	25, // 6: vws.iam.v1.PolicyStatus.observed:type_name -> vws.common.v1.ObservedState
+	23, // 7: vws.iam.v1.PolicyVersion.labels:type_name -> vws.iam.v1.PolicyVersion.LabelsEntry
 	4,  // 8: vws.iam.v1.PolicyVersion.spec:type_name -> vws.iam.v1.PolicyVersionSpec
 	5,  // 9: vws.iam.v1.PolicyVersion.status:type_name -> vws.iam.v1.PolicyVersionStatus
-	19, // 10: vws.iam.v1.PolicyVersion.create_time:type_name -> google.protobuf.Timestamp
-	19, // 11: vws.iam.v1.PolicyVersion.update_time:type_name -> google.protobuf.Timestamp
-	19, // 12: vws.iam.v1.PolicyVersion.delete_time:type_name -> google.protobuf.Timestamp
-	20, // 13: vws.iam.v1.PolicyVersionStatus.observed:type_name -> vws.common.v1.ObservedState
+	24, // 10: vws.iam.v1.PolicyVersion.create_time:type_name -> google.protobuf.Timestamp
+	24, // 11: vws.iam.v1.PolicyVersion.update_time:type_name -> google.protobuf.Timestamp
+	24, // 12: vws.iam.v1.PolicyVersion.delete_time:type_name -> google.protobuf.Timestamp
+	25, // 13: vws.iam.v1.PolicyVersionStatus.observed:type_name -> vws.common.v1.ObservedState
 	0,  // 14: vws.iam.v1.ListPoliciesResponse.policies:type_name -> vws.iam.v1.Policy
 	0,  // 15: vws.iam.v1.CreatePolicyRequest.policy:type_name -> vws.iam.v1.Policy
 	0,  // 16: vws.iam.v1.UpdatePolicyRequest.policy:type_name -> vws.iam.v1.Policy
-	21, // 17: vws.iam.v1.UpdatePolicyRequest.update_mask:type_name -> google.protobuf.FieldMask
+	26, // 17: vws.iam.v1.UpdatePolicyRequest.update_mask:type_name -> google.protobuf.FieldMask
 	3,  // 18: vws.iam.v1.ListPolicyVersionsResponse.policy_versions:type_name -> vws.iam.v1.PolicyVersion
 	3,  // 19: vws.iam.v1.CreatePolicyVersionRequest.policy_version:type_name -> vws.iam.v1.PolicyVersion
-	6,  // 20: vws.iam.v1.PolicyService.GetPolicy:input_type -> vws.iam.v1.GetPolicyRequest
-	7,  // 21: vws.iam.v1.PolicyService.ListPolicies:input_type -> vws.iam.v1.ListPoliciesRequest
-	9,  // 22: vws.iam.v1.PolicyService.CreatePolicy:input_type -> vws.iam.v1.CreatePolicyRequest
-	10, // 23: vws.iam.v1.PolicyService.UpdatePolicy:input_type -> vws.iam.v1.UpdatePolicyRequest
-	11, // 24: vws.iam.v1.PolicyService.DeletePolicy:input_type -> vws.iam.v1.DeletePolicyRequest
-	12, // 25: vws.iam.v1.PolicyService.GetPolicyVersion:input_type -> vws.iam.v1.GetPolicyVersionRequest
-	13, // 26: vws.iam.v1.PolicyService.ListPolicyVersions:input_type -> vws.iam.v1.ListPolicyVersionsRequest
-	15, // 27: vws.iam.v1.PolicyService.CreatePolicyVersion:input_type -> vws.iam.v1.CreatePolicyVersionRequest
-	16, // 28: vws.iam.v1.PolicyService.DeletePolicyVersion:input_type -> vws.iam.v1.DeletePolicyVersionRequest
-	0,  // 29: vws.iam.v1.PolicyService.GetPolicy:output_type -> vws.iam.v1.Policy
-	8,  // 30: vws.iam.v1.PolicyService.ListPolicies:output_type -> vws.iam.v1.ListPoliciesResponse
-	22, // 31: vws.iam.v1.PolicyService.CreatePolicy:output_type -> google.longrunning.Operation
-	22, // 32: vws.iam.v1.PolicyService.UpdatePolicy:output_type -> google.longrunning.Operation
-	22, // 33: vws.iam.v1.PolicyService.DeletePolicy:output_type -> google.longrunning.Operation
-	3,  // 34: vws.iam.v1.PolicyService.GetPolicyVersion:output_type -> vws.iam.v1.PolicyVersion
-	14, // 35: vws.iam.v1.PolicyService.ListPolicyVersions:output_type -> vws.iam.v1.ListPolicyVersionsResponse
-	22, // 36: vws.iam.v1.PolicyService.CreatePolicyVersion:output_type -> google.longrunning.Operation
-	22, // 37: vws.iam.v1.PolicyService.DeletePolicyVersion:output_type -> google.longrunning.Operation
-	29, // [29:38] is the sub-list for method output_type
-	20, // [20:29] is the sub-list for method input_type
-	20, // [20:20] is the sub-list for extension type_name
-	20, // [20:20] is the sub-list for extension extendee
-	0,  // [0:20] is the sub-list for field type_name
+	17, // 20: vws.iam.v1.TagPolicyRequest.tags:type_name -> vws.iam.v1.Tag
+	17, // 21: vws.iam.v1.ListPolicyTagsResponse.tags:type_name -> vws.iam.v1.Tag
+	6,  // 22: vws.iam.v1.PolicyService.GetPolicy:input_type -> vws.iam.v1.GetPolicyRequest
+	7,  // 23: vws.iam.v1.PolicyService.ListPolicies:input_type -> vws.iam.v1.ListPoliciesRequest
+	9,  // 24: vws.iam.v1.PolicyService.CreatePolicy:input_type -> vws.iam.v1.CreatePolicyRequest
+	10, // 25: vws.iam.v1.PolicyService.UpdatePolicy:input_type -> vws.iam.v1.UpdatePolicyRequest
+	11, // 26: vws.iam.v1.PolicyService.DeletePolicy:input_type -> vws.iam.v1.DeletePolicyRequest
+	12, // 27: vws.iam.v1.PolicyService.GetPolicyVersion:input_type -> vws.iam.v1.GetPolicyVersionRequest
+	13, // 28: vws.iam.v1.PolicyService.ListPolicyVersions:input_type -> vws.iam.v1.ListPolicyVersionsRequest
+	15, // 29: vws.iam.v1.PolicyService.CreatePolicyVersion:input_type -> vws.iam.v1.CreatePolicyVersionRequest
+	16, // 30: vws.iam.v1.PolicyService.DeletePolicyVersion:input_type -> vws.iam.v1.DeletePolicyVersionRequest
+	18, // 31: vws.iam.v1.PolicyService.TagPolicy:input_type -> vws.iam.v1.TagPolicyRequest
+	19, // 32: vws.iam.v1.PolicyService.UntagPolicy:input_type -> vws.iam.v1.UntagPolicyRequest
+	20, // 33: vws.iam.v1.PolicyService.ListPolicyTags:input_type -> vws.iam.v1.ListPolicyTagsRequest
+	0,  // 34: vws.iam.v1.PolicyService.GetPolicy:output_type -> vws.iam.v1.Policy
+	8,  // 35: vws.iam.v1.PolicyService.ListPolicies:output_type -> vws.iam.v1.ListPoliciesResponse
+	27, // 36: vws.iam.v1.PolicyService.CreatePolicy:output_type -> google.longrunning.Operation
+	27, // 37: vws.iam.v1.PolicyService.UpdatePolicy:output_type -> google.longrunning.Operation
+	27, // 38: vws.iam.v1.PolicyService.DeletePolicy:output_type -> google.longrunning.Operation
+	3,  // 39: vws.iam.v1.PolicyService.GetPolicyVersion:output_type -> vws.iam.v1.PolicyVersion
+	14, // 40: vws.iam.v1.PolicyService.ListPolicyVersions:output_type -> vws.iam.v1.ListPolicyVersionsResponse
+	27, // 41: vws.iam.v1.PolicyService.CreatePolicyVersion:output_type -> google.longrunning.Operation
+	27, // 42: vws.iam.v1.PolicyService.DeletePolicyVersion:output_type -> google.longrunning.Operation
+	27, // 43: vws.iam.v1.PolicyService.TagPolicy:output_type -> google.longrunning.Operation
+	27, // 44: vws.iam.v1.PolicyService.UntagPolicy:output_type -> google.longrunning.Operation
+	21, // 45: vws.iam.v1.PolicyService.ListPolicyTags:output_type -> vws.iam.v1.ListPolicyTagsResponse
+	34, // [34:46] is the sub-list for method output_type
+	22, // [22:34] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_vws_iam_v1_policy_proto_init() }
@@ -1428,7 +1786,7 @@ func file_vws_iam_v1_policy_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_vws_iam_v1_policy_proto_rawDesc), len(file_vws_iam_v1_policy_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   19,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
