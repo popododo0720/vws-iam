@@ -1,3 +1,3 @@
-source github.com/popododo0720/vws-proto branch feat/iam-policy-tags
+source github.com/popododo0720/vws-proto branch feat/iam-mfa-tags
 commit b50e30e14817a8a83e1153a689b969ad57322923
 files go.mod go.sum buf.* LICENSE vws/common vws/iam gen/go/vws/common gen/go/vws/iam (other services omitted)
