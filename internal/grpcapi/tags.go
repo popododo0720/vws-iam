@@ -69,7 +69,7 @@ func (s *Server) TagPolicy(ctx context.Context, req *iamv1.TagPolicyRequest) (*l
 			merged[tag.GetKey()] = tag.GetValue()
 		}
 		if len(merged) > iam.MaxPolicyTags {
-			return quota("a policy can have at most " + strconv.Itoa(iam.MaxPolicyTags) + " tags")
+			return quota("Cannot exceed quota for TagsPerPolicy: " + strconv.Itoa(iam.MaxPolicyTags))
 		}
 		pol.Tags = merged
 		// AWS changes a policy's UpdateDate only for a new version, not for a tag change.

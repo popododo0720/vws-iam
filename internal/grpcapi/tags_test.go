@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
@@ -210,6 +211,9 @@ func TestPolicyTagErrors(t *testing.T) {
 		Name: name, Tags: []*iamv1.Tag{tag("extra1", "v"), tag("extra2", "v")},
 	})
 	wantErr(t, err, codes.ResourceExhausted, "QUOTA_EXCEEDED", "LimitExceeded")
+	if got, want := status.Convert(err).Message(), "Cannot exceed quota for TagsPerPolicy: 50"; got != want {
+		t.Fatalf("message %q, want %q", got, want)
+	}
 	if n := len(tagsOf(t, ctx, e, name)); n != 49 {
 		t.Fatalf("stored %d tags after the refused request", n)
 	}
