@@ -354,7 +354,7 @@ message Tag {
   // A key may not begin with aws:.
   string key = 1 [(google.api.field_behavior) = REQUIRED];
   // 0-256 characters of the same alphabet. A value may not begin with
-  // aws:. Both are case sensitive for a policy.
+  // aws:. Both are case sensitive for a policy and a virtual MFA device.
   string value = 2 [(google.api.field_behavior) = REQUIRED];
 }
 

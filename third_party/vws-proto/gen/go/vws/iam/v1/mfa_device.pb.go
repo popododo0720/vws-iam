@@ -835,12 +835,273 @@ func (x *DeactivateMfaDeviceResponse) GetMfaDevice() *MfaDevice {
 	return nil
 }
 
+// TagMFADevice adds or overwrites tags on a virtual MFA device. The whole
+// request fails and stores nothing when one tag is invalid, the request has
+// more than 50 tags, or the device would keep more than 50 tags. The response
+// is the MfaDevice. console-api resolves the AWS SerialNumber to this resource
+// name.
+type TagMFADeviceRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// 1-50 tags. AWS TagMFADevice: "If a tag with the same key name already
+	// exists, then that tag is overwritten with the new value." A key that
+	// repeats within one request keeps the last value.
+	Tags          []*Tag `protobuf:"bytes,2,rep,name=tags,proto3" json:"tags,omitempty"`
+	RequestId     string `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	ValidateOnly  bool   `protobuf:"varint,4,opt,name=validate_only,json=validateOnly,proto3" json:"validate_only,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TagMFADeviceRequest) Reset() {
+	*x = TagMFADeviceRequest{}
+	mi := &file_vws_iam_v1_mfa_device_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TagMFADeviceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TagMFADeviceRequest) ProtoMessage() {}
+
+func (x *TagMFADeviceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_vws_iam_v1_mfa_device_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TagMFADeviceRequest.ProtoReflect.Descriptor instead.
+func (*TagMFADeviceRequest) Descriptor() ([]byte, []int) {
+	return file_vws_iam_v1_mfa_device_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *TagMFADeviceRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *TagMFADeviceRequest) GetTags() []*Tag {
+	if x != nil {
+		return x.Tags
+	}
+	return nil
+}
+
+func (x *TagMFADeviceRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *TagMFADeviceRequest) GetValidateOnly() bool {
+	if x != nil {
+		return x.ValidateOnly
+	}
+	return false
+}
+
+// UntagMFADevice removes the named keys from a virtual MFA device. A key that
+// is not attached is ignored. The response is the MfaDevice.
+type UntagMFADeviceRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// 1-50 keys, 1-128 characters each, same alphabet as Tag.key.
+	TagKeys       []string `protobuf:"bytes,2,rep,name=tag_keys,json=tagKeys,proto3" json:"tag_keys,omitempty"`
+	RequestId     string   `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	ValidateOnly  bool     `protobuf:"varint,4,opt,name=validate_only,json=validateOnly,proto3" json:"validate_only,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UntagMFADeviceRequest) Reset() {
+	*x = UntagMFADeviceRequest{}
+	mi := &file_vws_iam_v1_mfa_device_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UntagMFADeviceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UntagMFADeviceRequest) ProtoMessage() {}
+
+func (x *UntagMFADeviceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_vws_iam_v1_mfa_device_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UntagMFADeviceRequest.ProtoReflect.Descriptor instead.
+func (*UntagMFADeviceRequest) Descriptor() ([]byte, []int) {
+	return file_vws_iam_v1_mfa_device_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *UntagMFADeviceRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *UntagMFADeviceRequest) GetTagKeys() []string {
+	if x != nil {
+		return x.TagKeys
+	}
+	return nil
+}
+
+func (x *UntagMFADeviceRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *UntagMFADeviceRequest) GetValidateOnly() bool {
+	if x != nil {
+		return x.ValidateOnly
+	}
+	return false
+}
+
+// ListMFADeviceTags lists a device's tags sorted by key. page_size defaults
+// to 100; values above 1000 are coerced to 1000.
+type ListMFADeviceTagsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	PageSize      int32                  `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	PageToken     string                 `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListMFADeviceTagsRequest) Reset() {
+	*x = ListMFADeviceTagsRequest{}
+	mi := &file_vws_iam_v1_mfa_device_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListMFADeviceTagsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListMFADeviceTagsRequest) ProtoMessage() {}
+
+func (x *ListMFADeviceTagsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_vws_iam_v1_mfa_device_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListMFADeviceTagsRequest.ProtoReflect.Descriptor instead.
+func (*ListMFADeviceTagsRequest) Descriptor() ([]byte, []int) {
+	return file_vws_iam_v1_mfa_device_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *ListMFADeviceTagsRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ListMFADeviceTagsRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+func (x *ListMFADeviceTagsRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
+type ListMFADeviceTagsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tags          []*Tag                 `protobuf:"bytes,1,rep,name=tags,proto3" json:"tags,omitempty"`
+	NextPageToken string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListMFADeviceTagsResponse) Reset() {
+	*x = ListMFADeviceTagsResponse{}
+	mi := &file_vws_iam_v1_mfa_device_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListMFADeviceTagsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListMFADeviceTagsResponse) ProtoMessage() {}
+
+func (x *ListMFADeviceTagsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_vws_iam_v1_mfa_device_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListMFADeviceTagsResponse.ProtoReflect.Descriptor instead.
+func (*ListMFADeviceTagsResponse) Descriptor() ([]byte, []int) {
+	return file_vws_iam_v1_mfa_device_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *ListMFADeviceTagsResponse) GetTags() []*Tag {
+	if x != nil {
+		return x.Tags
+	}
+	return nil
+}
+
+func (x *ListMFADeviceTagsResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
+}
+
 var File_vws_iam_v1_mfa_device_proto protoreflect.FileDescriptor
 
 const file_vws_iam_v1_mfa_device_proto_rawDesc = "" +
 	"\n" +
 	"\x1bvws/iam/v1/mfa_device.proto\x12\n" +
-	"vws.iam.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x1bgoogle/api/field_info.proto\x1a\x19google/api/resource.proto\x1a#google/longrunning/operations.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1cvws/common/v1/resource.proto\"\x86\x05\n" +
+	"vws.iam.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x1bgoogle/api/field_info.proto\x1a\x19google/api/resource.proto\x1a#google/longrunning/operations.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1cvws/common/v1/resource.proto\x1a\x17vws/iam/v1/policy.proto\"\x86\x05\n" +
 	"\tMfaDevice\x12\x17\n" +
 	"\x04name\x18\x01 \x01(\tB\x03\xe0A\bR\x04name\x12\x1d\n" +
 	"\x03uid\x18\x02 \x01(\tB\v\xe0A\x03\xe2\x8c\xcf\xd7\b\x02\b\x01R\x03uid\x12#\n" +
@@ -920,7 +1181,30 @@ const file_vws_iam_v1_mfa_device_proto_rawDesc = "" +
 	"mfa_device\x18\x01 \x01(\v2\x15.vws.iam.v1.MfaDeviceR\tmfaDevice\"S\n" +
 	"\x1bDeactivateMfaDeviceResponse\x124\n" +
 	"\n" +
-	"mfa_device\x18\x01 \x01(\v2\x15.vws.iam.v1.MfaDeviceR\tmfaDevice2\xa0\a\n" +
+	"mfa_device\x18\x01 \x01(\v2\x15.vws.iam.v1.MfaDeviceR\tmfaDevice\"\xc4\x01\n" +
+	"\x13TagMFADeviceRequest\x12-\n" +
+	"\x04name\x18\x01 \x01(\tB\x19\xe0A\x02\xfaA\x13\n" +
+	"\x11vws.iam/MfaDeviceR\x04name\x12(\n" +
+	"\x04tags\x18\x02 \x03(\v2\x0f.vws.iam.v1.TagB\x03\xe0A\x02R\x04tags\x12*\n" +
+	"\n" +
+	"request_id\x18\x03 \x01(\tB\v\xe0A\x01\xe2\x8c\xcf\xd7\b\x02\b\x01R\trequestId\x12(\n" +
+	"\rvalidate_only\x18\x04 \x01(\bB\x03\xe0A\x01R\fvalidateOnly\"\xbc\x01\n" +
+	"\x15UntagMFADeviceRequest\x12-\n" +
+	"\x04name\x18\x01 \x01(\tB\x19\xe0A\x02\xfaA\x13\n" +
+	"\x11vws.iam/MfaDeviceR\x04name\x12\x1e\n" +
+	"\btag_keys\x18\x02 \x03(\tB\x03\xe0A\x02R\atagKeys\x12*\n" +
+	"\n" +
+	"request_id\x18\x03 \x01(\tB\v\xe0A\x01\xe2\x8c\xcf\xd7\b\x02\b\x01R\trequestId\x12(\n" +
+	"\rvalidate_only\x18\x04 \x01(\bB\x03\xe0A\x01R\fvalidateOnly\"\x85\x01\n" +
+	"\x18ListMFADeviceTagsRequest\x12-\n" +
+	"\x04name\x18\x01 \x01(\tB\x19\xe0A\x02\xfaA\x13\n" +
+	"\x11vws.iam/MfaDeviceR\x04name\x12\x1b\n" +
+	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\x03 \x01(\tR\tpageToken\"h\n" +
+	"\x19ListMFADeviceTagsResponse\x12#\n" +
+	"\x04tags\x18\x01 \x03(\v2\x0f.vws.iam.v1.TagR\x04tags\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken2\xb6\v\n" +
 	"\x10MfaDeviceService\x12r\n" +
 	"\fGetMfaDevice\x12\x1f.vws.iam.v1.GetMfaDeviceRequest\x1a\x15.vws.iam.v1.MfaDevice\"*\x82\xd3\xe4\x93\x02$\x12\"/v1/{name=projects/*/mfaDevices/*}\x12\x83\x01\n" +
 	"\x0eListMfaDevices\x12!.vws.iam.v1.ListMfaDevicesRequest\x1a\".vws.iam.v1.ListMfaDevicesResponse\"*\x82\xd3\xe4\x93\x02$\x12\"/v1/{parent=projects/*}/mfaDevices\x12\xba\x01\n" +
@@ -928,7 +1212,12 @@ const file_vws_iam_v1_mfa_device_proto_rawDesc = "" +
 	"\x14vws.iam.v1.MfaDevice\x12\x1fvws.common.v1.OperationMetadata\x82\xd3\xe4\x93\x02$*\"/v1/{name=projects/*/mfaDevices/*}\x12\x9e\x01\n" +
 	"\x16CreateVirtualMfaDevice\x12).vws.iam.v1.CreateVirtualMfaDeviceRequest\x1a*.vws.iam.v1.CreateVirtualMfaDeviceResponse\"-\x82\xd3\xe4\x93\x02':\x01*\"\"/v1/{parent=projects/*}/mfaDevices\x12\x90\x01\n" +
 	"\x0fEnableMfaDevice\x12\".vws.iam.v1.EnableMfaDeviceRequest\x1a#.vws.iam.v1.EnableMfaDeviceResponse\"4\x82\xd3\xe4\x93\x02.:\x01*\")/v1/{name=projects/*/mfaDevices/*}:enable\x12\xa0\x01\n" +
-	"\x13DeactivateMfaDevice\x12&.vws.iam.v1.DeactivateMfaDeviceRequest\x1a'.vws.iam.v1.DeactivateMfaDeviceResponse\"8\x82\xd3\xe4\x93\x022:\x01*\"-/v1/{name=projects/*/mfaDevices/*}:deactivateB]\n" +
+	"\x13DeactivateMfaDevice\x12&.vws.iam.v1.DeactivateMfaDeviceRequest\x1a'.vws.iam.v1.DeactivateMfaDeviceResponse\"8\x82\xd3\xe4\x93\x022:\x01*\"-/v1/{name=projects/*/mfaDevices/*}:deactivate\x12\xbb\x01\n" +
+	"\fTagMFADevice\x12\x1f.vws.iam.v1.TagMFADeviceRequest\x1a\x1d.google.longrunning.Operation\"k\xcaA7\n" +
+	"\x14vws.iam.v1.MfaDevice\x12\x1fvws.common.v1.OperationMetadata\x82\xd3\xe4\x93\x02+:\x01*\"&/v1/{name=projects/*/mfaDevices/*}:tag\x12\xc1\x01\n" +
+	"\x0eUntagMFADevice\x12!.vws.iam.v1.UntagMFADeviceRequest\x1a\x1d.google.longrunning.Operation\"m\xcaA7\n" +
+	"\x14vws.iam.v1.MfaDevice\x12\x1fvws.common.v1.OperationMetadata\x82\xd3\xe4\x93\x02-:\x01*\"(/v1/{name=projects/*/mfaDevices/*}:untag\x12\x91\x01\n" +
+	"\x11ListMFADeviceTags\x12$.vws.iam.v1.ListMFADeviceTagsRequest\x1a%.vws.iam.v1.ListMFADeviceTagsResponse\"/\x82\xd3\xe4\x93\x02)\x12'/v1/{name=projects/*/mfaDevices/*}:tagsB]\n" +
 	"\x0edev.vws.iam.v1B\x0eMfaDeviceProtoP\x01Z9github.com/popododo0720/vws-proto/gen/go/vws/iam/v1;iamv1b\x06proto3"
 
 var (
@@ -943,7 +1232,7 @@ func file_vws_iam_v1_mfa_device_proto_rawDescGZIP() []byte {
 	return file_vws_iam_v1_mfa_device_proto_rawDescData
 }
 
-var file_vws_iam_v1_mfa_device_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_vws_iam_v1_mfa_device_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_vws_iam_v1_mfa_device_proto_goTypes = []any{
 	(*MfaDevice)(nil),                      // 0: vws.iam.v1.MfaDevice
 	(*MfaDeviceSpec)(nil),                  // 1: vws.iam.v1.MfaDeviceSpec
@@ -958,43 +1247,56 @@ var file_vws_iam_v1_mfa_device_proto_goTypes = []any{
 	(*DeactivateMfaDeviceRequest)(nil),     // 10: vws.iam.v1.DeactivateMfaDeviceRequest
 	(*EnableMfaDeviceResponse)(nil),        // 11: vws.iam.v1.EnableMfaDeviceResponse
 	(*DeactivateMfaDeviceResponse)(nil),    // 12: vws.iam.v1.DeactivateMfaDeviceResponse
-	nil,                                    // 13: vws.iam.v1.MfaDevice.LabelsEntry
-	(*timestamppb.Timestamp)(nil),          // 14: google.protobuf.Timestamp
-	(*v1.ObservedState)(nil),               // 15: vws.common.v1.ObservedState
-	(*longrunningpb.Operation)(nil),        // 16: google.longrunning.Operation
+	(*TagMFADeviceRequest)(nil),            // 13: vws.iam.v1.TagMFADeviceRequest
+	(*UntagMFADeviceRequest)(nil),          // 14: vws.iam.v1.UntagMFADeviceRequest
+	(*ListMFADeviceTagsRequest)(nil),       // 15: vws.iam.v1.ListMFADeviceTagsRequest
+	(*ListMFADeviceTagsResponse)(nil),      // 16: vws.iam.v1.ListMFADeviceTagsResponse
+	nil,                                    // 17: vws.iam.v1.MfaDevice.LabelsEntry
+	(*timestamppb.Timestamp)(nil),          // 18: google.protobuf.Timestamp
+	(*v1.ObservedState)(nil),               // 19: vws.common.v1.ObservedState
+	(*Tag)(nil),                            // 20: vws.iam.v1.Tag
+	(*longrunningpb.Operation)(nil),        // 21: google.longrunning.Operation
 }
 var file_vws_iam_v1_mfa_device_proto_depIdxs = []int32{
-	13, // 0: vws.iam.v1.MfaDevice.labels:type_name -> vws.iam.v1.MfaDevice.LabelsEntry
+	17, // 0: vws.iam.v1.MfaDevice.labels:type_name -> vws.iam.v1.MfaDevice.LabelsEntry
 	1,  // 1: vws.iam.v1.MfaDevice.spec:type_name -> vws.iam.v1.MfaDeviceSpec
 	2,  // 2: vws.iam.v1.MfaDevice.status:type_name -> vws.iam.v1.MfaDeviceStatus
-	14, // 3: vws.iam.v1.MfaDevice.create_time:type_name -> google.protobuf.Timestamp
-	14, // 4: vws.iam.v1.MfaDevice.update_time:type_name -> google.protobuf.Timestamp
-	14, // 5: vws.iam.v1.MfaDevice.delete_time:type_name -> google.protobuf.Timestamp
-	15, // 6: vws.iam.v1.MfaDeviceStatus.observed:type_name -> vws.common.v1.ObservedState
-	14, // 7: vws.iam.v1.MfaDeviceStatus.enable_time:type_name -> google.protobuf.Timestamp
-	14, // 8: vws.iam.v1.MfaDeviceStatus.locked_until:type_name -> google.protobuf.Timestamp
+	18, // 3: vws.iam.v1.MfaDevice.create_time:type_name -> google.protobuf.Timestamp
+	18, // 4: vws.iam.v1.MfaDevice.update_time:type_name -> google.protobuf.Timestamp
+	18, // 5: vws.iam.v1.MfaDevice.delete_time:type_name -> google.protobuf.Timestamp
+	19, // 6: vws.iam.v1.MfaDeviceStatus.observed:type_name -> vws.common.v1.ObservedState
+	18, // 7: vws.iam.v1.MfaDeviceStatus.enable_time:type_name -> google.protobuf.Timestamp
+	18, // 8: vws.iam.v1.MfaDeviceStatus.locked_until:type_name -> google.protobuf.Timestamp
 	0,  // 9: vws.iam.v1.ListMfaDevicesResponse.mfa_devices:type_name -> vws.iam.v1.MfaDevice
 	0,  // 10: vws.iam.v1.CreateVirtualMfaDeviceRequest.mfa_device:type_name -> vws.iam.v1.MfaDevice
 	0,  // 11: vws.iam.v1.CreateVirtualMfaDeviceResponse.mfa_device:type_name -> vws.iam.v1.MfaDevice
 	0,  // 12: vws.iam.v1.EnableMfaDeviceResponse.mfa_device:type_name -> vws.iam.v1.MfaDevice
 	0,  // 13: vws.iam.v1.DeactivateMfaDeviceResponse.mfa_device:type_name -> vws.iam.v1.MfaDevice
-	3,  // 14: vws.iam.v1.MfaDeviceService.GetMfaDevice:input_type -> vws.iam.v1.GetMfaDeviceRequest
-	4,  // 15: vws.iam.v1.MfaDeviceService.ListMfaDevices:input_type -> vws.iam.v1.ListMfaDevicesRequest
-	6,  // 16: vws.iam.v1.MfaDeviceService.DeleteMfaDevice:input_type -> vws.iam.v1.DeleteMfaDeviceRequest
-	7,  // 17: vws.iam.v1.MfaDeviceService.CreateVirtualMfaDevice:input_type -> vws.iam.v1.CreateVirtualMfaDeviceRequest
-	9,  // 18: vws.iam.v1.MfaDeviceService.EnableMfaDevice:input_type -> vws.iam.v1.EnableMfaDeviceRequest
-	10, // 19: vws.iam.v1.MfaDeviceService.DeactivateMfaDevice:input_type -> vws.iam.v1.DeactivateMfaDeviceRequest
-	0,  // 20: vws.iam.v1.MfaDeviceService.GetMfaDevice:output_type -> vws.iam.v1.MfaDevice
-	5,  // 21: vws.iam.v1.MfaDeviceService.ListMfaDevices:output_type -> vws.iam.v1.ListMfaDevicesResponse
-	16, // 22: vws.iam.v1.MfaDeviceService.DeleteMfaDevice:output_type -> google.longrunning.Operation
-	8,  // 23: vws.iam.v1.MfaDeviceService.CreateVirtualMfaDevice:output_type -> vws.iam.v1.CreateVirtualMfaDeviceResponse
-	11, // 24: vws.iam.v1.MfaDeviceService.EnableMfaDevice:output_type -> vws.iam.v1.EnableMfaDeviceResponse
-	12, // 25: vws.iam.v1.MfaDeviceService.DeactivateMfaDevice:output_type -> vws.iam.v1.DeactivateMfaDeviceResponse
-	20, // [20:26] is the sub-list for method output_type
-	14, // [14:20] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	20, // 14: vws.iam.v1.TagMFADeviceRequest.tags:type_name -> vws.iam.v1.Tag
+	20, // 15: vws.iam.v1.ListMFADeviceTagsResponse.tags:type_name -> vws.iam.v1.Tag
+	3,  // 16: vws.iam.v1.MfaDeviceService.GetMfaDevice:input_type -> vws.iam.v1.GetMfaDeviceRequest
+	4,  // 17: vws.iam.v1.MfaDeviceService.ListMfaDevices:input_type -> vws.iam.v1.ListMfaDevicesRequest
+	6,  // 18: vws.iam.v1.MfaDeviceService.DeleteMfaDevice:input_type -> vws.iam.v1.DeleteMfaDeviceRequest
+	7,  // 19: vws.iam.v1.MfaDeviceService.CreateVirtualMfaDevice:input_type -> vws.iam.v1.CreateVirtualMfaDeviceRequest
+	9,  // 20: vws.iam.v1.MfaDeviceService.EnableMfaDevice:input_type -> vws.iam.v1.EnableMfaDeviceRequest
+	10, // 21: vws.iam.v1.MfaDeviceService.DeactivateMfaDevice:input_type -> vws.iam.v1.DeactivateMfaDeviceRequest
+	13, // 22: vws.iam.v1.MfaDeviceService.TagMFADevice:input_type -> vws.iam.v1.TagMFADeviceRequest
+	14, // 23: vws.iam.v1.MfaDeviceService.UntagMFADevice:input_type -> vws.iam.v1.UntagMFADeviceRequest
+	15, // 24: vws.iam.v1.MfaDeviceService.ListMFADeviceTags:input_type -> vws.iam.v1.ListMFADeviceTagsRequest
+	0,  // 25: vws.iam.v1.MfaDeviceService.GetMfaDevice:output_type -> vws.iam.v1.MfaDevice
+	5,  // 26: vws.iam.v1.MfaDeviceService.ListMfaDevices:output_type -> vws.iam.v1.ListMfaDevicesResponse
+	21, // 27: vws.iam.v1.MfaDeviceService.DeleteMfaDevice:output_type -> google.longrunning.Operation
+	8,  // 28: vws.iam.v1.MfaDeviceService.CreateVirtualMfaDevice:output_type -> vws.iam.v1.CreateVirtualMfaDeviceResponse
+	11, // 29: vws.iam.v1.MfaDeviceService.EnableMfaDevice:output_type -> vws.iam.v1.EnableMfaDeviceResponse
+	12, // 30: vws.iam.v1.MfaDeviceService.DeactivateMfaDevice:output_type -> vws.iam.v1.DeactivateMfaDeviceResponse
+	21, // 31: vws.iam.v1.MfaDeviceService.TagMFADevice:output_type -> google.longrunning.Operation
+	21, // 32: vws.iam.v1.MfaDeviceService.UntagMFADevice:output_type -> google.longrunning.Operation
+	16, // 33: vws.iam.v1.MfaDeviceService.ListMFADeviceTags:output_type -> vws.iam.v1.ListMFADeviceTagsResponse
+	25, // [25:34] is the sub-list for method output_type
+	16, // [16:25] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_vws_iam_v1_mfa_device_proto_init() }
@@ -1002,13 +1304,14 @@ func file_vws_iam_v1_mfa_device_proto_init() {
 	if File_vws_iam_v1_mfa_device_proto != nil {
 		return
 	}
+	file_vws_iam_v1_policy_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_vws_iam_v1_mfa_device_proto_rawDesc), len(file_vws_iam_v1_mfa_device_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   14,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
