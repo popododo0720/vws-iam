@@ -2,7 +2,7 @@ module github.com/popododo0720/vws-iam
 
 go 1.26.0
 
-toolchain go1.26.9
+toolchain go1.26.10
 
 require (
 	cloud.google.com/go/longrunning v1.3.0
