@@ -29,6 +29,9 @@ const (
 	PolicyService_ListPolicyVersions_FullMethodName  = "/vws.iam.v1.PolicyService/ListPolicyVersions"
 	PolicyService_CreatePolicyVersion_FullMethodName = "/vws.iam.v1.PolicyService/CreatePolicyVersion"
 	PolicyService_DeletePolicyVersion_FullMethodName = "/vws.iam.v1.PolicyService/DeletePolicyVersion"
+	PolicyService_TagPolicy_FullMethodName           = "/vws.iam.v1.PolicyService/TagPolicy"
+	PolicyService_UntagPolicy_FullMethodName         = "/vws.iam.v1.PolicyService/UntagPolicy"
+	PolicyService_ListPolicyTags_FullMethodName      = "/vws.iam.v1.PolicyService/ListPolicyTags"
 )
 
 // PolicyServiceClient is the client API for PolicyService service.
@@ -47,6 +50,10 @@ const (
 // A policy keeps at most 5 versions; a sixth is RESOURCE_EXHAUSTED /
 // QUOTA_EXCEEDED. Delete of a policy is FAILED_PRECONDITION /
 // DEPENDENCY_MISSING while it is attached. The default version cannot be deleted.
+// A policy keeps at most 50 tags, stored with the policy and not in its
+// envelope labels (AWS tag keys and values allow characters and lengths the
+// envelope labels do not). Tag and Untag are INVALID_ARGUMENT / INVALID_SPEC
+// for an invalid tag, and RESOURCE_EXHAUSTED / QUOTA_EXCEEDED past 50 tags.
 type PolicyServiceClient interface {
 	// AIP-131: the Get response is the resource.
 	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
@@ -73,6 +80,14 @@ type PolicyServiceClient interface {
 	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
 	// buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
 	DeletePolicyVersion(ctx context.Context, in *DeletePolicyVersionRequest, opts ...grpc.CallOption) (*longrunningpb.Operation, error)
+	// AIP-151: every mutation returns google.longrunning.Operation.
+	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+	// buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+	TagPolicy(ctx context.Context, in *TagPolicyRequest, opts ...grpc.CallOption) (*longrunningpb.Operation, error)
+	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+	// buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+	UntagPolicy(ctx context.Context, in *UntagPolicyRequest, opts ...grpc.CallOption) (*longrunningpb.Operation, error)
+	ListPolicyTags(ctx context.Context, in *ListPolicyTagsRequest, opts ...grpc.CallOption) (*ListPolicyTagsResponse, error)
 }
 
 type policyServiceClient struct {
@@ -173,6 +188,36 @@ func (c *policyServiceClient) DeletePolicyVersion(ctx context.Context, in *Delet
 	return out, nil
 }
 
+func (c *policyServiceClient) TagPolicy(ctx context.Context, in *TagPolicyRequest, opts ...grpc.CallOption) (*longrunningpb.Operation, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(longrunningpb.Operation)
+	err := c.cc.Invoke(ctx, PolicyService_TagPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *policyServiceClient) UntagPolicy(ctx context.Context, in *UntagPolicyRequest, opts ...grpc.CallOption) (*longrunningpb.Operation, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(longrunningpb.Operation)
+	err := c.cc.Invoke(ctx, PolicyService_UntagPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *policyServiceClient) ListPolicyTags(ctx context.Context, in *ListPolicyTagsRequest, opts ...grpc.CallOption) (*ListPolicyTagsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListPolicyTagsResponse)
+	err := c.cc.Invoke(ctx, PolicyService_ListPolicyTags_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PolicyServiceServer is the server API for PolicyService service.
 // All implementations must embed UnimplementedPolicyServiceServer
 // for forward compatibility.
@@ -189,6 +234,10 @@ func (c *policyServiceClient) DeletePolicyVersion(ctx context.Context, in *Delet
 // A policy keeps at most 5 versions; a sixth is RESOURCE_EXHAUSTED /
 // QUOTA_EXCEEDED. Delete of a policy is FAILED_PRECONDITION /
 // DEPENDENCY_MISSING while it is attached. The default version cannot be deleted.
+// A policy keeps at most 50 tags, stored with the policy and not in its
+// envelope labels (AWS tag keys and values allow characters and lengths the
+// envelope labels do not). Tag and Untag are INVALID_ARGUMENT / INVALID_SPEC
+// for an invalid tag, and RESOURCE_EXHAUSTED / QUOTA_EXCEEDED past 50 tags.
 type PolicyServiceServer interface {
 	// AIP-131: the Get response is the resource.
 	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
@@ -215,6 +264,14 @@ type PolicyServiceServer interface {
 	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
 	// buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
 	DeletePolicyVersion(context.Context, *DeletePolicyVersionRequest) (*longrunningpb.Operation, error)
+	// AIP-151: every mutation returns google.longrunning.Operation.
+	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+	// buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+	TagPolicy(context.Context, *TagPolicyRequest) (*longrunningpb.Operation, error)
+	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+	// buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+	UntagPolicy(context.Context, *UntagPolicyRequest) (*longrunningpb.Operation, error)
+	ListPolicyTags(context.Context, *ListPolicyTagsRequest) (*ListPolicyTagsResponse, error)
 	mustEmbedUnimplementedPolicyServiceServer()
 }
 
@@ -251,6 +308,15 @@ func (UnimplementedPolicyServiceServer) CreatePolicyVersion(context.Context, *Cr
 }
 func (UnimplementedPolicyServiceServer) DeletePolicyVersion(context.Context, *DeletePolicyVersionRequest) (*longrunningpb.Operation, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeletePolicyVersion not implemented")
+}
+func (UnimplementedPolicyServiceServer) TagPolicy(context.Context, *TagPolicyRequest) (*longrunningpb.Operation, error) {
+	return nil, status.Error(codes.Unimplemented, "method TagPolicy not implemented")
+}
+func (UnimplementedPolicyServiceServer) UntagPolicy(context.Context, *UntagPolicyRequest) (*longrunningpb.Operation, error) {
+	return nil, status.Error(codes.Unimplemented, "method UntagPolicy not implemented")
+}
+func (UnimplementedPolicyServiceServer) ListPolicyTags(context.Context, *ListPolicyTagsRequest) (*ListPolicyTagsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListPolicyTags not implemented")
 }
 func (UnimplementedPolicyServiceServer) mustEmbedUnimplementedPolicyServiceServer() {}
 func (UnimplementedPolicyServiceServer) testEmbeddedByValue()                       {}
@@ -435,6 +501,60 @@ func _PolicyService_DeletePolicyVersion_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PolicyService_TagPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TagPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PolicyServiceServer).TagPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PolicyService_TagPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PolicyServiceServer).TagPolicy(ctx, req.(*TagPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PolicyService_UntagPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UntagPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PolicyServiceServer).UntagPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PolicyService_UntagPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PolicyServiceServer).UntagPolicy(ctx, req.(*UntagPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PolicyService_ListPolicyTags_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPolicyTagsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PolicyServiceServer).ListPolicyTags(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PolicyService_ListPolicyTags_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PolicyServiceServer).ListPolicyTags(ctx, req.(*ListPolicyTagsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PolicyService_ServiceDesc is the grpc.ServiceDesc for PolicyService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -477,6 +597,18 @@ var PolicyService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeletePolicyVersion",
 			Handler:    _PolicyService_DeletePolicyVersion_Handler,
+		},
+		{
+			MethodName: "TagPolicy",
+			Handler:    _PolicyService_TagPolicy_Handler,
+		},
+		{
+			MethodName: "UntagPolicy",
+			Handler:    _PolicyService_UntagPolicy_Handler,
+		},
+		{
+			MethodName: "ListPolicyTags",
+			Handler:    _PolicyService_ListPolicyTags_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

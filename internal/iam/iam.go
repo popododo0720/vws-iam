@@ -276,6 +276,10 @@ type Policy struct {
 	// NextVersion numbers the next version (v<NextVersion>); 0 means len(Versions)+1.
 	NextVersion int             `json:"nextVersion,omitempty"`
 	Versions    []PolicyVersion `json:"versions"`
+	// Tags are the AWS customer managed policy tags. They are not envelope
+	// labels: AWS tag keys and values allow characters and lengths the label
+	// grammar rejects (#74, #75, #76).
+	Tags map[string]string `json:"tags,omitempty"`
 }
 
 func (Policy) Kind() Kind    { return KindPolicy }
@@ -286,6 +290,12 @@ func (p Policy) Validate() error {
 	}
 	if len(p.Versions) == 0 || len(p.Versions) > MaxPolicyVersions {
 		return invalid("policy %q has %d versions", p.Name, len(p.Versions))
+	}
+	if len(p.Tags) > MaxPolicyTags {
+		return invalid("policy %q has %d tags", p.Name, len(p.Tags))
+	}
+	if err := CheckTags(p.Tags); err != nil {
+		return invalid("policy %q tag: %v", p.Name, err)
 	}
 	found := false
 	seen := map[string]bool{}
