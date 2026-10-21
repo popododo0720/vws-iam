@@ -781,6 +781,68 @@ func TestSTSMFAIsVerifiedAndLocksOut(t *testing.T) {
 	}
 }
 
+// TestMfaSerialIncludesPath: a virtual MFA device created with a path has
+// that path in its serial number (vws.iam.v1.MfaDeviceSpec.path), and STS
+// resolves the full serial, not just the final name, back to the device.
+func TestMfaSerialIncludesPath(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	u := e.createUser(t, ctx, "alice")
+	const want = "arn:vws:iam::acme:mfa/team/alice-phone"
+	d, err := e.mfa.CreateVirtualMfaDevice(ctx, &iamv1.CreateVirtualMfaDeviceRequest{
+		Parent: parentName, MfaDeviceId: "alice-phone",
+		MfaDevice: &iamv1.MfaDevice{Spec: &iamv1.MfaDeviceSpec{Path: "/team/"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := d.GetMfaDevice().GetStatus().GetSerialNumber(); got != want {
+		t.Fatalf("create serial_number = %q, want %q", got, want)
+	}
+	got, err := e.mfa.GetMfaDevice(ctx, &iamv1.GetMfaDeviceRequest{Name: d.GetMfaDevice().GetName()})
+	if err != nil || got.GetStatus().GetSerialNumber() != want {
+		t.Fatalf("get serial_number = %q, want %q: %v", got.GetStatus().GetSerialNumber(), want, err)
+	}
+	list, err := e.mfa.ListMfaDevices(ctx, &iamv1.ListMfaDevicesRequest{Parent: parentName})
+	if err != nil || len(list.GetMfaDevices()) != 1 || list.GetMfaDevices()[0].GetStatus().GetSerialNumber() != want {
+		t.Fatalf("list serial_number: %v %v", list, err)
+	}
+
+	seed, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(d.GetBase32StringSeed())
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := totp.Step(*e.now)
+	if _, err := e.mfa.EnableMfaDevice(ctx, &iamv1.EnableMfaDeviceRequest{
+		Name: d.GetMfaDevice().GetName(), User: u.GetName(),
+		AuthenticationCode_1: totp.Code(seed, step-1, totp.Digits), AuthenticationCode_2: totp.Code(seed, step, totp.Digits),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	*e.now = e.now.Add(30 * time.Second)
+	u, err = e.users.GetUser(ctx, &iamv1.GetUserRequest{Name: u.GetName()})
+	if err != nil || len(u.GetStatus().GetMfaDevices()) != 1 || u.GetStatus().GetMfaDevices()[0] != want {
+		t.Fatalf("user mfa devices = %v: %v", u.GetStatus().GetMfaDevices(), err)
+	}
+
+	key, err := e.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: u.GetName()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kid := key.GetAccessKey().GetName()[strings.LastIndex(key.GetAccessKey().GetName(), "/")+1:]
+	session := func(serial string) error {
+		_, err := e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{
+			SerialNumber: serial, TokenCode: code(t, e, d.GetBase32StringSeed()),
+			Authentication: gstSig(e.stsSign(kid, key.GetSecretAccessKey(), "", "GetSessionToken")),
+		})
+		return err
+	}
+	wantErr(t, session("arn:vws:iam::acme:mfa/other/alice-phone"), codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+	if err := session(want); err != nil {
+		t.Fatalf("path serial: %v", err)
+	}
+}
+
 // TestConsoleSessionAuthentication: a user's console session may assume a
 // role (its MFA carried over) but may not call GetSessionToken (root-only).
 func TestConsoleSessionAuthentication(t *testing.T) {

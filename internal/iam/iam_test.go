@@ -28,6 +28,7 @@ func TestValidateRejectsHostileInput(t *testing.T) {
 		iam.AccessKey{ID: "AKIAABCDEFGHIJKLMNOP", UserName: "a", Status: iam.KeyActive},
 		iam.MfaDevice{Name: "d", Enabled: true, Seed: seal},
 		iam.MfaDevice{Name: "d"},
+		iam.MfaDevice{Name: "d", Path: "team", Seed: seal},
 	}
 	for i, o := range bad {
 		if err := o.Validate(); !errors.Is(err, iam.ErrInvalid) {
@@ -42,6 +43,24 @@ func TestARNs(t *testing.T) {
 	}
 	if got := iam.RoleARN("000000000000", iam.Role{Name: "r"}); got != "arn:vws:iam::000000000000:role/r" {
 		t.Fatal(got)
+	}
+	got := iam.MfaDeviceARN("000000000000", iam.MfaDevice{Name: "d", Path: "/team/"})
+	if want := "arn:vws:iam::000000000000:mfa/team/d"; got != want {
+		t.Fatal(got)
+	}
+	if got := iam.MfaDeviceARN("000000000000", iam.MfaDevice{Name: "d"}); got != "arn:vws:iam::000000000000:mfa/d" {
+		t.Fatal(got)
+	}
+	name, path, ok := iam.SplitMfaDeviceARN("000000000000", "arn:vws:iam::000000000000:mfa/team/d")
+	if !ok || name != "d" || path != "/team/" {
+		t.Fatalf("split path serial: %q %q %v", name, path, ok)
+	}
+	name, path, ok = iam.SplitMfaDeviceARN("000000000000", "arn:vws:iam::000000000000:mfa/d")
+	if !ok || name != "d" || path != "/" {
+		t.Fatalf("split root serial: %q %q %v", name, path, ok)
+	}
+	if _, _, ok := iam.SplitMfaDeviceARN("000000000000", "arn:vws:iam::111111111111:mfa/d"); ok {
+		t.Fatal("split accepted another account")
 	}
 }
 

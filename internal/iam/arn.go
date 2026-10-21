@@ -36,3 +36,25 @@ func RoleARN(account string, r Role) string {
 func PolicyARN(account string, p Policy) string {
 	return ARN("iam", "", account, "policy"+pathOf(p.Path)+p.Name)
 }
+
+// MfaDeviceARN is the ARN of a virtual MFA device in account. Its path is
+// part of the serial number, as in AWS.
+func MfaDeviceARN(account string, d MfaDevice) string {
+	return ARN("iam", "", account, "mfa"+pathOf(d.Path)+d.Name)
+}
+
+// SplitMfaDeviceARN splits an MFA device ARN in account into the device
+// name and path. The path is "/" at the root. ok is false when serial is
+// not an MFA device ARN in account.
+func SplitMfaDeviceARN(account, serial string) (name, path string, ok bool) {
+	rest, ok := strings.CutPrefix(serial, ARN("iam", "", account, "mfa"))
+	if !ok || !strings.HasPrefix(rest, "/") {
+		return "", "", false
+	}
+	i := strings.LastIndexByte(rest, '/')
+	name = rest[i+1:]
+	if !ValidName(name) {
+		return "", "", false
+	}
+	return name, rest[:i+1], true
+}

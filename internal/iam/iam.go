@@ -397,8 +397,8 @@ type MfaDevice struct {
 func (MfaDevice) Kind() Kind    { return KindMfaDevice }
 func (d MfaDevice) Key() string { return d.Name }
 func (d MfaDevice) Validate() error {
-	if !ValidName(d.Name) {
-		return invalid("mfa device name %q", d.Name)
+	if err := checkName("mfa device", d.Name, d.Path); err != nil {
+		return err
 	}
 	if d.Enabled && d.UserName == "" {
 		return invalid("enabled mfa device %q has no user", d.Name)

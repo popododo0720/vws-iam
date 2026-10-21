@@ -59,7 +59,7 @@ func code(seed []byte, at time.Time, off int64) string {
 
 func enroll(t *testing.T, svc *mfa.Service, clk *clock, user, name string) []byte {
 	ctx := context.Background()
-	e, err := svc.CreateVirtual(ctx, name)
+	e, err := svc.CreateVirtual(ctx, name, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func enroll(t *testing.T, svc *mfa.Service, clk *clock, user, name string) []byt
 func TestEnrollmentSeedIsSealedAndShownOnce(t *testing.T) {
 	svc, b, _ := setup(t)
 	ctx := context.Background()
-	e, err := svc.CreateVirtual(ctx, "alice-phone")
+	e, err := svc.CreateVirtual(ctx, "alice-phone", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,8 +94,36 @@ func TestEnrollmentSeedIsSealedAndShownOnce(t *testing.T) {
 	if err != nil || len(ds) != 1 || len(ds[0].Seed.Ciphertext) != 0 {
 		t.Fatalf("list leaks sealed seed: %v %+v", err, ds)
 	}
-	if _, err := svc.CreateVirtual(ctx, "ALICE-PHONE"); !errors.Is(err, store.ErrExists) {
+	if _, err := svc.CreateVirtual(ctx, "ALICE-PHONE", ""); !errors.Is(err, store.ErrExists) {
 		t.Fatalf("duplicate device: %v", err)
+	}
+}
+
+func TestSerialNumberIncludesPath(t *testing.T) {
+	svc, _, clk := setup(t)
+	ctx := context.Background()
+	e, err := svc.CreateVirtual(ctx, "alice-phone", "/team/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "arn:vws:iam::" + acct + ":mfa/team/alice-phone"
+	if e.SerialNumber != want {
+		t.Fatalf("serial %q, want %q", e.SerialNumber, want)
+	}
+	seed := seedOf(t, e)
+	if err := svc.Enable(ctx, "alice", "alice-phone", code(seed, clk.t, -1), code(seed, clk.t, 0)); err != nil {
+		t.Fatal(err)
+	}
+	clk.t = clk.t.Add(totp.Period)
+	wrong := "arn:vws:iam::" + acct + ":mfa/other/alice-phone"
+	if err := svc.VerifySerial(ctx, "alice", wrong, code(seed, clk.t, 0)); !errors.Is(err, mfa.ErrNotAssociated) {
+		t.Fatalf("wrong path: %v", err)
+	}
+	if err := svc.VerifySerial(ctx, "alice", want, code(seed, clk.t, 0)); err != nil {
+		t.Fatalf("path serial: %v", err)
+	}
+	if _, err := svc.CreateVirtual(ctx, "bad-path", "/team"); !errors.Is(err, iam.ErrInvalid) {
+		t.Fatalf("path without trailing slash: %v", err)
 	}
 }
 
@@ -113,7 +141,7 @@ func TestEnableNeedsTwoConsecutiveCodes(t *testing.T) {
 		func([]byte) [2]string { return [2]string{"000000", "111111"} },
 	} {
 		name := fmt.Sprintf("bad-%d", i)
-		e, err := svc.CreateVirtual(ctx, name)
+		e, err := svc.CreateVirtual(ctx, name, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -122,13 +150,13 @@ func TestEnableNeedsTwoConsecutiveCodes(t *testing.T) {
 			t.Fatalf("case %d %v: %v", i, p, err)
 		}
 	}
-	e, err := svc.CreateVirtual(ctx, "d1")
+	e, err := svc.CreateVirtual(ctx, "d1", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	seed := seedOf(t, e)
 	// The ±1 window still accepts the current pair (0, +1).
-	e2, err := svc.CreateVirtual(ctx, "d2")
+	e2, err := svc.CreateVirtual(ctx, "d2", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +332,7 @@ func TestFailedAttemptsLockTheDevice(t *testing.T) {
 func TestEnableFailuresCountTowardLockout(t *testing.T) {
 	svc, _, clk := setup(t)
 	ctx := context.Background()
-	e, err := svc.CreateVirtual(ctx, "d1")
+	e, err := svc.CreateVirtual(ctx, "d1", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +395,7 @@ func TestEnableWindowLiterals(t *testing.T) {
 		ok            bool
 	}{{-1, 0, true}, {0, 1, true}, {-2, -1, false}, {1, 2, false}} {
 		name := fmt.Sprintf("w%d", i)
-		e, err := svc.CreateVirtual(ctx, name)
+		e, err := svc.CreateVirtual(ctx, name, "")
 		if err != nil {
 			t.Fatal(err)
 		}
