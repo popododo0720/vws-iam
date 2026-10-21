@@ -9,6 +9,7 @@ import "google/api/resource.proto";
 import "google/longrunning/operations.proto";
 import "google/protobuf/timestamp.proto";
 import "vws/common/v1/resource.proto";
+import "vws/iam/v1/policy.proto";
 
 option go_package = "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1;iamv1";
 option java_multiple_files = true;
@@ -20,6 +21,10 @@ option java_package = "dev.vws.iam.v1";
 // The seed is encrypted at rest and returned only by CreateVirtualMfaDevice,
 // which is synchronous for the same reason as CreateAccessKey.
 // Delete is FAILED_PRECONDITION / DEPENDENCY_MISSING while the device is enabled.
+// A device keeps at most 50 tags, stored with the device and not in its
+// envelope labels (AWS tag keys and values allow characters and lengths the
+// envelope labels do not). Tag and Untag are INVALID_ARGUMENT / INVALID_SPEC
+// for an invalid tag, and RESOURCE_EXHAUSTED / QUOTA_EXCEEDED past 50 tags.
 service MfaDeviceService {
   // AIP-131: the Get response is the resource.
   // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
@@ -62,6 +67,37 @@ service MfaDeviceService {
       post: "/v1/{name=projects/*/mfaDevices/*}:deactivate"
       body: "*"
     };
+  }
+
+  // AIP-151: every mutation returns google.longrunning.Operation.
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  // buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+  rpc TagMFADevice(TagMFADeviceRequest) returns (google.longrunning.Operation) {
+    option (google.api.http) = {
+      post: "/v1/{name=projects/*/mfaDevices/*}:tag"
+      body: "*"
+    };
+    option (google.longrunning.operation_info) = {
+      response_type: "vws.iam.v1.MfaDevice"
+      metadata_type: "vws.common.v1.OperationMetadata"
+    };
+  }
+
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  // buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+  rpc UntagMFADevice(UntagMFADeviceRequest) returns (google.longrunning.Operation) {
+    option (google.api.http) = {
+      post: "/v1/{name=projects/*/mfaDevices/*}:untag"
+      body: "*"
+    };
+    option (google.longrunning.operation_info) = {
+      response_type: "vws.iam.v1.MfaDevice"
+      metadata_type: "vws.common.v1.OperationMetadata"
+    };
+  }
+
+  rpc ListMFADeviceTags(ListMFADeviceTagsRequest) returns (ListMFADeviceTagsResponse) {
+    option (google.api.http) = {get: "/v1/{name=projects/*/mfaDevices/*}:tags"};
   }
 }
 
@@ -208,4 +244,55 @@ message EnableMfaDeviceResponse {
 
 message DeactivateMfaDeviceResponse {
   MfaDevice mfa_device = 1;
+}
+
+// TagMFADevice adds or overwrites tags on a virtual MFA device. The whole
+// request fails and stores nothing when one tag is invalid, a key repeats, or
+// the device would keep more than 50 tags. The response is the MfaDevice.
+// console-api resolves the AWS SerialNumber to this resource name.
+message TagMFADeviceRequest {
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "vws.iam/MfaDevice"
+  ];
+  // 1-50 tags. A key that repeats is the same as naming it twice: the last
+  // value wins.
+  repeated Tag tags = 2 [(google.api.field_behavior) = REQUIRED];
+  string request_id = 3 [
+    (google.api.field_info).format = UUID4,
+    (google.api.field_behavior) = OPTIONAL
+  ];
+  bool validate_only = 4 [(google.api.field_behavior) = OPTIONAL];
+}
+
+// UntagMFADevice removes the named keys from a virtual MFA device. A key that
+// is not attached is ignored. The response is the MfaDevice.
+message UntagMFADeviceRequest {
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "vws.iam/MfaDevice"
+  ];
+  // 1-50 keys, 1-128 characters each, same alphabet as Tag.key.
+  repeated string tag_keys = 2 [(google.api.field_behavior) = REQUIRED];
+  string request_id = 3 [
+    (google.api.field_info).format = UUID4,
+    (google.api.field_behavior) = OPTIONAL
+  ];
+  bool validate_only = 4 [(google.api.field_behavior) = OPTIONAL];
+}
+
+// ListMFADeviceTags lists a device's tags sorted by key. page_size defaults
+// to 100; values above 1000 are coerced to 1000.
+message ListMFADeviceTagsRequest {
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "vws.iam/MfaDevice"
+  ];
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListMFADeviceTagsResponse {
+  repeated Tag tags = 1;
+  string next_page_token = 2;
 }

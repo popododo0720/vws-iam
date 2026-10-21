@@ -1200,7 +1200,7 @@ type Tag struct {
 	// A key may not begin with aws:.
 	Key string `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
 	// 0-256 characters of the same alphabet. A value may not begin with
-	// aws:. Both are case sensitive for a policy.
+	// aws:. Both are case sensitive for a policy and a virtual MFA device.
 	Value         string `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

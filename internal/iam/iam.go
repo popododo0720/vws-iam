@@ -392,6 +392,10 @@ type MfaDevice struct {
 	// locked it); renewals never extend LockedUntil past
 	// LockedSince+mfa.MaxLockout (#48).
 	LockedSince time.Time `json:"lockedSince,omitzero"`
+	// Tags are the AWS virtual MFA device tags. They are not envelope
+	// labels: AWS tag keys and values allow characters and lengths the
+	// label grammar rejects (#77, #78, #79).
+	Tags map[string]string `json:"tags,omitempty"`
 }
 
 func (MfaDevice) Kind() Kind    { return KindMfaDevice }
@@ -405,6 +409,12 @@ func (d MfaDevice) Validate() error {
 	}
 	if d.Seed.KeyID == "" || len(d.Seed.Ciphertext) == 0 {
 		return invalid("mfa device %q has no sealed seed", d.Name)
+	}
+	if len(d.Tags) > MaxMFADeviceTags {
+		return invalid("mfa device %q has %d tags", d.Name, len(d.Tags))
+	}
+	if err := CheckTags(d.Tags); err != nil {
+		return invalid("mfa device %q tag: %v", d.Name, err)
 	}
 	return nil
 }

@@ -23,12 +23,12 @@ const DefaultTagPageSize = 100
 // MaxTagPageSize is the AWS maximum MaxItems for ListPolicyTags.
 const MaxTagPageSize = 1000
 
-// checkTagRequestTags checks the list a TagPolicy or UntagPolicy request
-// carries: 1 to 50 items. The array constraints are request validation, so
-// AWS answers them as ValidationError, not InvalidInput.
-func checkTagRequestTags(n int) error {
-	if n < 1 || n > iam.MaxPolicyTags {
-		return invalidSpec("tags must have 1 to " + strconv.Itoa(iam.MaxPolicyTags) + " items")
+// checkTagRequestTags checks the list a tag request carries: 1 to limit
+// items. The array constraints are request validation, so AWS answers them
+// as ValidationError, not InvalidInput.
+func checkTagRequestTags(n, limit int) error {
+	if n < 1 || n > limit {
+		return invalidSpec("tags must have 1 to " + strconv.Itoa(limit) + " items")
 	}
 	return nil
 }
@@ -50,7 +50,7 @@ func (s *Server) TagPolicy(ctx context.Context, req *iamv1.TagPolicyRequest) (*l
 		return nil, err
 	}
 	tags := req.GetTags()
-	if err := checkTagRequestTags(len(tags)); err != nil {
+	if err := checkTagRequestTags(len(tags), iam.MaxPolicyTags); err != nil {
 		return nil, err
 	}
 	for _, tag := range tags {
@@ -97,7 +97,7 @@ func (s *Server) UntagPolicy(ctx context.Context, req *iamv1.UntagPolicyRequest)
 		return nil, err
 	}
 	keys := req.GetTagKeys()
-	if err := checkTagRequestTags(len(keys)); err != nil {
+	if err := checkTagRequestTags(len(keys), iam.MaxPolicyTags); err != nil {
 		return nil, err
 	}
 	for _, key := range keys {

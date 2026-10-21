@@ -26,6 +26,9 @@ const (
 	MfaDeviceService_CreateVirtualMfaDevice_FullMethodName = "/vws.iam.v1.MfaDeviceService/CreateVirtualMfaDevice"
 	MfaDeviceService_EnableMfaDevice_FullMethodName        = "/vws.iam.v1.MfaDeviceService/EnableMfaDevice"
 	MfaDeviceService_DeactivateMfaDevice_FullMethodName    = "/vws.iam.v1.MfaDeviceService/DeactivateMfaDevice"
+	MfaDeviceService_TagMFADevice_FullMethodName           = "/vws.iam.v1.MfaDeviceService/TagMFADevice"
+	MfaDeviceService_UntagMFADevice_FullMethodName         = "/vws.iam.v1.MfaDeviceService/UntagMFADevice"
+	MfaDeviceService_ListMFADeviceTags_FullMethodName      = "/vws.iam.v1.MfaDeviceService/ListMFADeviceTags"
 )
 
 // MfaDeviceServiceClient is the client API for MfaDeviceService service.
@@ -37,6 +40,10 @@ const (
 // The seed is encrypted at rest and returned only by CreateVirtualMfaDevice,
 // which is synchronous for the same reason as CreateAccessKey.
 // Delete is FAILED_PRECONDITION / DEPENDENCY_MISSING while the device is enabled.
+// A device keeps at most 50 tags, stored with the device and not in its
+// envelope labels (AWS tag keys and values allow characters and lengths the
+// envelope labels do not). Tag and Untag are INVALID_ARGUMENT / INVALID_SPEC
+// for an invalid tag, and RESOURCE_EXHAUSTED / QUOTA_EXCEEDED past 50 tags.
 type MfaDeviceServiceClient interface {
 	// AIP-131: the Get response is the resource.
 	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
@@ -50,6 +57,14 @@ type MfaDeviceServiceClient interface {
 	// Wrong codes are UNAUTHENTICATED / INVALID_CREDENTIALS.
 	EnableMfaDevice(ctx context.Context, in *EnableMfaDeviceRequest, opts ...grpc.CallOption) (*EnableMfaDeviceResponse, error)
 	DeactivateMfaDevice(ctx context.Context, in *DeactivateMfaDeviceRequest, opts ...grpc.CallOption) (*DeactivateMfaDeviceResponse, error)
+	// AIP-151: every mutation returns google.longrunning.Operation.
+	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+	// buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+	TagMFADevice(ctx context.Context, in *TagMFADeviceRequest, opts ...grpc.CallOption) (*longrunningpb.Operation, error)
+	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+	// buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+	UntagMFADevice(ctx context.Context, in *UntagMFADeviceRequest, opts ...grpc.CallOption) (*longrunningpb.Operation, error)
+	ListMFADeviceTags(ctx context.Context, in *ListMFADeviceTagsRequest, opts ...grpc.CallOption) (*ListMFADeviceTagsResponse, error)
 }
 
 type mfaDeviceServiceClient struct {
@@ -120,6 +135,36 @@ func (c *mfaDeviceServiceClient) DeactivateMfaDevice(ctx context.Context, in *De
 	return out, nil
 }
 
+func (c *mfaDeviceServiceClient) TagMFADevice(ctx context.Context, in *TagMFADeviceRequest, opts ...grpc.CallOption) (*longrunningpb.Operation, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(longrunningpb.Operation)
+	err := c.cc.Invoke(ctx, MfaDeviceService_TagMFADevice_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *mfaDeviceServiceClient) UntagMFADevice(ctx context.Context, in *UntagMFADeviceRequest, opts ...grpc.CallOption) (*longrunningpb.Operation, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(longrunningpb.Operation)
+	err := c.cc.Invoke(ctx, MfaDeviceService_UntagMFADevice_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *mfaDeviceServiceClient) ListMFADeviceTags(ctx context.Context, in *ListMFADeviceTagsRequest, opts ...grpc.CallOption) (*ListMFADeviceTagsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListMFADeviceTagsResponse)
+	err := c.cc.Invoke(ctx, MfaDeviceService_ListMFADeviceTags_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MfaDeviceServiceServer is the server API for MfaDeviceService service.
 // All implementations must embed UnimplementedMfaDeviceServiceServer
 // for forward compatibility.
@@ -129,6 +174,10 @@ func (c *mfaDeviceServiceClient) DeactivateMfaDevice(ctx context.Context, in *De
 // The seed is encrypted at rest and returned only by CreateVirtualMfaDevice,
 // which is synchronous for the same reason as CreateAccessKey.
 // Delete is FAILED_PRECONDITION / DEPENDENCY_MISSING while the device is enabled.
+// A device keeps at most 50 tags, stored with the device and not in its
+// envelope labels (AWS tag keys and values allow characters and lengths the
+// envelope labels do not). Tag and Untag are INVALID_ARGUMENT / INVALID_SPEC
+// for an invalid tag, and RESOURCE_EXHAUSTED / QUOTA_EXCEEDED past 50 tags.
 type MfaDeviceServiceServer interface {
 	// AIP-131: the Get response is the resource.
 	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
@@ -142,6 +191,14 @@ type MfaDeviceServiceServer interface {
 	// Wrong codes are UNAUTHENTICATED / INVALID_CREDENTIALS.
 	EnableMfaDevice(context.Context, *EnableMfaDeviceRequest) (*EnableMfaDeviceResponse, error)
 	DeactivateMfaDevice(context.Context, *DeactivateMfaDeviceRequest) (*DeactivateMfaDeviceResponse, error)
+	// AIP-151: every mutation returns google.longrunning.Operation.
+	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+	// buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+	TagMFADevice(context.Context, *TagMFADeviceRequest) (*longrunningpb.Operation, error)
+	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+	// buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+	UntagMFADevice(context.Context, *UntagMFADeviceRequest) (*longrunningpb.Operation, error)
+	ListMFADeviceTags(context.Context, *ListMFADeviceTagsRequest) (*ListMFADeviceTagsResponse, error)
 	mustEmbedUnimplementedMfaDeviceServiceServer()
 }
 
@@ -169,6 +226,15 @@ func (UnimplementedMfaDeviceServiceServer) EnableMfaDevice(context.Context, *Ena
 }
 func (UnimplementedMfaDeviceServiceServer) DeactivateMfaDevice(context.Context, *DeactivateMfaDeviceRequest) (*DeactivateMfaDeviceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeactivateMfaDevice not implemented")
+}
+func (UnimplementedMfaDeviceServiceServer) TagMFADevice(context.Context, *TagMFADeviceRequest) (*longrunningpb.Operation, error) {
+	return nil, status.Error(codes.Unimplemented, "method TagMFADevice not implemented")
+}
+func (UnimplementedMfaDeviceServiceServer) UntagMFADevice(context.Context, *UntagMFADeviceRequest) (*longrunningpb.Operation, error) {
+	return nil, status.Error(codes.Unimplemented, "method UntagMFADevice not implemented")
+}
+func (UnimplementedMfaDeviceServiceServer) ListMFADeviceTags(context.Context, *ListMFADeviceTagsRequest) (*ListMFADeviceTagsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListMFADeviceTags not implemented")
 }
 func (UnimplementedMfaDeviceServiceServer) mustEmbedUnimplementedMfaDeviceServiceServer() {}
 func (UnimplementedMfaDeviceServiceServer) testEmbeddedByValue()                          {}
@@ -299,6 +365,60 @@ func _MfaDeviceService_DeactivateMfaDevice_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MfaDeviceService_TagMFADevice_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TagMFADeviceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MfaDeviceServiceServer).TagMFADevice(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MfaDeviceService_TagMFADevice_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MfaDeviceServiceServer).TagMFADevice(ctx, req.(*TagMFADeviceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MfaDeviceService_UntagMFADevice_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UntagMFADeviceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MfaDeviceServiceServer).UntagMFADevice(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MfaDeviceService_UntagMFADevice_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MfaDeviceServiceServer).UntagMFADevice(ctx, req.(*UntagMFADeviceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MfaDeviceService_ListMFADeviceTags_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListMFADeviceTagsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MfaDeviceServiceServer).ListMFADeviceTags(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MfaDeviceService_ListMFADeviceTags_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MfaDeviceServiceServer).ListMFADeviceTags(ctx, req.(*ListMFADeviceTagsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MfaDeviceService_ServiceDesc is the grpc.ServiceDesc for MfaDeviceService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -329,6 +449,18 @@ var MfaDeviceService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeactivateMfaDevice",
 			Handler:    _MfaDeviceService_DeactivateMfaDevice_Handler,
+		},
+		{
+			MethodName: "TagMFADevice",
+			Handler:    _MfaDeviceService_TagMFADevice_Handler,
+		},
+		{
+			MethodName: "UntagMFADevice",
+			Handler:    _MfaDeviceService_UntagMFADevice_Handler,
+		},
+		{
+			MethodName: "ListMFADeviceTags",
+			Handler:    _MfaDeviceService_ListMFADeviceTags_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
