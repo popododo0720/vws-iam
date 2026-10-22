@@ -1,8 +1,11 @@
 // Command vws-iam serves VWS identity and access management over gRPC.
 //
-// With -namespace set, users, groups, roles, policies, access keys, and MFA
-// devices persist as iam.vws.popododo0720.io custom resources in that
-// namespace; otherwise they live in memory.
+// All state (users, groups, roles, policies, access keys, MFA devices, STS
+// revocations, replay entries, attempt counters, and operations) persists
+// as iam.vws.popododo0720.io custom resources in one namespace, so every
+// replica reads the same state and a restart loses nothing. -store picks the
+// backend: kube, memory, or auto (kube with -namespace or inside a pod,
+// memory only outside Kubernetes).
 package main
 
 import (
@@ -17,6 +20,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -39,10 +43,34 @@ import (
 
 type config struct {
 	listen, namespace, kubeconfig, kekDir, rootDir, healthAddr string
+	// storeMode is the resolved backend: storeKube or storeMemory.
+	storeMode string
+	// nsFile is the service account namespace file (tests replace it).
+	nsFile string
 	// bootstrap is the one-shot mode: import the root key and exit.
 	bootstrap bool
 	getenv    func(string) string
 }
+
+// Store modes of -store.
+const (
+	storeAuto   = "auto"
+	storeKube   = "kube"
+	storeMemory = "memory"
+)
+
+// Pod environment used to find the namespace when -namespace is unset.
+// Kubernetes sets envServiceHost in every container; envPodNamespace comes
+// from the downward API; saNamespaceFile is mounted with the service
+// account token.
+const (
+	envServiceHost  = "KUBERNETES_SERVICE_HOST"
+	envPodNamespace = "POD_NAMESPACE"
+	saNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+)
+
+// namespaceRE is a Kubernetes namespace name (DNS-1123 label).
+var namespaceRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 
 // Root credential environment of the bootstrap Job (secretKeyRef).
 const (
@@ -60,8 +88,12 @@ VWS_IAM_ROOT_SECRET_ACCESS_KEY, or -root-credentials-dir.
 `
 
 func parseConfig(args []string, stderr io.Writer, getenv func(string) string) (config, error) {
-	var c config
-	c.getenv = getenv
+	return parseConfigNS(args, stderr, getenv, saNamespaceFile)
+}
+
+// parseConfigNS is parseConfig reading the pod namespace from nsFile.
+func parseConfigNS(args []string, stderr io.Writer, getenv func(string) string, nsFile string) (config, error) {
+	c := config{getenv: getenv, nsFile: nsFile}
 	if len(args) > 0 && args[0] == "bootstrap" {
 		c.bootstrap, args = true, args[1:]
 	}
@@ -73,7 +105,12 @@ func parseConfig(args []string, stderr io.Writer, getenv func(string) string) (c
 	}
 	fs.SetOutput(stderr)
 	fs.StringVar(&c.listen, "listen", "127.0.0.1:9095", "gRPC listen address")
-	fs.StringVar(&c.namespace, "namespace", "", "Kubernetes namespace of the IAM custom resources; empty keeps state in memory")
+	fs.StringVar(&c.storeMode, "store", storeAuto,
+		"backend: kube (custom resources, shared by every replica), memory (one process, lost on exit; "+
+			"never with replicas), or auto (kube with -namespace or inside a pod, else memory)")
+	fs.StringVar(&c.namespace, "namespace", "",
+		"Kubernetes namespace of the IAM custom resources; empty uses the pod namespace "+
+			"(env POD_NAMESPACE, then the service account namespace file)")
 	fs.StringVar(&c.kubeconfig, "kubeconfig", "", "kubeconfig path; empty uses in-cluster config")
 	fs.StringVar(&c.kekDir, "kek-dir", "", "directory of the mounted vws-iam-kek Secret: one base64 32-byte key per id and an \"active\" file")
 	fs.StringVar(&c.rootDir, "root-credentials-dir", "", "optional mounted Secret with project, access_key_id and secret_access_key files: imported once as that project's root key")
@@ -84,18 +121,70 @@ func parseConfig(args []string, stderr io.Writer, getenv func(string) string) (c
 	if fs.NArg() != 0 {
 		return c, fmt.Errorf("unexpected arguments %q", fs.Args())
 	}
+	if err := c.resolveStore(); err != nil {
+		return c, err
+	}
 	hasEnvKEK := getenv(secret.EnvKEK) != "" || getenv(secret.EnvKEKID) != ""
 	switch {
 	case hasEnvKEK && c.kekDir != "":
 		return c, errors.New("set either VWS_IAM_KEK/VWS_IAM_KEK_ID or -kek-dir, not both")
-	case !hasEnvKEK && c.kekDir == "" && (c.namespace != "" || c.bootstrap):
-		return c, errors.New("a KEK (VWS_IAM_KEK + VWS_IAM_KEK_ID, or -kek-dir) is required with -namespace or bootstrap: an ephemeral KEK would make stored secrets unreadable")
-	case c.bootstrap && c.namespace == "":
-		return c, errors.New("bootstrap needs -namespace")
+	case !hasEnvKEK && c.kekDir == "" && (c.storeMode == storeKube || c.bootstrap):
+		return c, errors.New("a KEK (VWS_IAM_KEK + VWS_IAM_KEK_ID, or -kek-dir) is required with the kube " +
+			"store or bootstrap: an ephemeral KEK would make stored secrets unreadable")
+	case c.bootstrap && c.storeMode != storeKube:
+		return c, errors.New("bootstrap needs the kube store (-namespace, or run in a pod)")
 	case c.bootstrap && c.rootDir == "" && getenv(envRootProject) == "":
 		return c, errors.New("bootstrap needs root credentials (VWS_IAM_ROOT_* env or -root-credentials-dir)")
 	}
 	return c, nil
+}
+
+// resolveStore turns -store and -namespace into storeKube with a
+// namespace, or storeMemory. Inside a pod, auto never falls back to
+// memory: replicas with private memory would diverge and lose state on
+// restart (#110), so an unknown namespace is an error instead.
+func (c *config) resolveStore() error {
+	switch c.storeMode {
+	case storeMemory:
+		if c.namespace != "" {
+			return errors.New("-store=memory conflicts with -namespace")
+		}
+		return nil
+	case storeAuto:
+		if c.namespace == "" && c.getenv(envServiceHost) == "" {
+			c.storeMode = storeMemory
+			return nil
+		}
+	case storeKube:
+	default:
+		return fmt.Errorf("-store must be %s, %s or %s, not %q", storeAuto, storeKube, storeMemory, c.storeMode)
+	}
+	c.storeMode = storeKube
+	if c.namespace == "" {
+		ns, err := podNamespace(c.getenv, c.nsFile)
+		if err != nil {
+			return err
+		}
+		c.namespace = ns
+	}
+	if !namespaceRE.MatchString(c.namespace) {
+		return fmt.Errorf("namespace %q is not a Kubernetes namespace name", c.namespace)
+	}
+	return nil
+}
+
+// podNamespace is env POD_NAMESPACE, else the service account namespace
+// file.
+func podNamespace(getenv func(string) string, nsFile string) (string, error) {
+	if ns := strings.TrimSpace(getenv(envPodNamespace)); ns != "" {
+		return ns, nil
+	}
+	b, err := os.ReadFile(nsFile) //nolint:gosec // fixed service account path; tests pass a temp file
+	if err != nil {
+		return "", fmt.Errorf("kube store needs a namespace: pass -namespace, set %s, or mount the "+
+			"service account (%w); -store=memory keeps state in one process only", envPodNamespace, err)
+	}
+	return strings.TrimSpace(string(b)), nil
 }
 
 func main() {
@@ -125,7 +214,7 @@ func main() {
 }
 
 func openStore(cfg config) (store.Backend, error) {
-	if cfg.namespace == "" {
+	if cfg.storeMode == storeMemory {
 		return memstore.New(), nil
 	}
 	s, err := kubestore.Open(cfg.kubeconfig, cfg.namespace)
@@ -219,12 +308,9 @@ func run(ctx context.Context, cfg config) (err error) {
 	if err != nil {
 		return err
 	}
-	if cfg.rootDir != "" {
-		project, err := bootstrapRoot(ctx, backend, keys, cfg)
-		if err != nil {
-			return err
-		}
-		log.LogAttrs(ctx, slog.LevelInfo, "root credential ready", slog.String("project", project))
+	if cfg.storeMode == storeMemory {
+		log.LogAttrs(ctx, slog.LevelWarn, "state is in memory: not shared between replicas and lost on exit",
+			slog.String("store", cfg.storeMode))
 	}
 	ready := func(ctx context.Context) error {
 		_, err := backend.List(ctx, iam.KindKeyIndex)
@@ -232,6 +318,16 @@ func run(ctx context.Context, cfg config) (err error) {
 			return fmt.Errorf("store: %w", err)
 		}
 		return nil
+	}
+	if err := waitStore(ctx, log, ready, storeWaitAttempts, time.Second); err != nil {
+		return err
+	}
+	if cfg.rootDir != "" {
+		project, err := bootstrapRoot(ctx, backend, keys, cfg)
+		if err != nil {
+			return err
+		}
+		log.LogAttrs(ctx, slog.LevelInfo, "root credential ready", slog.String("project", project))
 	}
 	health.Default().Register("store", ready)
 	if cfg.healthAddr != "" {
@@ -260,11 +356,46 @@ func run(ctx context.Context, cfg config) (err error) {
 		hs.Shutdown()
 		srv.GracefulStop()
 	}()
-	log.LogAttrs(ctx, slog.LevelInfo, "serving", slog.String("addr", lis.Addr().String()), slog.String("namespace", cfg.namespace))
+	log.LogAttrs(ctx, slog.LevelInfo, "serving", slog.String("addr", lis.Addr().String()),
+		slog.String("store", cfg.storeMode), slog.String("namespace", cfg.namespace))
 	if err := srv.Serve(lis); err != nil {
 		return fmt.Errorf("serve: %w", err)
 	}
 	return nil
+}
+
+// storeWaitAttempts bounds the startup store check: with a 1 s base the
+// waits are 1, 2, 4, 8, 16 s, so about 30 s before giving up.
+const storeWaitAttempts = 6
+
+// waitStore checks the store before serving, retrying with exponential
+// backoff, each try under its own deadline. A missing CRD, Role or
+// namespace fails startup, so a rollout stops on the old pods instead of
+// serving errors.
+func waitStore(
+	ctx context.Context, log *slog.Logger, ready func(context.Context) error, attempts int, base time.Duration,
+) error {
+	wait := base
+	for i := 1; ; i++ {
+		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err := ready(cctx)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		if i >= attempts {
+			return fmt.Errorf("store not ready after %d attempts: %w", attempts, err)
+		}
+		log.LogAttrs(ctx, slog.LevelWarn, "store not ready", slog.Int("attempt", i), slog.String(obs.FieldErr, err.Error()))
+		t := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return fmt.Errorf("store not ready: %w", errors.Join(err, ctx.Err()))
+		case <-t.C:
+		}
+		wait *= 2
+	}
 }
 
 // watchHealth mirrors the store readiness into the gRPC health service.
