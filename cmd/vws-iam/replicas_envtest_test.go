@@ -131,7 +131,8 @@ func TestReplicasShareDurableState(t *testing.T) {
 	if _, err := store.Update(ctx, store.Scoped(bRep.b, project), changed, got.Version); err != nil {
 		t.Fatalf("replica B update: %v", err)
 	}
-	if _, err := store.Update(ctx, store.Scoped(a.b, project), got.Object, got.Version); !errors.Is(err, store.ErrConflict) {
+	_, err = store.Update(ctx, store.Scoped(a.b, project), got.Object, got.Version)
+	if !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("stale write from replica A: got %v, want ErrConflict", err)
 	}
 
@@ -149,5 +150,50 @@ func TestReplicasShareDurableState(t *testing.T) {
 	}
 	if _, err := a.keySvc(project).GetSigningCredential(ctx, cred.AccessKeyID); err == nil {
 		t.Fatal("replica A still signs with a key deleted on another replica")
+	}
+}
+
+// TestUpgradeKeepsPersistedState: state written by a release that ran
+// with an explicit -namespace is read unchanged by a pod that finds its
+// namespace itself. Nothing is converted.
+func TestUpgradeKeepsPersistedState(t *testing.T) {
+	kubeconfig, namespace := startAPIServer(t)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	const project = "acme"
+	kek := envOf(map[string]string{
+		secret.EnvKEK:   base64.StdEncoding.EncodeToString(make([]byte, 32)),
+		secret.EnvKEKID: "k1",
+	})
+	oldCfg, err := parseConfig([]string{"-namespace", namespace, "-kubeconfig", kubeconfig}, io.Discard, kek)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldKeys, err := keyring(oldCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldB, err := openStore(oldCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := time.Now().UTC().Truncate(time.Second)
+	user := iam.User{Name: "Bob", Path: "/eng/", ID: iam.NewUniqueID("AIDA"), Created: created}
+	if _, err := store.Create(ctx, store.Scoped(oldB, project), user); err != nil {
+		t.Fatal(err)
+	}
+	cred, err := accesskey.New(store.Scoped(oldB, project), oldB, project, oldKeys, nil).Create(ctx, "Bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := startReplica(t, kubeconfig, namespace)
+	got, err := store.Get[iam.User](ctx, store.Scoped(r.b, project), "bob")
+	if err != nil || got.Object.ID != user.ID || got.Object.Path != user.Path || !got.Object.Created.Equal(user.Created) {
+		t.Fatalf("upgraded replica reads %+v, %v; want %+v", got.Object, err, user)
+	}
+	sign, err := r.keySvc(project).GetSigningCredential(ctx, cred.AccessKeyID)
+	if err != nil || sign.Secret != cred.Secret {
+		t.Fatalf("upgraded replica cannot open the sealed secret: %v", err)
 	}
 }
