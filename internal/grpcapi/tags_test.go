@@ -163,12 +163,22 @@ func TestPolicyTagErrors(t *testing.T) {
 	name := pol.GetName()
 	missing := parentName + "/policies/ghost"
 
+	want := "Policy arn:vws:iam::" + proj + ":policy/ghost does not exist or is not attachable."
+	check := func(err error) {
+		t.Helper()
+		if got := status.Convert(err).Message(); got != want {
+			t.Errorf("message %q, want %q", got, want)
+		}
+	}
 	_, err := e.policies.TagPolicy(ctx, &iamv1.TagPolicyRequest{Name: missing, Tags: []*iamv1.Tag{tag("k", "v")}})
 	wantErr(t, err, codes.NotFound, "RESOURCE_NOT_FOUND", "NoSuchEntity")
+	check(err)
 	_, err = e.policies.UntagPolicy(ctx, &iamv1.UntagPolicyRequest{Name: missing, TagKeys: []string{"k"}})
 	wantErr(t, err, codes.NotFound, "RESOURCE_NOT_FOUND", "NoSuchEntity")
+	check(err)
 	_, err = e.policies.ListPolicyTags(ctx, &iamv1.ListPolicyTagsRequest{Name: missing})
 	wantErr(t, err, codes.NotFound, "RESOURCE_NOT_FOUND", "NoSuchEntity")
+	check(err)
 
 	for _, tc := range []struct {
 		name string

@@ -33,10 +33,12 @@ func checkTagRequestTags(n, limit int) error {
 	return nil
 }
 
-// missingPolicy maps a missing policy to the AWS NoSuchEntity message.
-func missingPolicy(ctx context.Context, err error, name string) error {
+// missingPolicy maps a missing policy to the AWS NoSuchEntity message. The
+// requested name carries no path, so the ARN uses the default path.
+func missingPolicy(ctx context.Context, err error, project, policy string) error {
 	if errors.Is(err, store.ErrNotFound) {
-		return toStatus(ctx, notFound("policy "+quote(name)+" does not exist or is not attachable."))
+		arn := iam.PolicyARN(project, iam.Policy{Name: policy})
+		return toStatus(ctx, notFound("Policy "+arn+" does not exist or is not attachable."))
 	}
 	return toStatus(ctx, err)
 }
@@ -76,7 +78,7 @@ func (s *Server) TagPolicy(ctx context.Context, req *iamv1.TagPolicyRequest) (*l
 		return nil
 	}, nil)
 	if err != nil {
-		return nil, missingPolicy(ctx, err, req.GetName())
+		return nil, missingPolicy(ctx, err, pid, id)
 	}
 	resp, err := p.policyProto(ctx, v)
 	if err != nil {
@@ -123,7 +125,7 @@ func (s *Server) UntagPolicy(ctx context.Context, req *iamv1.UntagPolicyRequest)
 		return nil
 	}, nil)
 	if err != nil {
-		return nil, missingPolicy(ctx, err, req.GetName())
+		return nil, missingPolicy(ctx, err, pid, id)
 	}
 	resp, err := p.policyProto(ctx, v)
 	if err != nil {
@@ -148,7 +150,7 @@ func (s *Server) ListPolicyTags(
 	p := s.project(pid)
 	v, err := store.Get[iam.Policy](ctx, p.b, id)
 	if err != nil {
-		return nil, missingPolicy(ctx, err, req.GetName())
+		return nil, missingPolicy(ctx, err, pid, id)
 	}
 	keys := make([]string, 0, len(v.Object.Tags))
 	for key := range v.Object.Tags {
