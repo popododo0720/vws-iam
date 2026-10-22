@@ -126,7 +126,9 @@ func TestReplicasShareDurableState(t *testing.T) {
 	}
 	// A stale write from A after B changed the user is a conflict, not a
 	// lost update.
-	if _, err := store.Update(ctx, store.Scoped(bRep.b, project), got.Object, got.Version); err != nil {
+	changed := got.Object
+	changed.Path = "/b/"
+	if _, err := store.Update(ctx, store.Scoped(bRep.b, project), changed, got.Version); err != nil {
 		t.Fatalf("replica B update: %v", err)
 	}
 	if _, err := store.Update(ctx, store.Scoped(a.b, project), got.Object, got.Version); !errors.Is(err, store.ErrConflict) {
