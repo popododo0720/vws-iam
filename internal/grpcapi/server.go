@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -198,12 +197,8 @@ func (v mfaVerifier) VerifyMFA(ctx context.Context, user, serial, code string) e
 	if extra, ok := ctx.Value(attemptsKey{}).(callers); ok {
 		cs = append(cs, extra...)
 	}
-	prefix := v.m.Serial("")
 	err := v.s.limitedVerify(ctx, cs, func() error {
-		if !strings.HasPrefix(serial, prefix) {
-			return mfa.ErrNotAssociated
-		}
-		return v.m.Verify(ctx, user, strings.TrimPrefix(serial, prefix), code)
+		return v.m.VerifySerial(ctx, user, serial, code)
 	})
 	if !errors.Is(err, errThrottled) {
 		return err
@@ -214,8 +209,8 @@ func (v mfaVerifier) VerifyMFA(ctx context.Context, user, serial, code string) e
 	// starts a lock: it checks no code (#48). A throttle by the source IP
 	// or access key alone leaves the device untouched: those are shared
 	// with or held by other callers. The answer stays Throttling.
-	if name, ok := strings.CutPrefix(serial, prefix); ok && throttledBy(err, iam.AttemptUser) {
-		if _, lerr := v.m.RenewLock(context.WithoutCancel(ctx), user, name); lerr != nil {
+	if throttledBy(err, iam.AttemptUser) {
+		if _, lerr := v.m.RenewLockSerial(context.WithoutCancel(ctx), user, serial); lerr != nil {
 			slog.Default().LogAttrs(ctx, slog.LevelWarn, "mfa lock renewal on throttle failed", slog.String("error", lerr.Error()))
 		}
 	}

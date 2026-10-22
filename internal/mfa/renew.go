@@ -56,3 +56,24 @@ func (s *Service) RenewLock(ctx context.Context, user, name string) (bool, error
 	}
 	return true, nil
 }
+
+// RenewLockSerial is RenewLock for the device named by serial. It renews
+// only when serial is exactly that device's ARN, so a wrong path cannot
+// extend another device's lock.
+func (s *Service) RenewLockSerial(ctx context.Context, user, serial string) (bool, error) {
+	name, _, ok := iam.SplitMfaDeviceARN(s.account, serial)
+	if !ok {
+		return false, nil
+	}
+	d, err := store.Get[iam.MfaDevice](ctx, s.b, name)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("mfa device %s: %w", name, err)
+	}
+	if s.Serial(d.Object) != serial {
+		return false, nil
+	}
+	return s.RenewLock(ctx, user, name)
+}

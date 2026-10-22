@@ -39,7 +39,7 @@ func (p project) extras(ctx context.Context) (userExtras, error) {
 	}
 	for _, d := range ds {
 		if d.Enabled {
-			x.mfa[store.Fold(d.UserName)] = append(x.mfa[store.Fold(d.UserName)], p.mfa.Serial(d.Name))
+			x.mfa[store.Fold(d.UserName)] = append(x.mfa[store.Fold(d.UserName)], p.mfa.Serial(d))
 		}
 	}
 	return x, nil

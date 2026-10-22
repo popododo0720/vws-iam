@@ -33,7 +33,7 @@ func (p project) mfaProto(d iam.MfaDevice, version string) *iamv1.MfaDevice {
 // calls are authorized by console-api before they reach this service.
 func (p project) mfaStatus(d iam.MfaDevice, user string) *iamv1.MfaDeviceStatus {
 	st := &iamv1.MfaDeviceStatus{
-		Observed: ready(d.Generation), SerialNumber: p.mfa.Serial(d.Name), User: user, EnableTime: ts(d.EnableTime),
+		Observed: ready(d.Generation), SerialNumber: p.mfa.Serial(d), User: user, EnableTime: ts(d.EnableTime),
 		FailedAttempts: int32(min(d.FailedAttempts, mfa.MaxFailedAttempts)),
 	} //nolint:gosec // bounded by MaxFailedAttempts
 	if p.now().Before(d.LockedUntil) {
@@ -92,12 +92,13 @@ func (s *Server) CreateVirtualMfaDevice(ctx context.Context, req *iamv1.CreateVi
 		return nil, err
 	}
 	p := s.project(pid)
-	enr, err := p.mfa.CreateVirtual(ctx, req.GetMfaDeviceId())
+	path := req.GetMfaDevice().GetSpec().GetPath()
+	enr, err := p.mfa.CreateVirtual(ctx, req.GetMfaDeviceId(), path)
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
 	d, err := store.Mutate(ctx, p.b, req.GetMfaDeviceId(), func(d *iam.MfaDevice) error {
-		d.UID, d.Generation, d.Labels, d.Path = iam.NewUID(), 1, req.GetMfaDevice().GetLabels(), req.GetMfaDevice().GetSpec().GetPath()
+		d.UID, d.Generation, d.Labels = iam.NewUID(), 1, req.GetMfaDevice().GetLabels()
 		return d.Validate()
 	})
 	if err != nil {

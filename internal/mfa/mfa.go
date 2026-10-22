@@ -111,13 +111,14 @@ func New(b store.Backend, keys *secret.Keyring, account string, now func() time.
 
 func aad(name string) string { return string(iam.KindMfaDevice) + "/" + store.Fold(name) }
 
-// Serial is a device's serial number (ARN).
-func (s *Service) Serial(name string) string { return iam.ARN("iam", "", s.account, "mfa/"+name) }
+// Serial is a device's serial number (ARN), including its path.
+func (s *Service) Serial(d iam.MfaDevice) string { return iam.MfaDeviceARN(s.account, d) }
 
 var b32 = base32.StdEncoding.WithPadding(base32.NoPadding)
 
-// CreateVirtual makes an unassigned device and returns its seed, once.
-func (s *Service) CreateVirtual(ctx context.Context, name string) (Enrollment, error) {
+// CreateVirtual makes an unassigned device at path and returns its seed,
+// once. Path is part of the serial number and must be empty or end in "/".
+func (s *Service) CreateVirtual(ctx context.Context, name, path string) (Enrollment, error) {
 	seed := make([]byte, 20)
 	if _, err := rand.Read(seed); err != nil {
 		return Enrollment{}, fmt.Errorf("seed: %w", err)
@@ -126,13 +127,13 @@ func (s *Service) CreateVirtual(ctx context.Context, name string) (Enrollment, e
 	if err != nil {
 		return Enrollment{}, err
 	}
-	d := iam.MfaDevice{Name: name, Created: s.now().UTC(), Seed: sealed}
+	d := iam.MfaDevice{Name: name, Path: path, Created: s.now().UTC(), Seed: sealed}
 	if _, err := store.Create(ctx, s.b, d); err != nil {
 		return Enrollment{}, err
 	}
 	enc := b32.EncodeToString(seed)
 	u := url.URL{Scheme: "otpauth", Host: "totp", Path: "/VWS:" + name, RawQuery: url.Values{"secret": {enc}, "issuer": {"VWS"}, "period": {"30"}, "digits": {"6"}}.Encode()}
-	return Enrollment{SerialNumber: s.Serial(name), Base32Seed: enc, URI: u.String()}, nil
+	return Enrollment{SerialNumber: s.Serial(d), Base32Seed: enc, URI: u.String()}, nil
 }
 
 func (s *Service) seed(d iam.MfaDevice) ([]byte, error) { return s.keys.Open(d.Seed, aad(d.Name)) }
@@ -208,22 +209,41 @@ func (s *Service) List(ctx context.Context, user string) ([]iam.MfaDevice, error
 // success the request carries aws:MultiFactorAuthPresent=true.
 func (s *Service) Verify(ctx context.Context, user, name, code string) error {
 	return s.attempt(ctx, name, func(d *iam.MfaDevice) (bool, error) {
-		if !d.Enabled || store.Fold(d.UserName) != store.Fold(user) {
+		return s.verifyCode(user, code, d)
+	})
+}
+
+// VerifySerial checks code for the device named by serial. serial must be
+// exactly the device's ARN, including its path.
+func (s *Service) VerifySerial(ctx context.Context, user, serial, code string) error {
+	name, _, ok := iam.SplitMfaDeviceARN(s.account, serial)
+	if !ok {
+		return ErrNotAssociated
+	}
+	return s.attempt(ctx, name, func(d *iam.MfaDevice) (bool, error) {
+		if s.Serial(*d) != serial {
 			return false, ErrNotAssociated
 		}
-		seed, err := s.seed(*d)
-		if err != nil {
-			return false, err
-		}
-		step, ok := totp.Match(seed, code, s.now(), Skew)
-		// Mutate rereads on a conflict, so two racing uses of one code
-		// see each other's LastStep and only one wins.
-		if !ok || step <= d.LastStep {
-			return false, nil
-		}
-		d.LastStep = step
-		return true, nil
+		return s.verifyCode(user, code, d)
 	})
+}
+
+func (s *Service) verifyCode(user, code string, d *iam.MfaDevice) (bool, error) {
+	if !d.Enabled || store.Fold(d.UserName) != store.Fold(user) {
+		return false, ErrNotAssociated
+	}
+	seed, err := s.seed(*d)
+	if err != nil {
+		return false, err
+	}
+	step, ok := totp.Match(seed, code, s.now(), Skew)
+	// Mutate rereads on a conflict, so two racing uses of one code
+	// see each other's LastStep and only one wins.
+	if !ok || step <= d.LastStep {
+		return false, nil
+	}
+	d.LastStep = step
+	return true, nil
 }
 
 // Required reports whether user has an enabled device (login needs a code).
