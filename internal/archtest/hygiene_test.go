@@ -113,7 +113,7 @@ func TestProtoModule(t *testing.T) {
 	}
 	failures := protoModuleRules(string(b))
 	if _, err := os.Stat(filepath.Join(root, "third_party", "vws-proto")); !os.IsNotExist(err) {
-		failures = append(failures, "vendored vws-proto copy third_party/vws-proto; require a vws-proto tag in go.mod instead")
+		failures = append(failures, "vendored copy third_party/vws-proto; require a vws-proto tag in go.mod instead")
 	}
 	err = walkFiles(root, func(rel string, _ []byte) {
 		if strings.HasSuffix(rel, ".pb.go") {
