@@ -7,7 +7,7 @@ toolchain go1.26.10
 require (
 	cloud.google.com/go/longrunning v1.3.0
 	github.com/popododo0720/vws-lib v0.1.1
-	github.com/popododo0720/vws-proto v0.4.1-0.20261021123535-8f0a84ed9918
+	github.com/popododo0720/vws-proto v0.5.0
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/metric v1.47.0
 	go.opentelemetry.io/otel/trace v1.47.0
@@ -98,5 +98,3 @@ require (
 )
 
 replace github.com/popododo0720/vws-lib => ./third_party/vws-lib
-
-replace github.com/popododo0720/vws-proto => ./third_party/vws-proto

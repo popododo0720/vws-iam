@@ -1,9 +1,0 @@
-version: v2
-clean: true
-plugins:
-  - remote: buf.build/protocolbuffers/go:v1.36.12
-    out: gen/go
-    opt: module=github.com/popododo0720/vws-proto/gen/go
-  - remote: buf.build/grpc/go:v1.6.2
-    out: gen/go
-    opt: module=github.com/popododo0720/vws-proto/gen/go

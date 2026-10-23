@@ -1,3 +1,0 @@
-source github.com/popododo0720/vws-proto branch main (vws-proto#54 squash merge; no release tag yet)
-commit 8f0a84ed991858ab506926450e96f5cb46d3b458
-files go.mod go.sum buf.* LICENSE vws/common vws/iam gen/go/vws/common gen/go/vws/iam (other services omitted)
