@@ -6,9 +6,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
+
+	"golang.org/x/mod/modfile"
+	gomodule "golang.org/x/mod/module"
+	"golang.org/x/mod/semver"
 )
 
 func walkFiles(root string, visit func(rel string, data []byte)) error {
@@ -76,32 +79,43 @@ func TestVendoredLib(t *testing.T) {
 // protoModulePath is the resource API module. It is consumed from a release tag through the module proxy.
 const protoModulePath = "github.com/popododo0720/vws-proto"
 
-// protoRequire matches the require line for protoModulePath at a release tag (no pseudo-version, no pre-release).
-var protoRequire = regexp.MustCompile(
-	`^(require\s+)?` + regexp.QuoteMeta(protoModulePath) + `\s+v[0-9]+\.[0-9]+\.[0-9]+$`,
-)
-
-// protoModuleRules returns the go.mod problems for the resource API module: a replace directive
-// (a local copy), or a require that is missing or not a release tag.
+// protoModuleRules returns the go.mod problems for the resource API module: a replace of it, a require
+// that is not a release tag, or no require at all. Only the require and replace directives count, so an
+// exclude or retract line naming a tag does not satisfy the rule.
 func protoModuleRules(mod string) []string {
+	f, err := modfile.Parse("go.mod", []byte(mod), nil)
+	if err != nil {
+		return []string{"go.mod does not parse: " + err.Error()}
+	}
 	var failures []string
+	for _, r := range f.Replace {
+		if r.Old.Path == protoModulePath {
+			failures = append(failures, "go.mod replaces "+protoModulePath+" with "+r.New.String()+
+				"; require a release tag instead")
+		}
+	}
 	tagged := false
-	for _, raw := range strings.Split(mod, "\n") {
-		line := strings.TrimSpace(raw)
-		if i := strings.Index(line, "//"); i >= 0 {
-			line = strings.TrimSpace(line[:i])
+	for _, r := range f.Require {
+		if r.Mod.Path != protoModulePath {
+			continue
 		}
-		if strings.Contains(line, "=>") && strings.Contains(line, protoModulePath) {
-			failures = append(failures, "go.mod replaces "+protoModulePath+" ("+line+"); require a release tag instead")
+		if !isReleaseTag(r.Mod.Version) {
+			failures = append(failures, "go.mod requires "+r.Mod.String()+"; require a release tag vX.Y.Z instead")
+			continue
 		}
-		if protoRequire.MatchString(line) {
-			tagged = true
-		}
+		tagged = true
 	}
 	if !tagged {
 		failures = append(failures, "go.mod does not require "+protoModulePath+" at a release tag vX.Y.Z")
 	}
 	return failures
+}
+
+// isReleaseTag reports whether v is a release tag such as v0.5.0: canonical semver with no pre-release or
+// build suffix, not a pseudo-version, and not the v0.0.0 placeholder.
+func isReleaseTag(v string) bool {
+	return semver.IsValid(v) && semver.Canonical(v) == v && semver.Prerelease(v) == "" &&
+		!gomodule.IsPseudoVersion(v) && v != "v0.0.0"
 }
 
 // TestProtoModule: vws-proto comes from a release tag, with no replace, no copy and no generated code here.
@@ -144,6 +158,22 @@ func TestProtoModuleRules(t *testing.T) {
 		{"placeholder version", "require github.com/popododo0720/vws-proto v0.0.0-00010101000000-000000000000\n", true},
 		{"pre-release", "require github.com/popododo0720/vws-proto v0.6.0-rc.1\n", true},
 		{"missing", "require google.golang.org/grpc v1.84.0\n", true},
+		{
+			"exclude block plus pseudo-version",
+			"require github.com/popododo0720/vws-proto v0.4.1-0.20261021123535-8f0a84ed9918\n" +
+				"exclude (\n\tgithub.com/popododo0720/vws-proto v0.5.0\n)\n", true,
+		},
+		{"v0.0.0 placeholder", "require github.com/popododo0720/vws-proto v0.0.0\n", true},
+		{"not semver", "require github.com/popododo0720/vws-proto latest\n", true},
+		{
+			"replace of one version",
+			tagged + "replace github.com/popododo0720/vws-proto v0.5.0 => example.com/fork v0.5.0\n", true,
+		},
+		{
+			"valid tag in a full go.mod",
+			"module example.com/x\n\ngo 1.26.0\n\nrequire (\n\tgithub.com/popododo0720/vws-proto v0.5.0\n" +
+				"\tgoogle.golang.org/grpc v1.84.0\n)\n\nexclude github.com/popododo0720/vws-proto v0.4.0\n", false,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
