@@ -1,0 +1,14 @@
+{
+  "apiVersion": "iam.vws.popododo0720.io/v1alpha1",
+  "kind": "IamReplayEntry",
+  "metadata": {
+    "annotations": {
+      "iam.vws.popododo0720.io/key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "name": "kcdhm6or3cdhm6or3cdhm6or3cdhm6or3cdhm6or3cdhm6or3cdhm6or3cdhm6or3cdhm6or3cdhm6or3cdhm6or3cdhm6or3cdhm6oo"
+  },
+  "spec": {
+    "expires": "2026-10-01T12:10:00Z",
+    "hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  }
+}

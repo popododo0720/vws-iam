@@ -1,0 +1,33 @@
+{
+  "apiVersion": "iam.vws.popododo0720.io/v1alpha1",
+  "kind": "IamRole",
+  "metadata": {
+    "annotations": {
+      "iam.vws.popododo0720.io/key": "acme/deployer"
+    },
+    "name": "kc5hmqp9fchin0r3ff5in4"
+  },
+  "spec": {
+    "assumeRolePolicy": "{\"Version\":\"2012-10-17\",\"Statement\":[]}",
+    "attachedPolicies": [
+      "arn:vws:iam::acme:policy/ReadOnly"
+    ],
+    "created": "2026-09-21T12:00:00Z",
+    "description": "fixture deployment role",
+    "generation": 2,
+    "id": "AROADEPLOYERFIXTURE1",
+    "inlinePolicies": {
+      "inline": "{\"Version\":\"2012-10-17\"}"
+    },
+    "maxSessionDuration": 3600000000000,
+    "name": "deployer",
+    "path": "/engineering/",
+    "sessionsRevokeGeneration": 1,
+    "sessionsRevokeRequests": [
+      "req-role-revoke"
+    ],
+    "sessionsRevokedBefore": "2026-10-01T08:00:00Z",
+    "uid": "33333333-3333-4333-8333-333333333333",
+    "updated": "2026-10-01T11:00:00Z"
+  }
+}

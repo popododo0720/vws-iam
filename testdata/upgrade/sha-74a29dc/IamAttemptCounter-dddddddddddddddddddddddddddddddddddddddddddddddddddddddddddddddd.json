@@ -1,0 +1,17 @@
+{
+  "apiVersion": "iam.vws.popododo0720.io/v1alpha1",
+  "kind": "IamAttemptCounter",
+  "metadata": {
+    "annotations": {
+      "iam.vws.popododo0720.io/key": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "name": "kchi68p34chi68p34chi68p34chi68p34chi68p34chi68p34chi68p34chi68p34chi68p34chi68p34chi68p34chi68p34chi68p0"
+  },
+  "spec": {
+    "failures": 5,
+    "hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "lockedUntil": "2026-10-01T12:10:00Z",
+    "scope": "user",
+    "windowStart": "2026-10-01T11:55:00Z"
+  }
+}
