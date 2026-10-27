@@ -1,0 +1,28 @@
+{
+  "apiVersion": "iam.vws.popododo0720.io/v1alpha1",
+  "kind": "IamMfaDevice",
+  "metadata": {
+    "annotations": {
+      "iam.vws.popododo0720.io/key": "acme/alice-device"
+    },
+    "name": "kc5hmqp9fc5m6ior55li6atj9cdig"
+  },
+  "spec": {
+    "created": "2026-09-23T12:00:00Z",
+    "enableTime": "2026-09-24T12:00:00Z",
+    "enabled": true,
+    "generation": 3,
+    "lastStep": 58000000,
+    "lockedSince": "2026-10-01T11:55:00Z",
+    "lockedUntil": "2026-10-01T12:10:00Z",
+    "name": "alice-device",
+    "path": "/engineering/",
+    "seed": {
+      "ciphertext": "DowzAz8ew0hJ7mEJAz/lrReKCQ5wQXBy7PctwKkYcHr9PosH7TQ9Dr+/Ln4tQSLX",
+      "keyId": "fixture-kek"
+    },
+    "uid": "88888888-8888-4888-8888-888888888888",
+    "updated": "2026-10-01T11:00:00Z",
+    "userName": "alice"
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "apiVersion": "iam.vws.popododo0720.io/v1alpha1",
+  "kind": "IamPolicy",
+  "metadata": {
+    "annotations": {
+      "iam.vws.popododo0720.io/key": "acme/ReadOnly"
+    },
+    "name": "kc5hmqp9fe9im2p3fdpm7i"
+  },
+  "spec": {
+    "created": "2026-09-16T12:00:00Z",
+    "defaultVersion": "v2",
+    "description": "fixture read-only policy",
+    "generation": 2,
+    "id": "ANPAREADONLYFIXTURE1",
+    "name": "ReadOnly",
+    "nextVersion": 3,
+    "path": "/engineering/",
+    "uid": "44444444-4444-4444-8444-444444444444",
+    "updated": "2026-10-01T11:00:00Z",
+    "versions": [
+      {
+        "created": "2026-09-16T12:00:00Z",
+        "document": "{\"Version\":\"2012-10-17\",\"Statement\":[]}",
+        "id": "v1"
+      },
+      {
+        "created": "2026-09-17T12:00:00Z",
+        "document": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:GetObject\",\"Resource\":\"*\"}]}",
+        "id": "v2"
+      }
+    ]
+  }
+}

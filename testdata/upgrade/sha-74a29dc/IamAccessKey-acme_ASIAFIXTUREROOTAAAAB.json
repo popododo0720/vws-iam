@@ -1,0 +1,24 @@
+{
+  "apiVersion": "iam.vws.popododo0720.io/v1alpha1",
+  "kind": "IamAccessKey",
+  "metadata": {
+    "annotations": {
+      "iam.vws.popododo0720.io/key": "acme/ASIAFIXTUREROOTAAAAB"
+    },
+    "name": "kc5hmqp9fc5pmiob6d5s78tbiclp6urrkc5gm2ob2"
+  },
+  "spec": {
+    "created": "2026-08-02T12:00:00Z",
+    "generation": 1,
+    "id": "ASIAFIXTUREROOTAAAAB",
+    "root": true,
+    "secret": {
+      "ciphertext": "HzkD3NXpV/DDpmRG1s4qO/qbM0AeuirqZmqRiMcVADNEJJuasumQN7/7YeNzHgy4JNdPPGpg70Y=",
+      "keyId": "fixture-kek"
+    },
+    "status": "Active",
+    "uid": "77777777-7777-4777-8777-777777777777",
+    "updated": "2026-10-01T11:00:00Z",
+    "userName": ""
+  }
+}
