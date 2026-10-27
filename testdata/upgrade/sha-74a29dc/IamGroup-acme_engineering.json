@@ -1,0 +1,29 @@
+{
+  "apiVersion": "iam.vws.popododo0720.io/v1alpha1",
+  "kind": "IamGroup",
+  "metadata": {
+    "annotations": {
+      "iam.vws.popododo0720.io/key": "acme/engineering"
+    },
+    "name": "kc5hmqp9fcln6eqbeclin4qbecs"
+  },
+  "spec": {
+    "attachedPolicies": [
+      "arn:vws:iam::acme:policy/ReadOnly"
+    ],
+    "created": "2026-09-11T12:00:00Z",
+    "generation": 1,
+    "id": "AGPAENGINEERINGFIX01",
+    "inlinePolicies": {
+      "inline": "{\"Version\":\"2012-10-17\"}"
+    },
+    "members": [
+      "alice",
+      "bob"
+    ],
+    "name": "engineering",
+    "path": "/engineering/",
+    "uid": "22222222-2222-4222-8222-222222222222",
+    "updated": "2026-10-01T11:00:00Z"
+  }
+}

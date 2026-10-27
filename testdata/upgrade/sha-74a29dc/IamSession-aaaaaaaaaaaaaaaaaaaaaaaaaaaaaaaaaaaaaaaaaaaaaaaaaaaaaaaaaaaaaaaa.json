@@ -1,0 +1,19 @@
+{
+  "apiVersion": "iam.vws.popododo0720.io/v1alpha1",
+  "kind": "IamSession",
+  "metadata": {
+    "annotations": {
+      "iam.vws.popododo0720.io/key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "name": "kc5gm2ob1c5gm2ob1c5gm2ob1c5gm2ob1c5gm2ob1c5gm2ob1c5gm2ob1c5gm2ob1c5gm2ob1c5gm2ob1c5gm2ob1c5gm2ob1c5gm2o8"
+  },
+  "spec": {
+    "authTime": "2026-10-01T11:00:00Z",
+    "expires": "2026-10-01T23:00:00Z",
+    "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "mfa": true,
+    "project": "acme",
+    "sourceIp": "192.0.2.10",
+    "userName": "alice"
+  }
+}

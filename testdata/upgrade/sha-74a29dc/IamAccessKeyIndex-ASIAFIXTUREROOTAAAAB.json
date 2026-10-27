@@ -1,0 +1,14 @@
+{
+  "apiVersion": "iam.vws.popododo0720.io/v1alpha1",
+  "kind": "IamAccessKeyIndex",
+  "metadata": {
+    "annotations": {
+      "iam.vws.popododo0720.io/key": "ASIAFIXTUREROOTAAAAB"
+    },
+    "name": "kc5pmiob6d5s78tbiclp6urrkc5gm2ob2"
+  },
+  "spec": {
+    "id": "ASIAFIXTUREROOTAAAAB",
+    "project": "acme"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "apiVersion": "iam.vws.popododo0720.io/v1alpha1",
+  "kind": "IamAccessKey",
+  "metadata": {
+    "annotations": {
+      "iam.vws.popododo0720.io/key": "acme/AKIAFIXTUREKEYAAAABB"
+    },
+    "name": "kc5hmqp9fc5lmiob6d5s78tbicllmaub1c5gm2oj2"
+  },
+  "spec": {
+    "created": "2026-09-22T12:00:00Z",
+    "generation": 1,
+    "id": "AKIAFIXTUREKEYAAAABB",
+    "lastUsed": "2026-10-01T11:00:00Z",
+    "lastUsedRegion": "us-east-1",
+    "lastUsedService": "s3",
+    "secret": {
+      "ciphertext": "cj6e3qLTyRm5vV0s4Tge8kqyOesH1SfzAAJjBdMZz3ObBN+hVNX6MLfn5xQikh/Mk0u0NH+81Cl4Vw==",
+      "keyId": "fixture-kek"
+    },
+    "status": "Active",
+    "uid": "55555555-5555-4555-8555-555555555555",
+    "updated": "2026-10-01T11:00:00Z",
+    "userName": "alice"
+  }
+}

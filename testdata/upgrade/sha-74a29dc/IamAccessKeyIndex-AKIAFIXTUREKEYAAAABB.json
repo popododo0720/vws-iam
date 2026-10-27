@@ -1,0 +1,14 @@
+{
+  "apiVersion": "iam.vws.popododo0720.io/v1alpha1",
+  "kind": "IamAccessKeyIndex",
+  "metadata": {
+    "annotations": {
+      "iam.vws.popododo0720.io/key": "AKIAFIXTUREKEYAAAABB"
+    },
+    "name": "kc5lmiob6d5s78tbicllmaub1c5gm2oj2"
+  },
+  "spec": {
+    "id": "AKIAFIXTUREKEYAAAABB",
+    "project": "acme"
+  }
+}

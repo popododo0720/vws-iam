@@ -1,0 +1,18 @@
+{
+  "apiVersion": "iam.vws.popododo0720.io/v1alpha1",
+  "kind": "IamOperation",
+  "metadata": {
+    "annotations": {
+      "iam.vws.popododo0720.io/key": "op-0123456789abcdef"
+    },
+    "name": "kdto2qc1h68pj8d9m6ss3iob2cdi6apg"
+  },
+  "spec": {
+    "created": "2026-10-01T11:00:00Z",
+    "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "id": "op-0123456789abcdef",
+    "project": "acme",
+    "requestId": "req-user-create",
+    "response": "eyJuYW1lIjoicHJvamVjdHMvYWNtZS9vcGVyYXRpb25zL29wLTAxMjM0NTY3ODlhYmNkZWYiLCJkb25lIjp0cnVlfQ=="
+  }
+}
