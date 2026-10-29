@@ -68,6 +68,8 @@ func parseExpectedUserARN(expected string) (account, path, user string, err erro
 // to another path no longer matches. Callers run it after the key read and
 // before the compare-and-swap write guarded by that read, so a retry after a
 // key conflict reads the user again and a refused check writes nothing.
+// Writes that change state also hold withUserARNLease, which keeps a path
+// move from committing between this read and the key write.
 func checkExpectedUserARN(ctx context.Context, b store.Backend, expected, project string, k iam.AccessKey) error {
 	if expected == "" {
 		return nil
@@ -201,29 +203,38 @@ func (s *Server) UpdateAccessKey(ctx context.Context, req *iamv1.UpdateAccessKey
 	if _, err := p.keys.Get(ctx, user, id); err != nil {
 		return nil, toStatus(ctx, err)
 	}
-	v, err := mutateOrValidate(ctx, p.b, id, req.GetAccessKey().GetEtag(), req.GetValidateOnly(), false, func(k *iam.AccessKey) { k.Generation++ }, func(k *iam.AccessKey) error {
-		if err := checkExpectedUserPath(req.GetExpectedUserPath(), pid, *k); err != nil {
-			return err
-		}
-		if err := checkExpectedUserARN(ctx, p.b, req.GetExpectedUserArn(), pid, *k); err != nil {
-			return err
-		}
-		if set["spec.state"] {
-			switch req.GetAccessKey().GetSpec().GetState() {
-			case iamv1.AccessKeyState_ACCESS_KEY_STATE_ACTIVE:
-				k.Status = iam.KeyActive
-			case iamv1.AccessKeyState_ACCESS_KEY_STATE_INACTIVE:
-				k.Status = iam.KeyInactive
-			default:
-				return invalidSpec("spec.state must be ACTIVE or INACTIVE")
+	var v store.Versioned[iam.AccessKey]
+	lease := req.GetExpectedUserArn()
+	if req.GetValidateOnly() {
+		lease = ""
+	}
+	err = s.withUserARNLease(ctx, p.b, lease, pid, user, func(ctx context.Context) error {
+		var err error
+		v, err = mutateOrValidate(ctx, p.b, id, req.GetAccessKey().GetEtag(), req.GetValidateOnly(), false, func(k *iam.AccessKey) { k.Generation++ }, func(k *iam.AccessKey) error {
+			if err := checkExpectedUserPath(req.GetExpectedUserPath(), pid, *k); err != nil {
+				return err
 			}
-		}
-		if set["labels"] {
-			k.Labels = req.GetAccessKey().GetLabels()
-		}
-		k.Updated = s.now().UTC()
-		return nil
-	}, nil)
+			if err := checkExpectedUserARN(ctx, p.b, req.GetExpectedUserArn(), pid, *k); err != nil {
+				return err
+			}
+			if set["spec.state"] {
+				switch req.GetAccessKey().GetSpec().GetState() {
+				case iamv1.AccessKeyState_ACCESS_KEY_STATE_ACTIVE:
+					k.Status = iam.KeyActive
+				case iamv1.AccessKeyState_ACCESS_KEY_STATE_INACTIVE:
+					k.Status = iam.KeyInactive
+				default:
+					return invalidSpec("spec.state must be ACTIVE or INACTIVE")
+				}
+			}
+			if set["labels"] {
+				k.Labels = req.GetAccessKey().GetLabels()
+			}
+			k.Updated = s.now().UTC()
+			return nil
+		}, nil)
+		return err
+	})
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
@@ -256,11 +267,13 @@ func (s *Server) DeleteAccessKey(ctx context.Context, req *iamv1.DeleteAccessKey
 		if err := checkEtag(req.GetEtag(), k.Version); err != nil {
 			return nil, err
 		}
-		if err := p.keys.Delete(ctx, user, id, func(k iam.AccessKey) error {
-			if err := checkExpectedUserPath(req.GetExpectedUserPath(), pid, k); err != nil {
-				return err
-			}
-			return checkExpectedUserARN(ctx, p.b, req.GetExpectedUserArn(), pid, k)
+		if err := s.withUserARNLease(ctx, p.b, req.GetExpectedUserArn(), pid, user, func(ctx context.Context) error {
+			return p.keys.Delete(ctx, user, id, func(k iam.AccessKey) error {
+				if err := checkExpectedUserPath(req.GetExpectedUserPath(), pid, k); err != nil {
+					return err
+				}
+				return checkExpectedUserARN(ctx, p.b, req.GetExpectedUserArn(), pid, k)
+			})
 		}); err != nil {
 			return nil, toStatus(ctx, err)
 		}

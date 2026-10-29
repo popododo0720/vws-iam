@@ -154,6 +154,27 @@ type User struct {
 	// revocations (at most MaxRevokeRequests), so a duplicate request
 	// racing its first delivery does not bump the generation twice (#48).
 	SessionsRevokeRequests []string `json:"sessionsRevokeRequests,omitempty"`
+	// KeyWriteLeases are access key writes in flight that checked this
+	// user's ARN. While one is live, UpdateUser refuses to change Path, so
+	// a key write never commits against an ARN that a move replaced (#155).
+	KeyWriteLeases []KeyWriteLease `json:"keyWriteLeases,omitempty"`
+}
+
+// KeyWriteLease is one access key write holding the user's ARN. Until is
+// on the holder's clock and already includes the replica clock skew margin.
+type KeyWriteLease struct {
+	Token string    `json:"token"`
+	Until time.Time `json:"until"`
+}
+
+// LiveKeyWriteLeases reports whether any lease is still live at now.
+func (u User) LiveKeyWriteLeases(now time.Time) bool {
+	for _, l := range u.KeyWriteLeases {
+		if now.Before(l.Until) {
+			return true
+		}
+	}
+	return false
 }
 
 // MaxRevokeRequests bounds SessionsRevokeRequests.
