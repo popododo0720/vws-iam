@@ -52,3 +52,15 @@ func (s scoped) List(ctx context.Context, kind iam.Kind) ([]Entry, error) {
 func (s scoped) Delete(ctx context.Context, kind iam.Kind, key, version string) error {
 	return s.b.Delete(ctx, kind, s.prefix+key, version)
 }
+
+func (s scoped) UpdateIf(
+	ctx context.Context, kind iam.Kind, key string, spec []byte, version string, pre Pre,
+) (string, error) {
+	pre.Key = s.prefix + pre.Key
+	return s.b.UpdateIf(ctx, kind, s.prefix+key, spec, version, pre)
+}
+
+func (s scoped) DeleteIf(ctx context.Context, kind iam.Kind, key, version string, pre Pre) error {
+	pre.Key = s.prefix + pre.Key
+	return s.b.DeleteIf(ctx, kind, s.prefix+key, version, pre)
+}

@@ -41,7 +41,35 @@ type Backend interface {
 	List(ctx context.Context, kind iam.Kind) ([]Entry, error)
 	// Delete removes key; a non-empty version must still match.
 	Delete(ctx context.Context, kind iam.Kind, key, version string) error
+	// UpdateIf is Update that commits only while pre also holds: the key
+	// write and the check of pre are one atomic step. If pre's object is
+	// gone or no longer at pre.Version, or key is not at version, nothing
+	// is written and the error is ErrConflict. A backend may advance pre's
+	// version, but not its spec, as a side effect even when it refuses the
+	// write (kubestore records a fence on it), so read pre again before the
+	// next conditional write.
+	UpdateIf(ctx context.Context, kind iam.Kind, key string, spec []byte, version string, pre Pre) (string, error)
+	// DeleteIf is Delete under the same precondition. version is required.
+	DeleteIf(ctx context.Context, kind iam.Kind, key, version string, pre Pre) error
 }
+
+// Pre is a precondition of a conditional write on another object: that
+// object must still be at Version when the write commits. Every Update or
+// Delete of the object that commits after the precondition was read makes
+// a conditional write that has not committed yet fail with ErrConflict.
+type Pre struct {
+	Kind    iam.Kind
+	Key     string
+	Version string
+}
+
+// PreOf is the precondition that v is unchanged.
+func PreOf[T iam.Object](v Versioned[T]) Pre {
+	return Pre{Kind: v.Object.Kind(), Key: v.Object.Key(), Version: v.Version}
+}
+
+// ErrNoVersion is a DeleteIf without the version of the object to delete.
+var ErrNoVersion = errors.New("conditional delete needs a version")
 
 // Pager is an optional Backend capability: list a kind in pages. cont is
 // "" for the first page; next is "" after the last one. Order across
@@ -96,6 +124,16 @@ func Update[T iam.Object](ctx context.Context, b Backend, obj T, version string)
 		return "", err
 	}
 	return b.Update(ctx, obj.Kind(), obj.Key(), spec, version)
+}
+
+// UpdateIf validates and replaces an object read at version, only while
+// pre holds (Backend.UpdateIf).
+func UpdateIf[T iam.Object](ctx context.Context, b Backend, obj T, version string, pre Pre) (string, error) {
+	spec, err := encode(obj)
+	if err != nil {
+		return "", err
+	}
+	return b.UpdateIf(ctx, obj.Kind(), obj.Key(), spec, version, pre)
 }
 
 // Get reads one object.
@@ -157,6 +195,13 @@ func ListPage[T iam.Object](ctx context.Context, b Backend, limit int64, cont st
 func Delete[T iam.Object](ctx context.Context, b Backend, key, version string) error {
 	var zero T
 	return b.Delete(ctx, zero.Kind(), key, version)
+}
+
+// DeleteIf removes an object read at version, only while pre holds
+// (Backend.DeleteIf).
+func DeleteIf[T iam.Object](ctx context.Context, b Backend, key, version string, pre Pre) error {
+	var zero T
+	return b.DeleteIf(ctx, zero.Kind(), key, version, pre)
 }
 
 // Mutate reads key, applies fn, and writes the result, retrying on a

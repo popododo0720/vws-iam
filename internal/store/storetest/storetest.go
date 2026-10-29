@@ -226,6 +226,12 @@ func Run(t *testing.T, open func(t *testing.T) store.Backend) {
 			t.Fatalf("members %v, want all of %v", got.Object.Members, groups)
 		}
 	})
+	t.Run("ConditionalWriteNeedsPrecondition", func(t *testing.T) {
+		conditionalWrite(t, open(t))
+	})
+	t.Run("ConditionalWriteFailsAfterPreconditionMoves", func(t *testing.T) {
+		conditionalWriteAfterMove(t, open(t))
+	})
 	t.Run("ReopenKeepsState", func(t *testing.T) {
 		// A restart reads the same backend: nothing lives outside it.
 		b := open(t)
@@ -272,6 +278,129 @@ func Run(t *testing.T, open func(t *testing.T) store.Backend) {
 			t.Fatalf("list %d policies", len(all))
 		}
 	})
+}
+
+// guarded creates a user and one of its access keys, the shape of the
+// conditional writes the gRPC API makes.
+func guarded(t *testing.T, b store.Backend) (store.Versioned[iam.User], store.Versioned[iam.AccessKey]) {
+	t.Helper()
+	ctx := context.Background()
+	u := iam.User{Name: "Carol", ID: "AIDA1", Path: "/allowed/"}
+	uv, err := store.Create(ctx, b, u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := iam.AccessKey{ID: "AKIAABCDEFGHIJKLMNOP", UserName: "Carol", Status: iam.KeyActive, Secret: sealed()}
+	kv, err := store.Create(ctx, b, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store.Versioned[iam.User]{Object: u, Version: uv}, store.Versioned[iam.AccessKey]{Object: k, Version: kv}
+}
+
+// keyIs fails unless the stored key has status st.
+func keyIs(t *testing.T, b store.Backend, st iam.KeyStatus) store.Versioned[iam.AccessKey] {
+	t.Helper()
+	got, err := store.Get[iam.AccessKey](context.Background(), b, "AKIAABCDEFGHIJKLMNOP")
+	if err != nil {
+		t.Fatalf("key: %v", err)
+	}
+	if got.Object.Status != st {
+		t.Fatalf("key status %q, want %q", got.Object.Status, st)
+	}
+	return got
+}
+
+// conditionalWrite: UpdateIf and DeleteIf commit while the precondition
+// holds (the key folds case like every key) and refuse a missing
+// precondition object, a stale key, and a delete without a version.
+func conditionalWrite(t *testing.T, b store.Backend) {
+	ctx := context.Background()
+	u, k := guarded(t, b)
+	off := k.Object
+	off.Status = iam.KeyInactive
+
+	missing := store.Pre{Kind: iam.KindUser, Key: "nobody", Version: u.Version}
+	if _, err := store.UpdateIf(ctx, b, off, k.Version, missing); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("update under a missing precondition object: %v, want ErrConflict", err)
+	}
+	keyIs(t, b, iam.KeyActive)
+
+	pre := store.PreOf(u)
+	pre.Key = "CAROL"
+	kv, err := store.UpdateIf(ctx, b, off, k.Version, pre)
+	if err != nil || kv == k.Version {
+		t.Fatalf("update while the precondition holds: %v (%q -> %q)", err, k.Version, kv)
+	}
+	keyIs(t, b, iam.KeyInactive)
+
+	// The precondition object may have a new version now (a backend may
+	// fence it), but its content is unchanged. Reading it again gives the
+	// precondition for the next write.
+	cur, err := store.Get[iam.User](ctx, b, "carol")
+	if err != nil || cur.Object.Path != "/allowed/" {
+		t.Fatalf("precondition object after the write: %v %+v", err, cur.Object)
+	}
+	pre = store.PreOf(cur)
+	if _, err := store.UpdateIf(ctx, b, k.Object, k.Version, pre); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("stale key update: %v, want ErrConflict", err)
+	}
+	keyIs(t, b, iam.KeyInactive)
+	if err := store.DeleteIf[iam.AccessKey](ctx, b, k.Object.ID, k.Version, pre); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("stale key delete: %v, want ErrConflict", err)
+	}
+	if err := store.DeleteIf[iam.AccessKey](ctx, b, k.Object.ID, "", pre); !errors.Is(err, store.ErrNoVersion) {
+		t.Fatalf("delete without a version: %v, want ErrNoVersion", err)
+	}
+	keyIs(t, b, iam.KeyInactive)
+	// A refused conditional write may also have advanced the version.
+	if cur, err = store.Get[iam.User](ctx, b, "carol"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteIf[iam.AccessKey](ctx, b, k.Object.ID, kv, store.PreOf(cur)); err != nil {
+		t.Fatalf("delete while the precondition holds: %v", err)
+	}
+	if _, err := store.Get[iam.AccessKey](ctx, b, k.Object.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("key after the delete: %v", err)
+	}
+}
+
+// conditionalWriteAfterMove: once the precondition object changes (an
+// UpdateUser path move) or is deleted after it was read, neither a
+// conditional update nor a conditional delete of the key commits, and the
+// key keeps its state.
+func conditionalWriteAfterMove(t *testing.T, b store.Backend) {
+	ctx := context.Background()
+	u, k := guarded(t, b)
+	checked := store.PreOf(u)
+	moved := u.Object
+	moved.Path = "/denied/"
+	if _, err := store.Update(ctx, b, moved, u.Version); err != nil {
+		t.Fatal(err)
+	}
+	off := k.Object
+	off.Status = iam.KeyInactive
+	if _, err := store.UpdateIf(ctx, b, off, k.Version, checked); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("update after the precondition moved: %v, want ErrConflict", err)
+	}
+	if err := store.DeleteIf[iam.AccessKey](ctx, b, k.Object.ID, k.Version, checked); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("delete after the precondition moved: %v, want ErrConflict", err)
+	}
+	if got := keyIs(t, b, iam.KeyActive); got.Version != k.Version {
+		t.Fatalf("key version %q, want %q: a refused write changed it", got.Version, k.Version)
+	}
+
+	cur, err := store.Get[iam.User](ctx, b, "carol")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Delete[iam.User](ctx, b, "carol", cur.Version); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateIf(ctx, b, off, k.Version, store.PreOf(cur)); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("update after the precondition object was deleted: %v, want ErrConflict", err)
+	}
+	keyIs(t, b, iam.KeyActive)
 }
 
 func mustJSON(t *testing.T, v any) string {

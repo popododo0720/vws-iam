@@ -9,6 +9,7 @@ import (
 	"encoding/base32"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -129,11 +130,18 @@ func (s *Store) Create(ctx context.Context, kind iam.Kind, key string, spec []by
 	return u.GetResourceVersion(), nil
 }
 
-// Update implements store.Backend.
+// Update implements store.Backend. Before the write it voids every
+// conditional write still fenced on this object (see UpdateIf); the new
+// object carries no fence.
 func (s *Store) Update(ctx context.Context, kind iam.Kind, key string, spec []byte, version string) (string, error) {
 	cur, err := s.get(ctx, kind, key)
 	if err != nil {
 		return "", err
+	}
+	if cur.GetResourceVersion() == version {
+		if err := s.voidFences(ctx, cur); err != nil {
+			return "", err
+		}
 	}
 	u, err := s.object(kind, cur.GetAnnotations()[keyAnno], spec)
 	if err != nil {
@@ -210,15 +218,26 @@ func (s *Store) ListPage(ctx context.Context, kind iam.Kind, limit int64, cont s
 	return out, l.GetContinue(), nil
 }
 
-// Delete implements store.Backend.
+// Delete implements store.Backend. Like Update, it voids the conditional
+// writes fenced on the object first, then deletes it at the version it read.
 func (s *Store) Delete(ctx context.Context, kind iam.Kind, key, version string) error {
-	u := &unstructured.Unstructured{}
-	u.SetGroupVersionKind(GVK(kind))
-	u.SetNamespace(s.ns)
-	u.SetName(objectName(key))
-	var opts []client.DeleteOption
-	if version != "" {
-		opts = append(opts, client.Preconditions(metav1.Preconditions{ResourceVersion: &version}))
+	for attempt := 0; ; attempt++ {
+		cur, err := s.get(ctx, kind, key)
+		if err != nil {
+			return err
+		}
+		rv := cur.GetResourceVersion()
+		if version != "" && rv != version {
+			return store.ErrConflict
+		}
+		if err := s.voidFences(ctx, cur); err != nil {
+			return err
+		}
+		pre := client.Preconditions(metav1.Preconditions{ResourceVersion: &rv})
+		err = translate(s.c.Delete(ctx, cur, pre))
+		if errors.Is(err, store.ErrConflict) && version == "" && attempt < 8 {
+			continue
+		}
+		return err
 	}
-	return translate(s.c.Delete(ctx, u, opts...))
 }

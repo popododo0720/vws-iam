@@ -57,6 +57,11 @@ func (s *Store) Create(_ context.Context, kind iam.Kind, key string, spec []byte
 func (s *Store) Update(_ context.Context, kind iam.Kind, key string, spec []byte, version string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.update(kind, key, spec, version)
+}
+
+// update is Update with s.mu held.
+func (s *Store) update(kind iam.Kind, key string, spec []byte, version string) (string, error) {
 	m := s.bucket(kind)
 	it, ok := m[store.Fold(key)]
 	if !ok {
@@ -122,6 +127,11 @@ func (s *Store) ListPage(ctx context.Context, kind iam.Kind, limit int64, cont s
 func (s *Store) Delete(_ context.Context, kind iam.Kind, key, version string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.delete(kind, key, version)
+}
+
+// delete is Delete with s.mu held.
+func (s *Store) delete(kind iam.Kind, key, version string) error {
 	m := s.bucket(kind)
 	it, ok := m[store.Fold(key)]
 	if !ok {
@@ -132,4 +142,36 @@ func (s *Store) Delete(_ context.Context, kind iam.Kind, key, version string) er
 	}
 	delete(m, store.Fold(key))
 	return nil
+}
+
+// holds reports whether pre's object is at pre.Version. s.mu is held.
+func (s *Store) holds(pre store.Pre) bool {
+	it, ok := s.bucket(pre.Kind)[store.Fold(pre.Key)]
+	return ok && ver(it.version) == pre.Version
+}
+
+// UpdateIf implements store.Backend: one lock covers the check of pre
+// and the write, so they are atomic.
+func (s *Store) UpdateIf(
+	_ context.Context, kind iam.Kind, key string, spec []byte, version string, pre store.Pre,
+) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.holds(pre) {
+		return "", store.ErrConflict
+	}
+	return s.update(kind, key, spec, version)
+}
+
+// DeleteIf implements store.Backend like UpdateIf.
+func (s *Store) DeleteIf(_ context.Context, kind iam.Kind, key, version string, pre store.Pre) error {
+	if version == "" {
+		return store.ErrNoVersion
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.holds(pre) {
+		return store.ErrConflict
+	}
+	return s.delete(kind, key, version)
 }
