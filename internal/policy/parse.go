@@ -17,8 +17,12 @@ import (
 // ErrMalformed is MalformedPolicyDocument.
 var ErrMalformed = errors.New("MalformedPolicyDocument")
 
-// Version is the only accepted policy language version.
-const Version = "2012-10-17"
+// Policy language versions. A document without Version is evaluated as
+// Version2008, where ${...} policy variables are literal text.
+const (
+	Version     = "2012-10-17"
+	Version2008 = "2008-10-17"
+)
 
 // MaxSize bounds a document, like the AWS managed-policy limit.
 const MaxSize = 6144
@@ -38,6 +42,8 @@ const (
 
 // Document is a parsed policy.
 type Document struct {
+	// Version is Version or Version2008; a missing Version is Version2008.
+	Version    string
 	ID         string
 	Statements []Statement
 }
@@ -77,7 +83,7 @@ type rawStatement struct {
 }
 
 type rawDoc struct {
-	Version   string          `json:"Version"`
+	Version   *string         `json:"Version"`
 	ID        string          `json:"Id"`
 	Statement json.RawMessage `json:"Statement"`
 }
@@ -153,8 +159,12 @@ func Parse(doc string) (*Document, error) {
 	if err := strictDecode([]byte(doc), &rd); err != nil {
 		return nil, err
 	}
-	if rd.Version != Version {
-		return nil, malformed("Version must be %q", Version)
+	version := Version2008
+	if rd.Version != nil {
+		version = *rd.Version
+	}
+	if version != Version && version != Version2008 {
+		return nil, malformed("Version must be %q or %q", Version, Version2008)
 	}
 	var raws []rawStatement
 	st := bytes.TrimSpace(rd.Statement)
@@ -183,7 +193,7 @@ func Parse(doc string) (*Document, error) {
 	if len(raws) == 0 {
 		return nil, malformed("no Statement")
 	}
-	d := &Document{ID: rd.ID}
+	d := &Document{Version: version, ID: rd.ID}
 	sids := map[string]bool{}
 	for i, r := range raws {
 		s, err := statement(r)

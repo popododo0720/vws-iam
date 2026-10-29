@@ -134,7 +134,8 @@ func TestTrustPolicy(t *testing.T) {
 func TestMalformedPolicies(t *testing.T) {
 	bad := []string{
 		``, `null`, `[]`, `{}`,
-		`{"Version":"2008-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*"}}`,
+		`{"Version":"2012-10-18","Statement":{"Effect":"Allow","Action":"*","Resource":"*"}}`,
+		`{"Version":"","Statement":{"Effect":"Allow","Action":"*","Resource":"*"}}`,
 		`{"Version":"2012-10-17"}`,
 		`{"Version":"2012-10-17","Statement":[]}`,
 		`{"Version":"2012-10-17","Statement":{"Effect":"allow","Action":"*","Resource":"*"}}`,
@@ -167,6 +168,54 @@ func TestMalformedPolicies(t *testing.T) {
 	}
 	if _, err := policy.ParseTrust(`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*"}}`); !errors.Is(err, policy.ErrMalformed) {
 		t.Errorf("trust policy without principal: %v", err)
+	}
+}
+
+// TestPolicyVersion follows the AWS IAM Version element page: 2012-10-17
+// substitutes policy variables; 2008-10-17 and a missing Version accept
+// the document but keep ${...} as literal text; any other value is
+// MalformedPolicyDocument.
+func TestPolicyVersion(t *testing.T) {
+	const stmt = `"Statement":{"Effect":"Allow","Action":"s3:GetObject",` +
+		`"Resource":"arn:vws:s3:::home/${aws:username}/*",` +
+		`"Condition":{"StringLike":{"s3:prefix":"home/${aws:username}/*"}}}`
+	ctx := map[string][]string{"aws:username": {"alice"}, "s3:prefix": {"home/alice/x"}}
+	literalCtx := map[string][]string{"aws:username": {"alice"}, "s3:prefix": {"home/${aws:username}/x"}}
+	alice := "arn:vws:s3:::home/alice/x"
+	literal := "arn:vws:s3:::home/${aws:username}/x"
+	cases := []struct {
+		name        string
+		doc         string
+		wantVersion string
+		wantVars    bool
+	}{
+		{"2012-10-17 substitutes variables", `{"Version":"2012-10-17",` + stmt + `}`, policy.Version, true},
+		{"2008-10-17 keeps variables literal", `{"Version":"2008-10-17",` + stmt + `}`, policy.Version2008, false},
+		{"missing Version keeps variables literal", `{` + stmt + `}`, policy.Version2008, false},
+		{"null Version is missing", `{"Version":null,` + stmt + `}`, policy.Version2008, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			n := must(t, c.doc)
+			if n.Doc.Version != c.wantVersion {
+				t.Errorf("Version = %q, want %q", n.Doc.Version, c.wantVersion)
+			}
+			set := []policy.Named{n}
+			if got := policy.Evaluate(req("s3:GetObject", alice, ctx), set, nil).Allowed; got != c.wantVars {
+				t.Errorf("substituted request allowed = %v, want %v", got, c.wantVars)
+			}
+			if got := policy.Evaluate(req("s3:GetObject", literal, literalCtx), set, nil).Allowed; got == c.wantVars {
+				t.Errorf("literal request allowed = %v, want %v", got, !c.wantVars)
+			}
+		})
+	}
+	for _, v := range []string{`"2012-10-18"`, `"2008-10-17 "`, `""`, `"latest"`, `20121017`} {
+		t.Run("rejects Version "+v, func(t *testing.T) {
+			doc := `{"Version":` + v + `,` + stmt + `}`
+			if _, err := policy.Parse(doc); !errors.Is(err, policy.ErrMalformed) {
+				t.Fatalf("Parse(%s) = %v, want MalformedPolicyDocument", doc, err)
+			}
+		})
 	}
 }
 
