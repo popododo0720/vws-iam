@@ -122,7 +122,7 @@ func (p project) userSpec(ctx context.Context, u *iam.User, spec *iamv1.UserSpec
 		u.AttachedPolicies = arns
 	}
 	if set["spec.inline_policies"] {
-		if err := checkInline(spec.GetInlinePolicies()); err != nil {
+		if err := checkInline("user", u.Name, maxInlineUser, spec.GetInlinePolicies()); err != nil {
 			return err
 		}
 		u.InlinePolicies = spec.GetInlinePolicies()

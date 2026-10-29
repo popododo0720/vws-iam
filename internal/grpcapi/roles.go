@@ -64,7 +64,7 @@ func (p project) roleSpec(ctx context.Context, r *iam.Role, spec *iamv1.RoleSpec
 		r.AttachedPolicies = arns
 	}
 	if set["spec.inline_policies"] {
-		if err := checkInline(spec.GetInlinePolicies()); err != nil {
+		if err := checkInline("role", r.Name, maxInlineRole, spec.GetInlinePolicies()); err != nil {
 			return err
 		}
 		r.InlinePolicies = spec.GetInlinePolicies()

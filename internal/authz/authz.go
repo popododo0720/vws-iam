@@ -82,7 +82,9 @@ func (a *Authorizer) collect(ctx context.Context, owner string, attached []strin
 		out = append(out, n)
 	}
 	for name, doc := range inline {
-		d, err := policy.ParseIdentity(doc)
+		// Inline documents are held to the aggregate size quota on write,
+		// not to policy.MaxSize, so parse them the way the write path did.
+		d, err := policy.ParseInline(doc)
 		if err != nil {
 			return nil, fmt.Errorf("inline policy %s/%s: %w", owner, name, err)
 		}
