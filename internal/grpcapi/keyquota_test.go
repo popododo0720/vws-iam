@@ -2,8 +2,10 @@ package grpcapi_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,7 +14,9 @@ import (
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
+	"github.com/popododo0720/vws-iam/internal/accesskey"
 	"github.com/popododo0720/vws-iam/internal/iam"
+	"github.com/popododo0720/vws-iam/internal/secret"
 	"github.com/popododo0720/vws-iam/internal/store"
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
 )
@@ -176,5 +180,76 @@ func TestAccessKeyCreateLockLost(t *testing.T) {
 	}
 	if len(idx) != 1 || !strings.HasSuffix(k.GetAccessKey().GetName(), "/"+idx[0].Object.ID) {
 		t.Fatalf("key index %v, want only %s", idx, k.GetAccessKey().GetName())
+	}
+}
+
+// failKeyDelete is stealOnKeyCreate whose access key deletes fail while
+// down is set, as if the writer died between writing its key and
+// removing it.
+type failKeyDelete struct {
+	*stealOnKeyCreate
+	down *atomic.Bool
+}
+
+func (f failKeyDelete) Delete(ctx context.Context, kind iam.Kind, key, version string) error {
+	if kind == iam.KindAccessKey && f.down.Load() {
+		return store.ErrUnavailable
+	}
+	return f.stealOnKeyCreate.Delete(ctx, kind, key, version)
+}
+
+func (f failKeyDelete) DeleteIf(ctx context.Context, kind iam.Kind, key, version string, pre store.Pre) error {
+	if kind == iam.KindAccessKey && f.down.Load() {
+		return store.ErrUnavailable
+	}
+	return f.stealOnKeyCreate.DeleteIf(ctx, kind, key, version, pre)
+}
+
+// TestAccessKeyCreateLockLostNoCleanup: a key written after its writer
+// lost the quota lock, and never removed, is inert: it is not listed or
+// counted and authenticates nothing, so the user still ends with at most
+// two usable keys, and the next create removes it (#138).
+func TestAccessKeyCreateLockLostNoCleanup(t *testing.T) {
+	inner := memstore.New()
+	var down atomic.Bool
+	down.Store(true)
+	b := failKeyDelete{&stealOnKeyCreate{Backend: inner, t: t}, &down}
+	now := time.Now().UTC()
+	e := newEnvOn(t, b, &now)
+	ctx := t.Context()
+	u := e.createUser(t, ctx, "alice")
+	if _, err := e.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: u.GetName()}); err != nil {
+		t.Fatal(err)
+	}
+	orphan := b.first[strings.LastIndex(b.first, "/")+1:]
+	if orphan == "" {
+		t.Fatal("no key was written under the lost lock")
+	}
+	ring, err := secret.NewKeyring("k1", map[string][]byte{"k1": make([]byte, 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := accesskey.New(store.Scoped(inner, proj), inner, proj, ring, nil)
+	if _, err := svc.GetSigningCredential(ctx, orphan); !errors.Is(err, accesskey.ErrInactive) {
+		t.Fatalf("orphan key %s signs: %v, want ErrInactive", orphan, err)
+	}
+	down.Store(false)
+	if _, err := e.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: u.GetName()}); err != nil {
+		t.Fatalf("second key refused with an orphan stored: %v", err)
+	}
+	_, err = e.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: u.GetName()})
+	wantAccessKeysPerUser(t, err)
+	list, err := e.keys.ListAccessKeys(ctx, &iamv1.ListAccessKeysRequest{Parent: u.GetName()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list.GetAccessKeys()) != 2 {
+		t.Fatalf("listed %d keys, want 2", len(list.GetAccessKeys()))
+	}
+	if _, err := store.Get[iam.AccessKey](ctx, store.Scoped(inner, proj), orphan); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("orphan key not swept: %v", err)
+	}
+	if n := keysOf(t, inner, "alice"); n != 2 {
+		t.Fatalf("alice has %d stored keys, want 2", n)
 	}
 }

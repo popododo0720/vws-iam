@@ -334,6 +334,10 @@ type KeyStatus string
 const (
 	KeyActive   KeyStatus = "Active"
 	KeyInactive KeyStatus = "Inactive"
+	// KeyPending is a key written by CreateAccessKey but not yet committed
+	// under the AccessKeysPerUser quota lock. It authenticates nothing, is
+	// not listed or counted, and is removed by the next create for its user.
+	KeyPending KeyStatus = "Pending"
 )
 
 // Sealed is ciphertext under a KEK. It never holds plaintext.
@@ -368,7 +372,7 @@ func (k AccessKey) Validate() error {
 	if k.Root != (k.UserName == "") || (!k.Root && !ValidName(k.UserName)) {
 		return invalid("user name %q (root %v)", k.UserName, k.Root)
 	}
-	if k.Status != KeyActive && k.Status != KeyInactive {
+	if k.Status != KeyActive && k.Status != KeyInactive && k.Status != KeyPending {
 		return invalid("status %q", k.Status)
 	}
 	if k.Secret.KeyID == "" || len(k.Secret.Ciphertext) == 0 {
