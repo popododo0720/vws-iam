@@ -1031,7 +1031,10 @@ func inlineFixture(t *testing.T) inlineEnv {
 			return get(kind)
 		}
 	}
-	caller := &iamv1.Principal{Type: iamv1.PrincipalType_PRINCIPAL_TYPE_USER, Arn: u.GetStatus().GetArn(), Project: proj, UniqueId: u.GetStatus().GetUniqueId(), Resource: u.GetName()}
+	caller := &iamv1.Principal{
+		Type: iamv1.PrincipalType_PRINCIPAL_TYPE_USER, Arn: u.GetStatus().GetArn(), Project: proj,
+		UniqueId: u.GetStatus().GetUniqueId(), Resource: u.GetName(),
+	}
 	allowAlice := func(action string) (bool, error) {
 		resp, err := e.auth.Authorize(ctx, &iamv1.AuthorizeRequest{Principal: caller, Action: action})
 		return resp.GetDecision() == iamv1.Decision_DECISION_ALLOW, err
