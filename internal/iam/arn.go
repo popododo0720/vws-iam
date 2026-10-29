@@ -58,3 +58,24 @@ func SplitMfaDeviceARN(account, serial string) (name, path string, ok bool) {
 	}
 	return name, rest[:i+1], true
 }
+
+// SplitUserARN splits a user ARN arn:vws:iam::{account}:user{path}{name}
+// into its account, path, and name. The path is "/" at the root. ok is
+// false when arn is not a well-formed user ARN.
+func SplitUserARN(arn string) (account, path, name string, ok bool) {
+	rest, ok := strings.CutPrefix(arn, "arn:"+Partition+":iam::")
+	if !ok {
+		return "", "", "", false
+	}
+	account, rest, ok = strings.Cut(rest, ":user/")
+	if !ok || !ValidProject(account) {
+		return "", "", "", false
+	}
+	rest = "/" + rest
+	i := strings.LastIndexByte(rest, '/')
+	path, name = rest[:i+1], rest[i+1:]
+	if !ValidName(name) || !pathRE.MatchString(path) {
+		return "", "", "", false
+	}
+	return account, path, name, true
+}
