@@ -3,6 +3,7 @@ package grpcapi
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"cloud.google.com/go/longrunning/autogen/longrunningpb"
 	"google.golang.org/grpc/codes"
@@ -192,15 +193,22 @@ func (s *Server) ListAccessKeys(ctx context.Context, req *iamv1.ListAccessKeysRe
 }
 
 // CreateAccessKey returns the secret exactly once. It is not an operation
-// and is never replayed: the secret is not stored anywhere in plaintext,
-// so a lost response means creating another key (limit two per user).
+// and is never replayed: the secret is not stored anywhere in plaintext.
+// A request_id is stored with the key it creates; while that key exists, a
+// repeat for the same user is ALREADY_EXISTS naming the key, without the
+// secret (vws-proto: after a lost response, delete the key and create
+// another). An empty request_id makes every call a new key.
 func (s *Server) CreateAccessKey(ctx context.Context, req *iamv1.CreateAccessKeyRequest) (*iamv1.CreateAccessKeyResponse, error) {
 	pid, user, err := child(req.GetParent(), "users")
 	if err != nil {
 		return nil, err
 	}
+	rid := req.GetRequestId()
+	if rid != "" && !iam.ValidRequestID(rid) {
+		return nil, invalidSpec(fmt.Sprintf("request_id must be 1 to %d characters of [A-Za-z0-9_-]", iam.MaxRequestIDLen))
+	}
 	p := s.project(pid)
-	cred, err := p.createKey(ctx, user)
+	cred, err := p.createKey(ctx, user, rid)
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}

@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"time"
 
+	"google.golang.org/grpc/codes"
+
 	"github.com/popododo0720/vws-iam/internal/accesskey"
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/store"
@@ -21,12 +23,22 @@ func accessKeysPerUserExceeded() error {
 // create is retried.
 var errLockLost = errors.New("quota lock lost during key create")
 
+// requestRepeated is a CreateAccessKey request_id that already created
+// key id. It names the key and never carries its secret.
+func requestRepeated(id string) error {
+	return fail(codes.AlreadyExists, "ALREADY_EXISTS", "EntityAlreadyExists",
+		"access key "+id+" was already created with this request_id; its secret is not returned again")
+}
+
 // createKey creates an access key for user under the project's quota lock
 // (the lock member adds take), so two concurrent creates for one user
-// cannot both pass the AccessKeysPerUser count.
-func (p project) createKey(ctx context.Context, user string) (accesskey.Credential, error) {
+// cannot both pass the AccessKeysPerUser count. A non-empty requestID that
+// already created a key of user is ALREADY_EXISTS; it is checked and
+// stored under the same lock hold, so concurrent creates with one
+// requestID make one key.
+func (p project) createKey(ctx context.Context, user, requestID string) (accesskey.Credential, error) {
 	for attempt := 0; ; attempt++ {
-		cred, err := p.createKeyLocked(ctx, user)
+		cred, err := p.createKeyLocked(ctx, user, requestID)
 		if !errors.Is(err, errLockLost) {
 			if errors.Is(err, accesskey.ErrLimitExceeded) {
 				return cred, accessKeysPerUserExceeded()
@@ -47,7 +59,13 @@ func (p project) createKey(ctx context.Context, user string) (accesskey.Credenti
 // key stays pending. A writer that dies at any point leaves at most an
 // inert pending key, which the next create for the user removes, so the
 // stored active keys never exceed accesskey.MaxPerUser.
-func (p project) createKeyLocked(ctx context.Context, user string) (accesskey.Credential, error) {
+//
+// requestID is looked up among user's committed keys after the sweep and
+// stored with the pending key. A writer that wrote its key and then lost
+// the lock cannot activate it, so of two creates with one requestID only
+// the one whose activation commits under its hold makes a key; the other
+// retries under a later hold and finds that key.
+func (p project) createKeyLocked(ctx context.Context, user, requestID string) (accesskey.Credential, error) {
 	pre, unlock, err := p.lockMembership(ctx)
 	if err != nil {
 		return accesskey.Credential{}, err
@@ -68,7 +86,16 @@ func (p project) createKeyLocked(ctx context.Context, user string) (accesskey.Cr
 	if pre, err = p.stillHeld(ctx, hold); err != nil {
 		return accesskey.Credential{}, err
 	}
-	cred, version, err := p.keys.CreatePending(ctx, user)
+	if requestID != "" {
+		id, ok, err := p.keys.ByRequestID(ctx, user, requestID)
+		if err != nil {
+			return accesskey.Credential{}, err
+		}
+		if ok {
+			return accesskey.Credential{}, requestRepeated(id)
+		}
+	}
+	cred, version, err := p.keys.CreatePending(ctx, user, requestID)
 	if err != nil {
 		return accesskey.Credential{}, err
 	}
