@@ -26,6 +26,10 @@ func TestValidateRejectsHostileInput(t *testing.T) {
 		iam.AccessKey{ID: "short", UserName: "a", Status: iam.KeyActive, Secret: seal},
 		iam.AccessKey{ID: "AKIAABCDEFGHIJKLMNOP", UserName: "a", Status: "On", Secret: seal},
 		iam.AccessKey{ID: "AKIAABCDEFGHIJKLMNOP", UserName: "a", Status: iam.KeyActive},
+		withRequestID(iam.AccessKey{ID: "AKIAABCDEFGHIJKLMNOP", UserName: "a", Status: iam.KeyActive, Secret: seal}, "a b"),
+		withRequestID(iam.AccessKey{ID: "AKIAABCDEFGHIJKLMNOP", UserName: "a", Status: iam.KeyActive, Secret: seal},
+			strings.Repeat("a", 65)),
+		withRequestID(iam.AccessKey{ID: "AKIAABCDEFGHIJKLMNOP", Root: true, Status: iam.KeyActive, Secret: seal}, "r"),
 		iam.MfaDevice{Name: "d", Enabled: true, Seed: seal},
 		iam.MfaDevice{Name: "d"},
 		iam.MfaDevice{Name: "d", Path: "team", Seed: seal},
@@ -33,6 +37,27 @@ func TestValidateRejectsHostileInput(t *testing.T) {
 	for i, o := range bad {
 		if err := o.Validate(); !errors.Is(err, iam.ErrInvalid) {
 			t.Errorf("%d %T: %v, want ErrInvalid", i, o, err)
+		}
+	}
+}
+
+func withRequestID(k iam.AccessKey, id string) iam.AccessKey {
+	k.RequestID = id
+	return k
+}
+
+// TestValidRequestID: a CreateAccessKey request_id is 1 to 64 characters
+// of [A-Za-z0-9_-] (#137).
+func TestValidRequestID(t *testing.T) {
+	good := []string{"6f1c2b9e-4d3a-4b8e-9a7f-2c5d1e0f3a4b", "a", "A_z-9", strings.Repeat("a", iam.MaxRequestIDLen)}
+	for _, s := range good {
+		if !iam.ValidRequestID(s) {
+			t.Errorf("%q refused", s)
+		}
+	}
+	for _, s := range []string{"", strings.Repeat("a", iam.MaxRequestIDLen+1), "a b", "a/b", "a;b", "a\nb", "\u00e9"} {
+		if iam.ValidRequestID(s) {
+			t.Errorf("%q accepted", s)
 		}
 	}
 }

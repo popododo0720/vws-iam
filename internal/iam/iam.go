@@ -88,6 +88,17 @@ func invalid(format string, a ...any) error {
 // ValidName reports whether s is an IAM name other than a managed policy name.
 func ValidName(s string) bool { return nameRE.MatchString(s) }
 
+// MaxRequestIDLen bounds a CreateAccessKey request_id, which is stored
+// with the key it created.
+const MaxRequestIDLen = 64
+
+var requestIDRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// ValidRequestID reports whether s is a request_id that can be stored with
+// an access key: 1 to MaxRequestIDLen characters of [A-Za-z0-9_-], which
+// covers a UUID4.
+func ValidRequestID(s string) bool { return requestIDRE.MatchString(s) }
+
 // ValidPolicyName reports whether s is a managed or inline policy name: 1 to
 // 128 characters of [A-Za-z0-9+=,.@_-], the AWS PolicyName rule.
 func ValidPolicyName(s string) bool { return policyNameRE.MatchString(s) }
@@ -377,6 +388,9 @@ func (k AccessKey) Validate() error {
 	}
 	if k.Secret.KeyID == "" || len(k.Secret.Ciphertext) == 0 {
 		return invalid("access key %s has no sealed secret", k.ID)
+	}
+	if k.RequestID != "" && (k.Root || !ValidRequestID(k.RequestID)) {
+		return invalid("access key %s request id", k.ID)
 	}
 	return nil
 }

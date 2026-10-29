@@ -103,13 +103,32 @@ func (s *Service) Create(ctx context.Context, user string) (Credential, error) {
 
 // CreatePending is Create that stores the key as KeyPending, so it
 // authenticates nothing and is not counted until Activate commits it. It
-// returns the key's version for Activate.
-func (s *Service) CreatePending(ctx context.Context, user string) (Credential, string, error) {
+// returns the key's version for Activate. requestID, when not empty, is
+// stored with the key for ByRequestID.
+func (s *Service) CreatePending(ctx context.Context, user, requestID string) (Credential, string, error) {
 	name, err := s.checkLimit(ctx, user)
 	if err != nil {
 		return Credential{}, "", err
 	}
-	return s.put(ctx, name, "", "", false, iam.KeyPending)
+	return s.put(ctx, name, "", "", false, iam.KeyPending, requestID)
+}
+
+// ByRequestID returns the id of user's committed (active or inactive) key
+// created with requestID, if there is one. Pending keys are left out: one
+// is never activated once its writer's quota lock hold has ended, and the
+// next create removes it.
+func (s *Service) ByRequestID(ctx context.Context, user, requestID string) (string, bool, error) {
+	all, err := store.List[iam.AccessKey](ctx, s.b)
+	if err != nil {
+		return "", false, err
+	}
+	for _, k := range all {
+		o := k.Object
+		if !o.Root && o.Status != iam.KeyPending && o.RequestID == requestID && store.Fold(o.UserName) == store.Fold(user) {
+			return o.ID, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 // Activate makes the pending key id, still at version, active only while
@@ -194,12 +213,12 @@ func (s *Service) checkLimit(ctx context.Context, user string) (string, error) {
 // key has no user. The index entry is written first, so a crash leaves at
 // worst an index entry without a key, which authenticates nothing.
 func (s *Service) Import(ctx context.Context, user, id, sec string, root bool) (Credential, error) {
-	cred, _, err := s.put(ctx, user, id, sec, root, iam.KeyActive)
+	cred, _, err := s.put(ctx, user, id, sec, root, iam.KeyActive, "")
 	return cred, err
 }
 
 func (s *Service) put(
-	ctx context.Context, user, id, sec string, root bool, st iam.KeyStatus,
+	ctx context.Context, user, id, sec string, root bool, st iam.KeyStatus, requestID string,
 ) (Credential, string, error) {
 	var err error
 	if id == "" {
@@ -217,7 +236,7 @@ func (s *Service) put(
 		return Credential{}, "", err
 	}
 	k := iam.AccessKey{
-		Meta: iam.Meta{UID: iam.NewUID(), Generation: 1}, ID: id, UserName: user, Root: root,
+		Meta: iam.Meta{UID: iam.NewUID(), Generation: 1, RequestID: requestID}, ID: id, UserName: user, Root: root,
 		Status: st, Created: s.now().UTC(), Secret: sealed,
 	}
 	if err := k.Validate(); err != nil {
