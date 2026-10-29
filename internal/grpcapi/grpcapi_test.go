@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/hex"
+	"fmt"
 	"net"
 	"strconv"
 	"strings"
@@ -954,12 +955,11 @@ func TestMfaDeviceLockoutStatus(t *testing.T) {
 	}
 }
 
-// TestInlinePolicyNameLength checks that UpdateUser, UpdateGroup and
-// UpdateRole take an inline policy name of 1 to 128 characters of
-// [A-Za-z0-9+=,.@_-], as AWS Put{User,Group,Role}Policy do, and refuse
-// anything else with INVALID_ARGUMENT.
-func TestInlinePolicyNameLength(t *testing.T) {
-	doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*"}]}`
+// inlineFixture creates user alice, group devs and role deployer and returns
+// a func that sets the inline policies of one of them ("user", "group" or
+// "role") and reads them back.
+func inlineFixture(t *testing.T) func(kind string, inline map[string]string) (map[string]string, error) {
+	t.Helper()
 	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow",` +
 		`"Principal":{"AWS":"arn:vws:iam::acme:user/alice"},"Action":"sts:AssumeRole"}]}`
 	e := newEnv(t)
@@ -980,7 +980,7 @@ func TestInlinePolicyNameLength(t *testing.T) {
 	}
 	r := unpack(t, op, &iamv1.Role{})
 	mask := &fieldmaskpb.FieldMask{Paths: []string{"spec.inline_policies"}}
-	put := func(kind string, inline map[string]string) (map[string]string, error) {
+	return func(kind string, inline map[string]string) (map[string]string, error) {
 		switch kind {
 		case "user":
 			if _, err := e.users.UpdateUser(ctx, &iamv1.UpdateUserRequest{
@@ -1011,6 +1011,65 @@ func TestInlinePolicyNameLength(t *testing.T) {
 			return got.GetSpec().GetInlinePolicies(), err
 		}
 	}
+}
+
+// sizedDoc returns a valid identity policy of exactly n characters, none of
+// them white space, padded through the Sid.
+func sizedDoc(t *testing.T, n int) string {
+	t.Helper()
+	const (
+		head = `{"Version":"2012-10-17","Statement":[{"Sid":"S`
+		tail = `","Effect":"Allow","Action":"s3:*","Resource":"*"}]}`
+	)
+	pad := n - len(head) - len(tail)
+	if pad < 0 {
+		t.Fatalf("sizedDoc(%d): too small", n)
+	}
+	return head + strings.Repeat("a", pad) + tail
+}
+
+// TestInlinePolicyAggregateSize checks the AWS quota on the total size of
+// the inline policies of one identity, white space not counted: 2,048
+// characters for a user, 5,120 for a group and 10,240 for a role. Over the
+// limit is LimitExceeded with the AWS message, and nothing is stored.
+func TestInlinePolicyAggregateSize(t *testing.T) {
+	put := inlineFixture(t)
+	for _, c := range []struct {
+		kind, name string
+		limit      int
+	}{{"user", "alice", 2048}, {"group", "devs", 5120}, {"role", "deployer", 10240}} {
+		// At the limit, split over two documents and padded with white space
+		// past policy.MaxSize: accepted.
+		a, b := sizedDoc(t, c.limit/2), sizedDoc(t, c.limit-c.limit/2)
+		b = strings.Replace(b, "{", "{"+strings.Repeat(" \n\t", 2100), 1)
+		at := map[string]string{"a": a, "b": b}
+		got, err := put(c.kind, at)
+		if err != nil {
+			t.Fatalf("%s: inline policies at the limit: %v", c.kind, err)
+		}
+		if len(got) != 2 || got["a"] != a || got["b"] != b {
+			t.Fatalf("%s: stored inline policies differ", c.kind)
+		}
+		// One character over: LimitExceeded, the stored policies unchanged.
+		_, err = put(c.kind, map[string]string{"a": a, "b": sizedDoc(t, c.limit-c.limit/2+1)})
+		wantErr(t, err, codes.ResourceExhausted, "QUOTA_EXCEEDED", "LimitExceeded")
+		want := fmt.Sprintf("Maximum policy size of %d bytes exceeded for %s %s.", c.limit, c.kind, c.name)
+		if got := status.Convert(err).Message(); got != want {
+			t.Errorf("%s: message %q, want %q", c.kind, got, want)
+		}
+		if got, err := put(c.kind, at); err != nil || len(got) != 2 || got["b"] != b {
+			t.Fatalf("%s: inline policies after the refused write: %v", c.kind, err)
+		}
+	}
+}
+
+// TestInlinePolicyNameLength checks that UpdateUser, UpdateGroup and
+// UpdateRole take an inline policy name of 1 to 128 characters of
+// [A-Za-z0-9+=,.@_-], as AWS Put{User,Group,Role}Policy do, and refuse
+// anything else with INVALID_ARGUMENT.
+func TestInlinePolicyNameLength(t *testing.T) {
+	doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*"}]}`
+	put := inlineFixture(t)
 	for _, kind := range []string{"user", "group", "role"} {
 		name := strings.Repeat("P", 128)
 		got, err := put(kind, map[string]string{name: doc})

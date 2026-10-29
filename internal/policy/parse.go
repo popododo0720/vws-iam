@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // ErrMalformed is MalformedPolicyDocument.
@@ -26,6 +27,12 @@ const (
 
 // MaxSize bounds a document, like the AWS managed-policy limit.
 const MaxSize = 6144
+
+// MaxInlineLength bounds the raw text of one inline document, like the
+// PolicyDocument length constraint of PutUserPolicy, PutGroupPolicy and
+// PutRolePolicy. The real limit on inline documents is the aggregate size
+// per identity; see Size.
+const MaxInlineLength = 131072
 
 func malformed(format string, a ...any) error {
 	return fmt.Errorf("%w: %s", ErrMalformed, fmt.Sprintf(format, a...))
@@ -170,6 +177,22 @@ func Parse(doc string) (*Document, error) {
 	if len(doc) > MaxSize {
 		return nil, malformed("document is %d bytes, limit %d", len(doc), MaxSize)
 	}
+	return parse(doc)
+}
+
+// Size is the size AWS charges a document against a quota: its characters
+// other than white space.
+func Size(doc string) int {
+	n := 0
+	for _, r := range doc {
+		if !unicode.IsSpace(r) {
+			n++
+		}
+	}
+	return n
+}
+
+func parse(doc string) (*Document, error) {
 	var rd rawDoc
 	if err := strictDecode([]byte(doc), &rd); err != nil {
 		return nil, err

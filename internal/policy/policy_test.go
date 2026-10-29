@@ -250,3 +250,31 @@ func FuzzParse(f *testing.F) {
 		policy.Evaluate(policy.Request{Action: "s3:GetObject", Resource: "arn:vws:s3:::b/k", Context: map[string][]string{"aws:SourceIp": {"10.0.0.1"}, "aws:CurrentTime": {"2026-01-01T00:00:00Z"}}}, []policy.Named{{Name: "f", Doc: d}}, []policy.Named{{Name: "f", Doc: d}})
 	})
 }
+
+// TestInline checks the inline-policy parse: white space does not count
+// toward Size, ParseInline is not held to MaxSize but to the
+// PolicyDocument length of Put*Policy, and it still refuses a Principal.
+func TestInline(t *testing.T) {
+	doc := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*"}}`
+	padded := strings.Replace(doc, "{", "{"+strings.Repeat(" \n\t\r", policy.MaxSize), 1)
+	if got := policy.Size(padded); got != len(doc) {
+		t.Errorf("Size = %d, want %d", got, len(doc))
+	}
+	if got := policy.Size("é ü"); got != 2 {
+		t.Errorf("Size counts characters: %d, want 2", got)
+	}
+	if _, err := policy.Parse(padded); !errors.Is(err, policy.ErrMalformed) {
+		t.Errorf("Parse over MaxSize: %v", err)
+	}
+	if _, err := policy.ParseInline(padded); err != nil {
+		t.Errorf("ParseInline over MaxSize: %v", err)
+	}
+	long := strings.Replace(doc, "{", "{"+strings.Repeat(" ", policy.MaxInlineLength), 1)
+	if _, err := policy.ParseInline(long); !errors.Is(err, policy.ErrMalformed) {
+		t.Errorf("ParseInline over MaxInlineLength: %v", err)
+	}
+	withPrincipal := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Principal":"*","Action":"*","Resource":"*"}}`
+	if _, err := policy.ParseInline(withPrincipal); !errors.Is(err, policy.ErrMalformed) {
+		t.Errorf("ParseInline with principal: %v", err)
+	}
+}

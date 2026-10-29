@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -132,12 +133,29 @@ func (p project) policyNames(arns []string) []string {
 	return out
 }
 
-func checkInline(m map[string]string) error {
+// Aggregate inline policy size per identity, white space not counted, as
+// AWS IAM quotas define it.
+const (
+	maxInlineUser  = 2048
+	maxInlineGroup = 5120
+	maxInlineRole  = 10240
+)
+
+// checkInline validates the inline policies of one identity: each name and
+// document, and their aggregate size against limit (LimitExceeded, like AWS).
+func checkInline(kind, identity string, limit int, m map[string]string) error {
+	total := 0
 	for k, doc := range m {
 		if !iam.ValidPolicyName(k) {
 			return invalidSpec("inline policy name " + quote(k))
 		}
-		if _, err := policy.ParseIdentity(doc); err != nil {
+		total += policy.Size(doc)
+	}
+	if total > limit {
+		return quota(fmt.Sprintf("Maximum policy size of %d bytes exceeded for %s %s.", limit, kind, identity))
+	}
+	for _, doc := range m {
+		if _, err := policy.ParseInline(doc); err != nil {
 			return err
 		}
 	}

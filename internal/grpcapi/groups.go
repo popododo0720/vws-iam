@@ -62,7 +62,7 @@ func (p project) groupSpec(ctx context.Context, g *iam.Group, spec *iamv1.GroupS
 		g.AttachedPolicies = arns
 	}
 	if set["spec.inline_policies"] {
-		if err := checkInline(spec.GetInlinePolicies()); err != nil {
+		if err := checkInline("group", g.Name, maxInlineGroup, spec.GetInlinePolicies()); err != nil {
 			return err
 		}
 		g.InlinePolicies = spec.GetInlinePolicies()
