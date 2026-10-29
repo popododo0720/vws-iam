@@ -37,6 +37,38 @@ func TestValidateRejectsHostileInput(t *testing.T) {
 	}
 }
 
+func TestSplitUserARN(t *testing.T) {
+	for _, tc := range []struct {
+		arn, account, path, name string
+	}{
+		{"arn:vws:iam::proj-a:user/alice", "proj-a", "/", "alice"},
+		{"arn:vws:iam::proj-a:user/allowed/team/alice", "proj-a", "/allowed/team/", "alice"},
+	} {
+		account, path, name, ok := iam.SplitUserARN(tc.arn)
+		if !ok || account != tc.account || path != tc.path || name != tc.name {
+			t.Errorf("SplitUserARN(%q) = %q %q %q %v", tc.arn, account, path, name, ok)
+		}
+		if got := iam.UserARN(account, iam.User{Name: name, Path: path}); got != tc.arn {
+			t.Errorf("round trip %q: %q", tc.arn, got)
+		}
+	}
+	for _, arn := range []string{
+		"", "alice", "projects/proj-a/users/alice",
+		"arn:aws:iam::proj-a:user/alice",
+		"arn:vws:iam::proj-a:role/alice",
+		"arn:vws:iam:::user/alice",
+		"arn:vws:iam::Bad_Project:user/alice",
+		"arn:vws:iam::proj-a:user/",
+		"arn:vws:iam::proj-a:user/allowed/",
+		"arn:vws:iam::proj-a:user/a b",
+		"arn:vws:iam::proj-a:user/allowed path/alice",
+	} {
+		if a, p, n, ok := iam.SplitUserARN(arn); ok {
+			t.Errorf("SplitUserARN(%q) accepted: %q %q %q", arn, a, p, n)
+		}
+	}
+}
+
 func TestARNs(t *testing.T) {
 	if got := iam.UserARN("000000000000", iam.User{Name: "a", Path: "/dev/"}); got != "arn:vws:iam::000000000000:user/dev/a" {
 		t.Fatal(got)
