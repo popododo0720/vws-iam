@@ -278,6 +278,26 @@ func Run(t *testing.T, open func(t *testing.T) store.Backend) {
 			t.Fatalf("list %d policies", len(all))
 		}
 	})
+	t.Run("InlinePolicyName128RoundTrip", func(t *testing.T) {
+		b := open(t)
+		ctx := context.Background()
+		name := strings.Repeat("P", 128)
+		u := iam.User{Name: "alice", ID: "AIDA1", InlinePolicies: map[string]string{name: `{}`}}
+		if _, err := store.Create(ctx, b, u); err != nil {
+			t.Fatalf("create user with a 128-character inline policy: %v", err)
+		}
+		got, err := store.Get[iam.User](ctx, b, "alice")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if doc, ok := got.Object.InlinePolicies[name]; !ok || doc != `{}` {
+			t.Fatalf("inline policies %v", got.Object.InlinePolicies)
+		}
+		long := iam.User{Name: "bob", ID: "AIDA2", InlinePolicies: map[string]string{strings.Repeat("P", 129): `{}`}}
+		if _, err := store.Create(ctx, b, long); !errors.Is(err, iam.ErrInvalid) {
+			t.Fatalf("create user with a 129-character inline policy: %v", err)
+		}
+	})
 }
 
 // guarded creates a user and one of its access keys, the shape of the

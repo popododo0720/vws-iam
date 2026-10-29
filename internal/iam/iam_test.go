@@ -127,6 +127,37 @@ func TestPolicyNameLength(t *testing.T) {
 	}
 }
 
+// TestInlinePolicyNameLength checks the AWS PutUserPolicy, PutGroupPolicy and
+// PutRolePolicy PolicyName rule: 1 to 128 characters of [\w+=,.@-].
+func TestInlinePolicyNameLength(t *testing.T) {
+	trust := `{"Version":"2012-10-17","Statement":[]}`
+	owners := []struct {
+		kind string
+		with func(inline map[string]string) iam.Object
+	}{
+		{"user", func(m map[string]string) iam.Object { return iam.User{Name: "user", InlinePolicies: m} }},
+		{"group", func(m map[string]string) iam.Object { return iam.Group{Name: "group", InlinePolicies: m} }},
+		{"role", func(m map[string]string) iam.Object {
+			return iam.Role{Name: "role", AssumeRolePolicy: trust, MaxSessionDuration: time.Hour, InlinePolicies: m}
+		}},
+	}
+	for _, o := range owners {
+		ok := []string{"a", strings.Repeat("a", 64), strings.Repeat("a", 65), strings.Repeat("a", 128), "A.z+9=,_@-"}
+		for _, name := range ok {
+			if err := o.with(map[string]string{name: "{}"}).Validate(); err != nil {
+				t.Errorf("%s inline policy of %d characters: %v", o.kind, len(name), err)
+			}
+		}
+		for _, name := range []string{strings.Repeat("a", 129), "", "bad name", "a/b", "a:b", strings.Repeat("\u00e9", 4)} {
+			err := o.with(map[string]string{name: "{}"}).Validate()
+			want := `invalid: inline policy name "` + name + `"`
+			if err == nil || err.Error() != want || !errors.Is(err, iam.ErrInvalid) {
+				t.Errorf("%s inline policy %q: %v, want %s", o.kind, name, err, want)
+			}
+		}
+	}
+}
+
 func TestOtherNamesStayAt64(t *testing.T) {
 	n64 := strings.Repeat("n", 64)
 	n65 := strings.Repeat("n", 65)
@@ -157,11 +188,6 @@ func TestOtherNamesStayAt64(t *testing.T) {
 			"session",
 			iam.Session{Hash: hash, Project: "proj-a", UserName: n64, Expires: expires},
 			iam.Session{Hash: hash, Project: "proj-a", UserName: n65, Expires: expires},
-		},
-		{
-			"inline policy",
-			iam.User{Name: "user", InlinePolicies: map[string]string{n64: "{}"}},
-			iam.User{Name: "user", InlinePolicies: map[string]string{n65: "{}"}},
 		},
 		{
 			"group member",
