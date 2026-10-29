@@ -158,10 +158,11 @@ func (r Request) value(key string) ([]string, bool) {
 	return nil, false
 }
 
-// expand substitutes ${key} policy variables. ok is false when a variable
-// is not in the request, which makes the element not match.
-func (r Request) expand(s string) (string, bool) {
-	if !strings.Contains(s, "${") {
+// expand substitutes ${key} policy variables when vars is set (Version
+// 2012-10-17); otherwise s is literal. ok is false when a variable is not
+// in the request, which makes the element not match.
+func (r Request) expand(s string, vars bool) (string, bool) {
+	if !vars || !strings.Contains(s, "${") {
 		return s, true
 	}
 	var b strings.Builder
@@ -203,13 +204,13 @@ func (s Statement) matchAction(a string) bool {
 	return m != s.NotAction
 }
 
-func (s Statement) matchResource(r Request) bool {
+func (s Statement) matchResource(r Request, vars bool) bool {
 	if s.Resources == nil {
 		return true // trust policies name no resource
 	}
 	m := false
 	for _, p := range s.Resources {
-		if p, ok := r.expand(p); ok && Match(p, r.Resource, false) {
+		if p, ok := r.expand(p, vars); ok && Match(p, r.Resource, false) {
 			m = true
 			break
 		}
@@ -241,7 +242,7 @@ func (s Statement) matchPrincipal(r Request) bool {
 // Partition is the ARN partition used for account roots.
 const Partition = "vws"
 
-func (c Condition) eval(r Request) bool {
+func (c Condition) eval(r Request, vars bool) bool {
 	o := operators[c.Op]
 	got, present := r.value(c.Key)
 	if o.kind == kindNull {
@@ -256,7 +257,7 @@ func (c Condition) eval(r Request) bool {
 	hit := false
 	for _, g := range got {
 		for _, v := range c.Values {
-			if v, ok := r.expand(v); ok && o.match(g, v) {
+			if v, ok := r.expand(v, vars); ok && o.match(g, v) {
 				hit = true
 			}
 		}
@@ -264,12 +265,13 @@ func (c Condition) eval(r Request) bool {
 	return hit != o.negate
 }
 
-func (s Statement) applies(r Request) bool {
-	if !s.matchAction(r.Action) || !s.matchResource(r) || !s.matchPrincipal(r) {
+// applies reports whether s matches r. vars enables policy variables.
+func (s Statement) applies(r Request, vars bool) bool {
+	if !s.matchAction(r.Action) || !s.matchResource(r, vars) || !s.matchPrincipal(r) {
 		return false
 	}
 	for _, c := range s.Conditions {
-		if !c.eval(r) {
+		if !c.eval(r, vars) {
 			return false
 		}
 	}
@@ -306,8 +308,9 @@ func (h hit) String() string {
 // scan returns the first explicit deny and the first allow in set.
 func scan(set []Named, r Request) (deny, allow hit) {
 	for _, n := range set {
+		vars := n.Doc.Version == Version
 		for i, s := range n.Doc.Statements {
-			if !s.applies(r) {
+			if !s.applies(r, vars) {
 				continue
 			}
 			id := s.Sid

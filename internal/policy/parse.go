@@ -17,8 +17,12 @@ import (
 // ErrMalformed is MalformedPolicyDocument.
 var ErrMalformed = errors.New("MalformedPolicyDocument")
 
-// Version is the only accepted policy language version.
-const Version = "2012-10-17"
+// Policy language versions. A document without Version is evaluated as
+// Version2008, where ${...} policy variables are literal text.
+const (
+	Version     = "2012-10-17"
+	Version2008 = "2008-10-17"
+)
 
 // MaxSize bounds a document, like the AWS managed-policy limit.
 const MaxSize = 6144
@@ -38,6 +42,8 @@ const (
 
 // Document is a parsed policy.
 type Document struct {
+	// Version is Version or Version2008; a missing Version is Version2008.
+	Version    string
 	ID         string
 	Statements []Statement
 }
@@ -77,7 +83,7 @@ type rawStatement struct {
 }
 
 type rawDoc struct {
-	Version   string          `json:"Version"`
+	Version   json.RawMessage `json:"Version"`
 	ID        string          `json:"Id"`
 	Statement json.RawMessage `json:"Statement"`
 }
@@ -144,6 +150,21 @@ func scalar(b json.RawMessage) (string, error) {
 	return "", malformed("value %s is not a string", b)
 }
 
+// parseVersion returns the effective Version. An omitted Version is
+// Version2008; a present Version, including null, must be one of the two
+// supported strings, as in the AWS policy grammar.
+func parseVersion(b json.RawMessage) (string, error) {
+	if len(b) == 0 {
+		return Version2008, nil
+	}
+	var v string
+	if bytes.Equal(bytes.TrimSpace(b), []byte("null")) || json.Unmarshal(b, &v) != nil ||
+		(v != Version && v != Version2008) {
+		return "", malformed("Version must be %q or %q", Version, Version2008)
+	}
+	return v, nil
+}
+
 // Parse validates and parses a policy document.
 func Parse(doc string) (*Document, error) {
 	if len(doc) > MaxSize {
@@ -153,8 +174,9 @@ func Parse(doc string) (*Document, error) {
 	if err := strictDecode([]byte(doc), &rd); err != nil {
 		return nil, err
 	}
-	if rd.Version != Version {
-		return nil, malformed("Version must be %q", Version)
+	version, err := parseVersion(rd.Version)
+	if err != nil {
+		return nil, err
 	}
 	var raws []rawStatement
 	st := bytes.TrimSpace(rd.Statement)
@@ -183,7 +205,7 @@ func Parse(doc string) (*Document, error) {
 	if len(raws) == 0 {
 		return nil, malformed("no Statement")
 	}
-	d := &Document{ID: rd.ID}
+	d := &Document{Version: version, ID: rd.ID}
 	sids := map[string]bool{}
 	for i, r := range raws {
 		s, err := statement(r)
