@@ -200,7 +200,7 @@ func (s *Server) CreateAccessKey(ctx context.Context, req *iamv1.CreateAccessKey
 		return nil, err
 	}
 	p := s.project(pid)
-	cred, err := p.keys.Create(ctx, user)
+	cred, err := p.createKey(ctx, user)
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
