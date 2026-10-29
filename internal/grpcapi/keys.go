@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"cloud.google.com/go/longrunning/autogen/longrunningpb"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	commonv1 "github.com/popododo0720/vws-proto/gen/go/vws/common/v1"
@@ -16,6 +17,27 @@ import (
 
 func keyName(project, user, id string) string {
 	return name(project, "users", user) + "/accessKeys/" + id
+}
+
+// checkExpectedUserPath enforces the optional precondition on an access key
+// write: the key's parent user resource name must be expected. A mismatch is
+// a concurrent change of the caller's user binding, so nothing is written.
+func checkExpectedUserPath(expected, project string, k iam.AccessKey) error {
+	if expected == "" {
+		return nil
+	}
+	pid, user, err := child(expected, "users")
+	if err != nil {
+		return err
+	}
+	if err := checkID(user, "user"); err != nil {
+		return err
+	}
+	if pid != project || store.Fold(user) != store.Fold(k.UserName) {
+		return fail(codes.Aborted, "GENERATION_CONFLICT", "ConcurrentModification",
+			"the access key's parent user does not match expected_user_path")
+	}
+	return nil
 }
 
 func keyState(st iam.KeyStatus) iamv1.AccessKeyState {
@@ -125,6 +147,9 @@ func (s *Server) UpdateAccessKey(ctx context.Context, req *iamv1.UpdateAccessKey
 		return nil, toStatus(ctx, err)
 	}
 	v, err := mutateOrValidate(ctx, p.b, id, req.GetAccessKey().GetEtag(), req.GetValidateOnly(), false, func(k *iam.AccessKey) { k.Generation++ }, func(k *iam.AccessKey) error {
+		if err := checkExpectedUserPath(req.GetExpectedUserPath(), pid, *k); err != nil {
+			return err
+		}
 		if set["spec.state"] {
 			switch req.GetAccessKey().GetSpec().GetState() {
 			case iamv1.AccessKeyState_ACCESS_KEY_STATE_ACTIVE:
@@ -170,7 +195,9 @@ func (s *Server) DeleteAccessKey(ctx context.Context, req *iamv1.DeleteAccessKey
 		if err := checkEtag(req.GetEtag(), k.Version); err != nil {
 			return nil, err
 		}
-		if err := p.keys.Delete(ctx, user, id); err != nil {
+		if err := p.keys.Delete(ctx, user, id, func(k iam.AccessKey) error {
+			return checkExpectedUserPath(req.GetExpectedUserPath(), pid, k)
+		}); err != nil {
 			return nil, toStatus(ctx, err)
 		}
 		resp = p.keyProto(k.Object, k.Version)

@@ -190,11 +190,17 @@ func (s *Service) SetStatus(ctx context.Context, user, id string, st iam.KeyStat
 	return err
 }
 
-// Delete removes a key of user.
-func (s *Service) Delete(ctx context.Context, user, id string) error {
+// Delete removes a key of user. check, when not nil, runs on the same read
+// that guards the delete, so a failed check deletes nothing.
+func (s *Service) Delete(ctx context.Context, user, id string, check func(iam.AccessKey) error) error {
 	k, err := s.owned(ctx, user, id)
 	if err != nil {
 		return err
+	}
+	if check != nil {
+		if err := check(k.Object); err != nil {
+			return err
+		}
 	}
 	if err := store.Delete[iam.AccessKey](ctx, s.b, id, k.Version); err != nil {
 		return err

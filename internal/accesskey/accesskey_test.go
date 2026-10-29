@@ -121,7 +121,7 @@ func TestInactiveKeyIsRejected(t *testing.T) {
 	if _, err := svc.GetSigningCredential(ctx, cred.AccessKeyID); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Delete(ctx, "bob", cred.AccessKeyID); err != nil {
+	if err := svc.Delete(ctx, "bob", cred.AccessKeyID, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.GetSigningCredential(ctx, cred.AccessKeyID); !errors.Is(err, store.ErrNotFound) {
@@ -149,11 +149,36 @@ func TestAtMostTwoKeysPerUserAndOwnership(t *testing.T) {
 	if _, err := svc.Create(ctx, "nobody"); !errors.Is(err, accesskey.ErrNoSuchUser) {
 		t.Fatalf("unknown user: %v", err)
 	}
-	if err := svc.Delete(ctx, "dave", ids[0]); !errors.Is(err, store.ErrNotFound) {
+	if err := svc.Delete(ctx, "dave", ids[0], nil); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("dave deleted carol's key: %v", err)
 	}
 	if err := svc.SetStatus(ctx, "dave", ids[0], iam.KeyInactive); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("dave disabled carol's key: %v", err)
+	}
+}
+
+func TestDeleteCheckFailureKeepsTheKey(t *testing.T) {
+	b := memstore.New()
+	withUser(t, b, "frank")
+	svc := accesskey.New(b, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t)}), nil)
+	ctx := context.Background()
+	cred, err := svc.Create(ctx, "frank")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := errors.New("parent user moved")
+	refuse := func(iam.AccessKey) error { return refused }
+	if err := svc.Delete(ctx, "frank", cred.AccessKeyID, refuse); !errors.Is(err, refused) {
+		t.Fatalf("check failure: %v", err)
+	}
+	if _, err := svc.Get(ctx, "frank", cred.AccessKeyID); err != nil {
+		t.Fatalf("check failure deleted the key: %v", err)
+	}
+	if err := svc.Delete(ctx, "frank", cred.AccessKeyID, func(iam.AccessKey) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Get(ctx, "frank", cred.AccessKeyID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("accepted check deleted no key: %v", err)
 	}
 }
 
@@ -232,7 +257,7 @@ func TestIndexAndRootKey(t *testing.T) {
 	if ks, err := svc.List(ctx, "alice"); err != nil || len(ks) != 1 {
 		t.Fatalf("root key listed under a user: %v %d", err, len(ks))
 	}
-	if err := svc.Delete(ctx, "alice", cred.AccessKeyID); err != nil {
+	if err := svc.Delete(ctx, "alice", cred.AccessKeyID, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := accesskey.ProjectOf(ctx, b, cred.AccessKeyID); !errors.Is(err, store.ErrNotFound) {

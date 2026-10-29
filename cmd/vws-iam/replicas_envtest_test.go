@@ -145,7 +145,7 @@ func TestReplicasShareDurableState(t *testing.T) {
 	if err != nil || len(keys) != 1 || keys[0].ID != cred.AccessKeyID {
 		t.Fatalf("restarted replica lost the access key: %v %d", err, len(keys))
 	}
-	if err := c.keySvc(project).Delete(ctx, "Alice", cred.AccessKeyID); err != nil {
+	if err := c.keySvc(project).Delete(ctx, "Alice", cred.AccessKeyID, nil); err != nil {
 		t.Fatalf("restarted replica delete key: %v", err)
 	}
 	if _, err := a.keySvc(project).GetSigningCredential(ctx, cred.AccessKeyID); err == nil {

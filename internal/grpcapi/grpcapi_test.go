@@ -285,6 +285,90 @@ func TestAccessKeysAndQuota(t *testing.T) {
 	wantErr(t, err, codes.NotFound, "RESOURCE_NOT_FOUND", "NoSuchEntity")
 }
 
+func TestAccessKeyExpectedUserPath(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	u := e.createUser(t, ctx, "alice")
+	other := e.createUser(t, ctx, "bob")
+	created, err := e.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: u.GetName()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := created.GetAccessKey().GetName()
+	update := func(state iamv1.AccessKeyState, expected string, validateOnly bool) (*longrunningpb.Operation, error) {
+		return e.keys.UpdateAccessKey(ctx, &iamv1.UpdateAccessKeyRequest{
+			AccessKey:        &iamv1.AccessKey{Name: name, Spec: &iamv1.AccessKeySpec{State: state}},
+			ExpectedUserPath: expected,
+			ValidateOnly:     validateOnly,
+		})
+	}
+	unchanged := func() {
+		t.Helper()
+		got, err := e.keys.GetAccessKey(ctx, &iamv1.GetAccessKeyRequest{Name: name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.GetSpec().GetState() != iamv1.AccessKeyState_ACCESS_KEY_STATE_ACTIVE || got.GetGeneration() != 1 {
+			t.Fatalf("key changed after a refused write: %v", got)
+		}
+	}
+
+	// The caller authorized on another user or project must not change the key.
+	for _, expected := range []string{other.GetName(), "projects/other/users/alice"} {
+		_, err := update(iamv1.AccessKeyState_ACCESS_KEY_STATE_INACTIVE, expected, false)
+		wantErr(t, err, codes.Aborted, "GENERATION_CONFLICT", "ConcurrentModification")
+		unchanged()
+	}
+	_, err = update(iamv1.AccessKeyState_ACCESS_KEY_STATE_INACTIVE, other.GetName(), true)
+	wantErr(t, err, codes.Aborted, "GENERATION_CONFLICT", "ConcurrentModification")
+	unchanged()
+	_, err = update(iamv1.AccessKeyState_ACCESS_KEY_STATE_INACTIVE, "alice", false)
+	wantErr(t, err, codes.InvalidArgument, "INVALID_RESOURCE_ID", "ValidationError")
+	unchanged()
+
+	// The key's own parent user path succeeds even with another case, because
+	// IAM names fold. Omitting the field keeps the old behavior.
+	op, err := update(iamv1.AccessKeyState_ACCESS_KEY_STATE_INACTIVE, parentName+"/users/ALICE", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := unpack(t, op, &iamv1.AccessKey{})
+	if k.GetSpec().GetState() != iamv1.AccessKeyState_ACCESS_KEY_STATE_INACTIVE || k.GetGeneration() != 2 {
+		t.Fatalf("matched update: %v", k)
+	}
+	if _, err := update(iamv1.AccessKeyState_ACCESS_KEY_STATE_ACTIVE, "", false); err != nil {
+		t.Fatalf("update without expected_user_path: %v", err)
+	}
+
+	// Delete applies the same precondition and deletes nothing on a mismatch.
+	_, err = e.keys.DeleteAccessKey(ctx, &iamv1.DeleteAccessKeyRequest{Name: name, ExpectedUserPath: other.GetName()})
+	wantErr(t, err, codes.Aborted, "GENERATION_CONFLICT", "ConcurrentModification")
+	if _, err := e.keys.GetAccessKey(ctx, &iamv1.GetAccessKeyRequest{Name: name}); err != nil {
+		t.Fatalf("mismatch deleted the key: %v", err)
+	}
+	del := &iamv1.DeleteAccessKeyRequest{Name: name, ExpectedUserPath: u.GetName()}
+	if _, err := e.keys.DeleteAccessKey(ctx, del); err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.keys.GetAccessKey(ctx, &iamv1.GetAccessKeyRequest{Name: name})
+	wantErr(t, err, codes.NotFound, "RESOURCE_NOT_FOUND", "NoSuchEntity")
+
+	// A second key is still deletable without the optional field, and a
+	// missing key with allow_missing stays idempotent.
+	second, err := e.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: u.GetName()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := &iamv1.DeleteAccessKeyRequest{Name: second.GetAccessKey().GetName()}
+	if _, err := e.keys.DeleteAccessKey(ctx, plain); err != nil {
+		t.Fatal(err)
+	}
+	missing := &iamv1.DeleteAccessKeyRequest{Name: name, ExpectedUserPath: other.GetName(), AllowMissing: true}
+	if _, err := e.keys.DeleteAccessKey(ctx, missing); err != nil {
+		t.Fatalf("allow_missing delete after the key is gone: %v", err)
+	}
+}
+
 func (e *env) sign(id, secretKey, token string) *iamv1.AuthenticateRequest {
 	date := e.now.Format("20060102")
 	amz := e.now.Format("20060102T150405Z")
