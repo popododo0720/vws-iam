@@ -90,23 +90,103 @@ func NewSecret() (string, error) {
 	return base64.StdEncoding.EncodeToString(b), nil
 }
 
-// Create makes an active key for user and returns its secret, once.
+// Create makes an active key for user and returns its secret, once. It
+// does not hold the AccessKeysPerUser count against concurrent creates;
+// CreateAccessKey uses CreatePending and Activate under a quota lock.
 func (s *Service) Create(ctx context.Context, user string) (Credential, error) {
-	u, err := store.Get[iam.User](ctx, s.b, user)
-	if errors.Is(err, store.ErrNotFound) {
-		return Credential{}, fmt.Errorf("%q: %w", user, ErrNoSuchUser)
-	}
+	name, err := s.checkLimit(ctx, user)
 	if err != nil {
 		return Credential{}, err
+	}
+	return s.Import(ctx, name, "", "", false)
+}
+
+// CreatePending is Create that stores the key as KeyPending, so it
+// authenticates nothing and is not counted until Activate commits it. It
+// returns the key's version for Activate.
+func (s *Service) CreatePending(ctx context.Context, user string) (Credential, string, error) {
+	name, err := s.checkLimit(ctx, user)
+	if err != nil {
+		return Credential{}, "", err
+	}
+	return s.put(ctx, name, "", "", false, iam.KeyPending)
+}
+
+// Activate makes the pending key id, still at version, active only while
+// pre holds (store.UpdateIf). If pre moved, the key stays pending and the
+// error is store.ErrConflict.
+func (s *Service) Activate(ctx context.Context, id, version string, pre store.Pre) error {
+	k, err := store.Get[iam.AccessKey](ctx, s.b, id)
+	if err != nil {
+		return err
+	}
+	if k.Version != version || k.Object.Status != iam.KeyPending {
+		return store.ErrConflict
+	}
+	k.Object.Status = iam.KeyActive
+	_, err = store.UpdateIf(ctx, s.b, k.Object, k.Version, pre)
+	return err
+}
+
+// SweepPending removes user's pending keys and their index entries while
+// pre holds. The caller holds the quota lock pre names: a pending key
+// that exists then was written under an older hold, so Activate can never
+// commit it. Pending keys are never counted, so the sweep is housekeeping:
+// only store.ErrConflict (pre moved) is returned; other failures leave the
+// key for the next sweep.
+func (s *Service) SweepPending(ctx context.Context, user string, pre store.Pre) error {
+	all, err := store.List[iam.AccessKey](ctx, s.b)
+	if err != nil {
+		return err
+	}
+	for _, k := range all {
+		if k.Object.Status != iam.KeyPending || k.Object.Root || store.Fold(k.Object.UserName) != store.Fold(user) {
+			continue
+		}
+		if err := s.DeletePending(ctx, k.Object.ID, k.Version, &pre); errors.Is(err, store.ErrConflict) {
+			return err
+		}
+	}
+	return nil
+}
+
+// DeletePending removes the pending key id at version and its index
+// entry; with pre, only while pre holds. A key already gone is not an
+// error.
+func (s *Service) DeletePending(ctx context.Context, id, version string, pre *store.Pre) error {
+	var err error
+	if pre != nil {
+		err = store.DeleteIf[iam.AccessKey](ctx, s.b, id, version, *pre)
+	} else {
+		err = store.Delete[iam.AccessKey](ctx, s.b, id, version)
+	}
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("remove pending key: %w", err)
+	}
+	if err := store.Delete[iam.KeyIndex](ctx, s.index, id, ""); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("remove pending key index: %w", err)
+	}
+	return nil
+}
+
+// checkLimit returns user's stored name if it has fewer than MaxPerUser
+// keys.
+func (s *Service) checkLimit(ctx context.Context, user string) (string, error) {
+	u, err := store.Get[iam.User](ctx, s.b, user)
+	if errors.Is(err, store.ErrNotFound) {
+		return "", fmt.Errorf("%q: %w", user, ErrNoSuchUser)
+	}
+	if err != nil {
+		return "", err
 	}
 	n, err := s.count(ctx, u.Object.Name)
 	if err != nil {
-		return Credential{}, err
+		return "", err
 	}
 	if n >= MaxPerUser {
-		return Credential{}, ErrLimitExceeded
+		return "", ErrLimitExceeded
 	}
-	return s.Import(ctx, u.Object.Name, "", "", false)
+	return u.Object.Name, nil
 }
 
 // Import stores a key with a given id and secret (bootstrap of the
@@ -114,32 +194,43 @@ func (s *Service) Create(ctx context.Context, user string) (Credential, error) {
 // key has no user. The index entry is written first, so a crash leaves at
 // worst an index entry without a key, which authenticates nothing.
 func (s *Service) Import(ctx context.Context, user, id, sec string, root bool) (Credential, error) {
+	cred, _, err := s.put(ctx, user, id, sec, root, iam.KeyActive)
+	return cred, err
+}
+
+func (s *Service) put(
+	ctx context.Context, user, id, sec string, root bool, st iam.KeyStatus,
+) (Credential, string, error) {
 	var err error
 	if id == "" {
 		if id, err = NewKeyID("AKIA"); err != nil {
-			return Credential{}, err
+			return Credential{}, "", err
 		}
 	}
 	if sec == "" {
 		if sec, err = NewSecret(); err != nil {
-			return Credential{}, err
+			return Credential{}, "", err
 		}
 	}
 	sealed, err := s.keys.Seal([]byte(sec), aad(id))
 	if err != nil {
-		return Credential{}, err
+		return Credential{}, "", err
 	}
-	k := iam.AccessKey{Meta: iam.Meta{UID: iam.NewUID(), Generation: 1}, ID: id, UserName: user, Root: root, Status: iam.KeyActive, Created: s.now().UTC(), Secret: sealed}
+	k := iam.AccessKey{
+		Meta: iam.Meta{UID: iam.NewUID(), Generation: 1}, ID: id, UserName: user, Root: root,
+		Status: st, Created: s.now().UTC(), Secret: sealed,
+	}
 	if err := k.Validate(); err != nil {
-		return Credential{}, err
+		return Credential{}, "", err
 	}
 	if _, err := store.Create(ctx, s.index, iam.KeyIndex{ID: id, Project: s.project}); err != nil {
-		return Credential{}, err
+		return Credential{}, "", err
 	}
-	if _, err := store.Create(ctx, s.b, k); err != nil {
-		return Credential{}, err
+	v, err := store.Create(ctx, s.b, k)
+	if err != nil {
+		return Credential{}, "", err
 	}
-	return Credential{AccessKeyID: id, Secret: sec, UserName: user}, nil
+	return Credential{AccessKeyID: id, Secret: sec, UserName: user}, v, nil
 }
 
 func (s *Service) count(ctx context.Context, user string) (int, error) {
@@ -147,7 +238,8 @@ func (s *Service) count(ctx context.Context, user string) (int, error) {
 	return len(ks), err
 }
 
-// List returns user's keys, sealed secrets stripped.
+// List returns user's keys, sealed secrets stripped. Pending keys are
+// left out.
 func (s *Service) List(ctx context.Context, user string) ([]iam.AccessKey, error) {
 	all, err := store.List[iam.AccessKey](ctx, s.b)
 	if err != nil {
@@ -155,7 +247,7 @@ func (s *Service) List(ctx context.Context, user string) ([]iam.AccessKey, error
 	}
 	var out []iam.AccessKey
 	for _, k := range all {
-		if !k.Object.Root && store.Fold(k.Object.UserName) == store.Fold(user) {
+		if !k.Object.Root && k.Object.Status != iam.KeyPending && store.Fold(k.Object.UserName) == store.Fold(user) {
 			k.Object.Secret = iam.Sealed{}
 			out = append(out, k.Object)
 		}
@@ -168,7 +260,7 @@ func (s *Service) owned(ctx context.Context, user, id string) (store.Versioned[i
 	if err != nil {
 		return k, err
 	}
-	if k.Object.Root || store.Fold(k.Object.UserName) != store.Fold(user) {
+	if k.Object.Root || k.Object.Status == iam.KeyPending || store.Fold(k.Object.UserName) != store.Fold(user) {
 		return k, store.ErrNotFound
 	}
 	return k, nil

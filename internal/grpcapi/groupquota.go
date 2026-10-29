@@ -77,7 +77,8 @@ const membershipLease = 10 * time.Second
 
 // lockMembership takes the project's membership lock and returns the
 // precondition that nobody took it since, and a release. A lock held by
-// another live writer is waited for, not taken.
+// another live writer is waited for, not taken. Access key creates take
+// the same lock for the AccessKeysPerUser count (createKey).
 func (p project) lockMembership(ctx context.Context) (store.Pre, func(), error) {
 	idb := make([]byte, 32)
 	if _, err := crand.Read(idb); err != nil {
