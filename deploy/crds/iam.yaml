@@ -283,3 +283,29 @@ spec:
               type: object
               x-kubernetes-preserve-unknown-fields: true
           required: [spec]
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: iamgroupmembershiplocks.iam.vws.popododo0720.io
+spec:
+  group: iam.vws.popododo0720.io
+  scope: Namespaced
+  names:
+    kind: IamGroupMembershipLock
+    listKind: IamGroupMembershipLockList
+    plural: iamgroupmembershiplocks
+    singular: iamgroupmembershiplock
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              description: One per project. Serializes group writes that add a member so the GroupsPerUser quota (10) is checked atomically with the write. Holds only a counter; written only by vws-iam.
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+          required: [spec]

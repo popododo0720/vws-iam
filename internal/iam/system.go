@@ -124,3 +124,35 @@ func (a AttemptCounter) Validate() error {
 	}
 	return nil
 }
+
+// MaxGroupsPerUser is the AWS GroupsPerUser quota: a user is a member of
+// at most this many groups (#136).
+const MaxGroupsPerUser = 10
+
+// MembershipLockKey is the key of a project's MembershipLock.
+const MembershipLockKey = "group-membership"
+
+// MembershipLock serializes the group writes of one project that add a
+// member, so the GroupsPerUser quota is checked atomically with the write.
+// A writer takes the lock (Holder, until Expires) by a compare-and-swap
+// that also bumps Epoch, counts the groups of each new member, and commits
+// the group only while the lock is still at the version it wrote. Safety
+// rests on that conditional commit alone: if the lease runs out and
+// another writer takes the lock, the commit fails. The lease only keeps
+// writers from invalidating each other; a crashed holder blocks adds until
+// Expires. It holds no user data.
+type MembershipLock struct {
+	Name    string    `json:"name"`
+	Epoch   uint64    `json:"epoch"`
+	Holder  string    `json:"holder,omitempty"`
+	Expires time.Time `json:"expires,omitzero"`
+}
+
+func (MembershipLock) Kind() Kind    { return KindMemberLock }
+func (l MembershipLock) Key() string { return l.Name }
+func (l MembershipLock) Validate() error {
+	if l.Name != MembershipLockKey || (l.Holder != "" && (!hashRE.MatchString(l.Holder) || l.Expires.IsZero())) {
+		return invalid("membership lock %q", l.Name)
+	}
+	return nil
+}
