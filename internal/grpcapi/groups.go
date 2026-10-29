@@ -125,7 +125,15 @@ func (s *Server) CreateGroup(ctx context.Context, req *iamv1.CreateGroupRequest)
 	if err := p.groupSpec(ctx, &g, req.GetGroup().GetSpec(), allPaths(groupPaths)); err != nil {
 		return nil, toStatus(ctx, err)
 	}
-	v, err := create(ctx, p.b, g, req.GetRequestId(), req.GetValidateOnly())
+	var v store.Versioned[iam.Group]
+	if req.GetValidateOnly() {
+		err = p.checkGroupsPerUser(ctx, g.Name, g.Members)
+		if err == nil {
+			v, err = create(ctx, p.b, g, req.GetRequestId(), true)
+		}
+	} else {
+		v, err = p.createGroup(ctx, g, req.GetRequestId())
+	}
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
@@ -148,7 +156,9 @@ func (s *Server) UpdateGroup(ctx context.Context, req *iamv1.UpdateGroupRequest)
 	if op, err := s.replay(ctx, pid, "UpdateGroup", req.GetRequestId(), req); op != nil || err != nil {
 		return op, toStatus(ctx, err)
 	}
+	var prev []string
 	apply := func(g *iam.Group) error {
+		prev = g.Members
 		if err := p.groupSpec(ctx, g, req.GetGroup().GetSpec(), set); err != nil {
 			return err
 		}
@@ -158,13 +168,25 @@ func (s *Server) UpdateGroup(ctx context.Context, req *iamv1.UpdateGroupRequest)
 		g.Updated = s.now().UTC()
 		return g.Validate()
 	}
-	v, err := mutateOrValidate(ctx, p.b, id, req.GetGroup().GetEtag(), req.GetValidateOnly(), req.GetAllowMissing(), bumpGroup, apply, func() (iam.Group, error) {
-		g := iam.Group{Meta: iam.Meta{UID: iam.NewUID()}, Name: id, ID: iam.NewUniqueID("AGPA"), Created: s.now().UTC()}
+	mk := func() (iam.Group, error) {
+		g := iam.Group{
+			Meta: iam.Meta{UID: iam.NewUID(), RequestID: req.GetRequestId()},
+			Name: id, ID: iam.NewUniqueID("AGPA"), Created: s.now().UTC(),
+		}
 		if err := checkID(id, "group"); err != nil {
 			return g, err
 		}
 		return g, apply(&g)
-	})
+	}
+	var v store.Versioned[iam.Group]
+	if req.GetValidateOnly() {
+		v, err = mutateOrValidate(ctx, p.b, id, req.GetGroup().GetEtag(), true, req.GetAllowMissing(), bumpGroup, apply, mk)
+		if err == nil {
+			err = p.checkGroupsPerUser(ctx, id, addedMembers(prev, v.Object.Members))
+		}
+	} else {
+		v, err = p.updateGroup(ctx, id, req.GetGroup().GetEtag(), req.GetRequestId(), req.GetAllowMissing(), apply, mk)
+	}
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
