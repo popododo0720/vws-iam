@@ -210,7 +210,9 @@ func (s *Server) UpdateAccessKey(ctx context.Context, req *iamv1.UpdateAccessKey
 	}
 	err = s.withUserARNLease(ctx, p.b, lease, pid, user, func(ctx context.Context) error {
 		var err error
-		v, err = mutateOrValidate(ctx, p.b, id, req.GetAccessKey().GetEtag(), req.GetValidateOnly(), false, func(k *iam.AccessKey) { k.Generation++ }, func(k *iam.AccessKey) error {
+		bump := func(k *iam.AccessKey) { k.Generation++ }
+		etag := req.GetAccessKey().GetEtag()
+		v, err = mutateOrValidate(ctx, p.b, id, etag, req.GetValidateOnly(), false, bump, func(k *iam.AccessKey) error {
 			if err := checkExpectedUserPath(req.GetExpectedUserPath(), pid, *k); err != nil {
 				return err
 			}

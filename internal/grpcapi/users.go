@@ -3,9 +3,9 @@ package grpcapi
 import (
 	"context"
 	"errors"
-	"google.golang.org/grpc/codes"
 	"unicode/utf8"
 
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	commonv1 "github.com/popododo0720/vws-proto/gen/go/vws/common/v1"
@@ -199,7 +199,8 @@ func (s *Server) UpdateUser(ctx context.Context, req *iamv1.UpdateUserRequest) (
 		return op, toStatus(ctx, err)
 	}
 	apply := func(u *iam.User) error {
-		if set["spec.path"] && defaultPath(req.GetUser().GetSpec().GetPath()) != defaultPath(u.Path) && u.LiveKeyWriteLeases(s.now()) {
+		moves := set["spec.path"] && defaultPath(req.GetUser().GetSpec().GetPath()) != defaultPath(u.Path)
+		if moves && u.LiveKeyWriteLeases(s.now()) {
 			return fail(codes.Aborted, "GENERATION_CONFLICT", "ConcurrentModification",
 				"an access key write that checked this user's ARN is in progress; retry the path change")
 		}

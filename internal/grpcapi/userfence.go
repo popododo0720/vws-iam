@@ -29,7 +29,9 @@ const keyWriteLeaseTTL = keyWriteTimeout + sigv4.MaxSkew
 // committed before the lease makes the lease's ARN check fail, and one
 // that would commit after it is refused, so the write never lands against
 // a replaced ARN. An empty expectedARN runs write without a lease.
-func (s *Server) withUserARNLease(ctx context.Context, b store.Backend, expectedARN, project, userName string, write func(context.Context) error) error {
+func (s *Server) withUserARNLease(
+	ctx context.Context, b store.Backend, expectedARN, project, userName string, write func(context.Context) error,
+) error {
 	if expectedARN == "" {
 		return write(ctx)
 	}
@@ -46,7 +48,8 @@ func (s *Server) withUserARNLease(ctx context.Context, b store.Backend, expected
 		if iam.UserARN(project, *u) != iam.UserARN(project, iam.User{Name: u.Name, Path: path}) {
 			return errUserARNMismatch()
 		}
-		u.KeyWriteLeases = append(liveLeases(u.KeyWriteLeases, s.now()), iam.KeyWriteLease{Token: token, Until: start.Add(keyWriteLeaseTTL).UTC()})
+		lease := iam.KeyWriteLease{Token: token, Until: start.Add(keyWriteLeaseTTL).UTC()}
+		u.KeyWriteLeases = append(liveLeases(u.KeyWriteLeases, s.now()), lease)
 		return nil
 	})
 	if errors.Is(err, store.ErrNotFound) {
@@ -62,7 +65,8 @@ func (s *Server) withUserARNLease(ctx context.Context, b store.Backend, expected
 	rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), keyWriteTimeout)
 	defer rcancel()
 	if _, rerr := store.Mutate(rctx, b, userName, func(u *iam.User) error {
-		u.KeyWriteLeases = slices.DeleteFunc(liveLeases(u.KeyWriteLeases, s.now()), func(l iam.KeyWriteLease) bool { return l.Token == token })
+		mine := func(l iam.KeyWriteLease) bool { return l.Token == token }
+		u.KeyWriteLeases = slices.DeleteFunc(liveLeases(u.KeyWriteLeases, s.now()), mine)
 		return nil
 	}); rerr != nil && !errors.Is(rerr, store.ErrNotFound) {
 		slog.Default().LogAttrs(ctx, slog.LevelWarn, "user ARN lease release failed", slog.String("error", rerr.Error()))

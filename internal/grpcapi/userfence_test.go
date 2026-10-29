@@ -102,10 +102,18 @@ func (f fenceEnv) move(ctx context.Context, path string) error {
 
 func (f fenceEnv) deactivate(ctx context.Context) error {
 	_, err := f.keys.UpdateAccessKey(ctx, &iamv1.UpdateAccessKeyRequest{
-		AccessKey:       &iamv1.AccessKey{Name: f.key, Spec: &iamv1.AccessKeySpec{State: iamv1.AccessKeyState_ACCESS_KEY_STATE_INACTIVE}},
+		AccessKey: &iamv1.AccessKey{
+			Name: f.key, Spec: &iamv1.AccessKeySpec{State: iamv1.AccessKeyState_ACCESS_KEY_STATE_INACTIVE},
+		},
 		UpdateMask:      &fieldmaskpb.FieldMask{Paths: []string{"spec.state"}},
 		ExpectedUserArn: f.user.GetStatus().GetArn(),
 	})
+	return err
+}
+
+func (f fenceEnv) del(ctx context.Context) error {
+	req := &iamv1.DeleteAccessKeyRequest{Name: f.key, ExpectedUserArn: f.user.GetStatus().GetArn()}
+	_, err := f.keys.DeleteAccessKey(ctx, req)
 	return err
 }
 
@@ -144,7 +152,7 @@ func TestAccessKeyARNMoveBeforeWrite(t *testing.T) {
 			if op == "update" {
 				err = f.deactivate(ctx)
 			} else {
-				_, err = f.keys.DeleteAccessKey(ctx, &iamv1.DeleteAccessKeyRequest{Name: f.key, ExpectedUserArn: f.user.GetStatus().GetArn()})
+				err = f.del(ctx)
 			}
 			if !moved {
 				t.Fatal("the move did not run inside the key write")
@@ -177,7 +185,7 @@ func TestAccessKeyARNMoveDuringWrite(t *testing.T) {
 			if op == "update" {
 				err = f.deactivate(ctx)
 			} else {
-				_, err = f.keys.DeleteAccessKey(ctx, &iamv1.DeleteAccessKeyRequest{Name: f.key, ExpectedUserArn: f.user.GetStatus().GetArn()})
+				err = f.del(ctx)
 			}
 			if err != nil {
 				t.Fatalf("key write: %v", err)
