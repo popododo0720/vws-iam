@@ -60,3 +60,14 @@ func (r retrying) Delete(ctx context.Context, kind iam.Kind, key, version string
 	_, err := do(ctx, r, func() (struct{}, error) { return struct{}{}, r.b.Delete(ctx, kind, key, version) })
 	return err
 }
+
+func (r retrying) UpdateIf(
+	ctx context.Context, kind iam.Kind, key string, spec []byte, version string, pre Pre,
+) (string, error) {
+	return do(ctx, r, func() (string, error) { return r.b.UpdateIf(ctx, kind, key, spec, version, pre) })
+}
+
+func (r retrying) DeleteIf(ctx context.Context, kind iam.Kind, key, version string, pre Pre) error {
+	_, err := do(ctx, r, func() (struct{}, error) { return struct{}{}, r.b.DeleteIf(ctx, kind, key, version, pre) })
+	return err
+}
