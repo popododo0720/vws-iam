@@ -192,11 +192,36 @@ func (s *Service) SetStatus(ctx context.Context, user, id string, st iam.KeyStat
 
 // Delete removes a key of user.
 func (s *Service) Delete(ctx context.Context, user, id string) error {
+	return s.DeleteChecked(ctx, user, id, nil)
+}
+
+// DeleteChecked removes a key of user like Delete. check, when not nil,
+// runs on the read of the key that guards the delete; an error from it
+// deletes nothing. A precondition it returns (ok) is committed with the
+// delete (store.DeleteIf), so the object check read cannot change in
+// between.
+func (s *Service) DeleteChecked(
+	ctx context.Context, user, id string, check func(iam.AccessKey) (pre store.Pre, ok bool, err error),
+) error {
 	k, err := s.owned(ctx, user, id)
 	if err != nil {
 		return err
 	}
-	if err := store.Delete[iam.AccessKey](ctx, s.b, id, k.Version); err != nil {
+	var (
+		pre store.Pre
+		ok  bool
+	)
+	if check != nil {
+		if pre, ok, err = check(k.Object); err != nil {
+			return err
+		}
+	}
+	if ok {
+		err = store.DeleteIf[iam.AccessKey](ctx, s.b, id, k.Version, pre)
+	} else {
+		err = store.Delete[iam.AccessKey](ctx, s.b, id, k.Version)
+	}
+	if err != nil {
 		return err
 	}
 	if err := store.Delete[iam.KeyIndex](ctx, s.index, id, ""); err != nil && !errors.Is(err, store.ErrNotFound) {

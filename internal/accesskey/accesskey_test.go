@@ -239,3 +239,61 @@ func TestIndexAndRootKey(t *testing.T) {
 		t.Fatalf("index survives delete: %v", err)
 	}
 }
+
+func TestDeleteCheckedKeepsTheKeyUnlessThePreconditionHolds(t *testing.T) {
+	b := memstore.New()
+	withUser(t, b, "frank")
+	svc := accesskey.New(b, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t)}), nil)
+	ctx := context.Background()
+	cred, err := svc.Create(ctx, "frank")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := func(what string) {
+		t.Helper()
+		if _, err := svc.Get(ctx, "frank", cred.AccessKeyID); err != nil {
+			t.Fatalf("%s deleted the key: %v", what, err)
+		}
+		if _, err := accesskey.ProjectOf(ctx, b, cred.AccessKeyID); err != nil {
+			t.Fatalf("%s deleted the key index: %v", what, err)
+		}
+	}
+
+	refused := errors.New("parent user moved")
+	refuse := func(iam.AccessKey) (store.Pre, bool, error) { return store.Pre{}, false, refused }
+	if err := svc.DeleteChecked(ctx, "frank", cred.AccessKeyID, refuse); !errors.Is(err, refused) {
+		t.Fatalf("refused check: %v", err)
+	}
+	kept("a refused check")
+
+	// The check reads the user; the user changes before the delete commits.
+	u, err := store.Get[iam.User](ctx, b, "frank")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := func(iam.AccessKey) (store.Pre, bool, error) {
+		_, err := store.Mutate(ctx, b, "frank", func(u *iam.User) error {
+			u.Path = "/moved/"
+			return nil
+		})
+		return store.PreOf(u), true, err
+	}
+	if err := svc.DeleteChecked(ctx, "frank", cred.AccessKeyID, stale); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("delete after the user moved: %v, want ErrConflict", err)
+	}
+	kept("a stale precondition")
+
+	current := func(iam.AccessKey) (store.Pre, bool, error) {
+		u, err := store.Get[iam.User](ctx, b, "frank")
+		return store.PreOf(u), true, err
+	}
+	if err := svc.DeleteChecked(ctx, "frank", cred.AccessKeyID, current); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Get(ctx, "frank", cred.AccessKeyID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("key after a delete under a holding precondition: %v", err)
+	}
+	if _, err := accesskey.ProjectOf(ctx, b, cred.AccessKeyID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("key index after the delete: %v", err)
+	}
+}
