@@ -84,7 +84,8 @@ func invalid(format string, a ...any) error {
 // ValidName reports whether s is an IAM name other than a managed policy name.
 func ValidName(s string) bool { return nameRE.MatchString(s) }
 
-// ValidPolicyName reports whether s is a managed policy name.
+// ValidPolicyName reports whether s is a managed or inline policy name: 1 to
+// 128 characters of [A-Za-z0-9+=,.@_-], the AWS PolicyName rule.
 func ValidPolicyName(s string) bool { return policyNameRE.MatchString(s) }
 
 func checkPath(what, path string) error {
@@ -124,7 +125,7 @@ func checkAttached(arns []string) error {
 
 func checkInline(m map[string]string) error {
 	for k := range m {
-		if !ValidName(k) {
+		if !ValidPolicyName(k) {
 			return invalid("inline policy name %q", k)
 		}
 	}
