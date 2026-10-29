@@ -369,6 +369,126 @@ func TestAccessKeyExpectedUserPath(t *testing.T) {
 	}
 }
 
+// TestAccessKeyExpectedUserARN closes the console TOCTOU of
+// vws-console-api#385: the caller authorized against the user's ARN at
+// /allowed/, then UpdateUser moved the user to /denied/. The AIP-122 name
+// in expected_user_path did not change, but the ARN did, so the write must
+// be refused and leave the key as it was.
+func TestAccessKeyExpectedUserARN(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	op, err := e.users.CreateUser(ctx, &iamv1.CreateUserRequest{
+		Parent: parentName, UserId: "carol", User: &iamv1.User{Spec: &iamv1.UserSpec{Path: "/allowed/"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := unpack(t, op, &iamv1.User{})
+	authorized := u.GetStatus().GetArn()
+	if want := "arn:vws:iam::" + proj + ":user/allowed/carol"; authorized != want {
+		t.Fatalf("user ARN %q, want %q", authorized, want)
+	}
+	created, err := e.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: u.GetName()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := created.GetAccessKey().GetName()
+
+	op, err = e.users.UpdateUser(ctx, &iamv1.UpdateUserRequest{
+		User:       &iamv1.User{Name: u.GetName(), Spec: &iamv1.UserSpec{Path: "/denied/"}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.path"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := unpack(t, op, &iamv1.User{}).GetStatus().GetArn()
+	if want := "arn:vws:iam::" + proj + ":user/denied/carol"; current != want {
+		t.Fatalf("moved user ARN %q, want %q", current, want)
+	}
+
+	inactive := &iamv1.AccessKeySpec{State: iamv1.AccessKeyState_ACCESS_KEY_STATE_INACTIVE}
+	update := func(expectedARN, expectedPath string, validateOnly bool) (*longrunningpb.Operation, error) {
+		return e.keys.UpdateAccessKey(ctx, &iamv1.UpdateAccessKeyRequest{
+			AccessKey:        &iamv1.AccessKey{Name: name, Spec: inactive},
+			UpdateMask:       &fieldmaskpb.FieldMask{Paths: []string{"spec.state"}},
+			ExpectedUserArn:  expectedARN,
+			ExpectedUserPath: expectedPath,
+			ValidateOnly:     validateOnly,
+		})
+	}
+	unchanged := func() {
+		t.Helper()
+		got, err := e.keys.GetAccessKey(ctx, &iamv1.GetAccessKeyRequest{Name: name})
+		if err != nil {
+			t.Fatalf("key gone after a refused write: %v", err)
+		}
+		if got.GetSpec().GetState() != iamv1.AccessKeyState_ACCESS_KEY_STATE_ACTIVE || got.GetGeneration() != 1 {
+			t.Fatalf("key changed after a refused write: %v", got)
+		}
+	}
+
+	// The stale ARN is refused even when expected_user_path still matches,
+	// which is the bypass the name-only check left open.
+	_, err = update(authorized, u.GetName(), false)
+	wantErr(t, err, codes.Aborted, "GENERATION_CONFLICT", "ConcurrentModification")
+	unchanged()
+	_, err = update(authorized, "", true)
+	wantErr(t, err, codes.Aborted, "GENERATION_CONFLICT", "ConcurrentModification")
+	unchanged()
+	_, err = e.keys.DeleteAccessKey(ctx, &iamv1.DeleteAccessKeyRequest{Name: name, ExpectedUserArn: authorized})
+	wantErr(t, err, codes.Aborted, "GENERATION_CONFLICT", "ConcurrentModification")
+	unchanged()
+
+	// Another user or project at the current path does not match either.
+	for _, expected := range []string{
+		"arn:vws:iam::" + proj + ":user/denied/bob",
+		"arn:vws:iam::other:user/denied/carol",
+	} {
+		_, err = update(expected, "", false)
+		wantErr(t, err, codes.Aborted, "GENERATION_CONFLICT", "ConcurrentModification")
+		_, err = e.keys.DeleteAccessKey(ctx, &iamv1.DeleteAccessKeyRequest{Name: name, ExpectedUserArn: expected})
+		wantErr(t, err, codes.Aborted, "GENERATION_CONFLICT", "ConcurrentModification")
+		unchanged()
+	}
+
+	// A malformed ARN is rejected before any read, also on a missing key.
+	missingKey := u.GetName() + "/accessKeys/AKIAMISSINGMISSING22"
+	for _, bad := range []string{
+		"carol", u.GetName(),
+		"arn:vws:iam::" + proj + ":role/denied/carol",
+		"arn:vws:iam::" + proj + ":user/denied/",
+	} {
+		_, err = update(bad, "", false)
+		wantErr(t, err, codes.InvalidArgument, "INVALID_RESOURCE_ID", "ValidationError")
+		_, err = e.keys.DeleteAccessKey(ctx, &iamv1.DeleteAccessKeyRequest{Name: name, ExpectedUserArn: bad})
+		wantErr(t, err, codes.InvalidArgument, "INVALID_RESOURCE_ID", "ValidationError")
+		missing := &iamv1.DeleteAccessKeyRequest{Name: missingKey, ExpectedUserArn: bad, AllowMissing: true}
+		_, err = e.keys.DeleteAccessKey(ctx, missing)
+		wantErr(t, err, codes.InvalidArgument, "INVALID_RESOURCE_ID", "ValidationError")
+		unchanged()
+	}
+	missing := &iamv1.DeleteAccessKeyRequest{Name: missingKey, ExpectedUserArn: current, AllowMissing: true}
+	if _, err := e.keys.DeleteAccessKey(ctx, missing); err != nil {
+		t.Fatalf("allow_missing delete with a well-formed ARN: %v", err)
+	}
+
+	// The current ARN, with a case-folded user name, succeeds.
+	op, err = update("arn:vws:iam::"+proj+":user/denied/CAROL", u.GetName(), false)
+	if err != nil {
+		t.Fatalf("update with the current ARN: %v", err)
+	}
+	k := unpack(t, op, &iamv1.AccessKey{})
+	if k.GetSpec().GetState() != iamv1.AccessKeyState_ACCESS_KEY_STATE_INACTIVE || k.GetGeneration() != 2 {
+		t.Fatalf("matched update: %v", k)
+	}
+	del := &iamv1.DeleteAccessKeyRequest{Name: name, ExpectedUserArn: current}
+	if _, err := e.keys.DeleteAccessKey(ctx, del); err != nil {
+		t.Fatalf("delete with the current ARN: %v", err)
+	}
+	_, err = e.keys.GetAccessKey(ctx, &iamv1.GetAccessKeyRequest{Name: name})
+	wantErr(t, err, codes.NotFound, "RESOURCE_NOT_FOUND", "NoSuchEntity")
+}
+
 func (e *env) sign(id, secretKey, token string) *iamv1.AuthenticateRequest {
 	date := e.now.Format("20060102")
 	amz := e.now.Format("20060102T150405Z")

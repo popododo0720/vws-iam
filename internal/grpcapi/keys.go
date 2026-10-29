@@ -40,6 +40,58 @@ func checkExpectedUserPath(expected, project string, k iam.AccessKey) error {
 	return nil
 }
 
+// errUserARNMismatch is the expected_user_arn mismatch: the parent user's
+// ARN changed, for example by an UpdateUser path move, after the caller
+// authorized against it.
+func errUserARNMismatch() error {
+	return fail(codes.Aborted, "GENERATION_CONFLICT", "ConcurrentModification",
+		"the access key's parent user ARN does not match expected_user_arn")
+}
+
+// parseExpectedUserARN validates the optional expected_user_arn. An empty
+// value means no check.
+func parseExpectedUserARN(expected string) (account, path, user string, err error) {
+	if expected == "" {
+		return "", "", "", nil
+	}
+	account, path, user, ok := iam.SplitUserARN(expected)
+	if !ok {
+		msg := "expected_user_arn " + quote(expected) + " is not arn:vws:iam::{project}:user{path}{user}"
+		return "", "", "", invalidID(msg)
+	}
+	return account, path, user, nil
+}
+
+// checkExpectedUserARN enforces the optional expected_user_arn precondition
+// on an access key write. It reads the key's parent user and compares its
+// current ARN, which contains the IAM path, so a user that UpdateUser moved
+// to another path no longer matches. Callers run it after the key read and
+// before the compare-and-swap write guarded by that read, so a retry after a
+// key conflict reads the user again and a refused check writes nothing.
+func checkExpectedUserARN(ctx context.Context, b store.Backend, expected, project string, k iam.AccessKey) error {
+	if expected == "" {
+		return nil
+	}
+	account, path, user, err := parseExpectedUserARN(expected)
+	if err != nil {
+		return err
+	}
+	if account != project || store.Fold(user) != store.Fold(k.UserName) {
+		return errUserARNMismatch()
+	}
+	u, err := store.Get[iam.User](ctx, b, k.UserName)
+	if errors.Is(err, store.ErrNotFound) {
+		return errUserARNMismatch()
+	}
+	if err != nil {
+		return err
+	}
+	if iam.UserARN(project, u.Object) != iam.UserARN(project, iam.User{Name: u.Object.Name, Path: path}) {
+		return errUserARNMismatch()
+	}
+	return nil
+}
+
 func keyState(st iam.KeyStatus) iamv1.AccessKeyState {
 	if st == iam.KeyActive {
 		return iamv1.AccessKeyState_ACCESS_KEY_STATE_ACTIVE
@@ -139,6 +191,9 @@ func (s *Server) UpdateAccessKey(ctx context.Context, req *iamv1.UpdateAccessKey
 	if req.GetAllowMissing() {
 		return nil, invalidSpec("allow_missing is not supported for access keys; use CreateAccessKey")
 	}
+	if _, _, _, err := parseExpectedUserARN(req.GetExpectedUserArn()); err != nil {
+		return nil, err
+	}
 	p := s.project(pid)
 	if op, err := s.replay(ctx, pid, "UpdateAccessKey", req.GetRequestId(), req); op != nil || err != nil {
 		return op, toStatus(ctx, err)
@@ -148,6 +203,9 @@ func (s *Server) UpdateAccessKey(ctx context.Context, req *iamv1.UpdateAccessKey
 	}
 	v, err := mutateOrValidate(ctx, p.b, id, req.GetAccessKey().GetEtag(), req.GetValidateOnly(), false, func(k *iam.AccessKey) { k.Generation++ }, func(k *iam.AccessKey) error {
 		if err := checkExpectedUserPath(req.GetExpectedUserPath(), pid, *k); err != nil {
+			return err
+		}
+		if err := checkExpectedUserARN(ctx, p.b, req.GetExpectedUserArn(), pid, *k); err != nil {
 			return err
 		}
 		if set["spec.state"] {
@@ -180,6 +238,9 @@ func (s *Server) DeleteAccessKey(ctx context.Context, req *iamv1.DeleteAccessKey
 	if err != nil {
 		return nil, err
 	}
+	if _, _, _, err := parseExpectedUserARN(req.GetExpectedUserArn()); err != nil {
+		return nil, err
+	}
 	p := s.project(pid)
 	if op, err := s.replay(ctx, pid, "DeleteAccessKey", req.GetRequestId(), req); op != nil || err != nil {
 		return op, toStatus(ctx, err)
@@ -196,7 +257,10 @@ func (s *Server) DeleteAccessKey(ctx context.Context, req *iamv1.DeleteAccessKey
 			return nil, err
 		}
 		if err := p.keys.Delete(ctx, user, id, func(k iam.AccessKey) error {
-			return checkExpectedUserPath(req.GetExpectedUserPath(), pid, k)
+			if err := checkExpectedUserPath(req.GetExpectedUserPath(), pid, k); err != nil {
+				return err
+			}
+			return checkExpectedUserARN(ctx, p.b, req.GetExpectedUserArn(), pid, k)
 		}); err != nil {
 			return nil, toStatus(ctx, err)
 		}
