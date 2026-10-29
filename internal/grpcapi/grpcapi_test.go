@@ -955,10 +955,20 @@ func TestMfaDeviceLockoutStatus(t *testing.T) {
 	}
 }
 
-// inlineFixture creates user alice, group devs and role deployer and returns
-// a func that sets the inline policies of one of them ("user", "group" or
-// "role") and reads them back.
-func inlineFixture(t *testing.T) func(kind string, inline map[string]string) (map[string]string, error) {
+// inlineEnv drives the inline policies of the user alice, the group devs
+// (alice is a member) and the role deployer.
+type inlineEnv struct {
+	// put replaces the inline policies of kind and returns what is stored.
+	put func(kind string, inline map[string]string) (map[string]string, error)
+	// get returns the stored inline policies of kind without writing.
+	get func(kind string) (map[string]string, error)
+	// allowAlice reports whether Authorize allows alice action on "*".
+	allowAlice func(action string) (bool, error)
+}
+
+// inlineFixture creates user alice, group devs and role deployer. Kinds are
+// "user", "group" and "role".
+func inlineFixture(t *testing.T) inlineEnv {
 	t.Helper()
 	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow",` +
 		`"Principal":{"AWS":"arn:vws:iam::acme:user/alice"},"Action":"sts:AssumeRole"}]}`
@@ -966,7 +976,7 @@ func inlineFixture(t *testing.T) func(kind string, inline map[string]string) (ma
 	ctx := t.Context()
 	u := e.createUser(t, ctx, "alice")
 	op, err := e.groups.CreateGroup(ctx, &iamv1.CreateGroupRequest{
-		Parent: parentName, GroupId: "devs", Group: &iamv1.Group{Spec: &iamv1.GroupSpec{}},
+		Parent: parentName, GroupId: "devs", Group: &iamv1.Group{Spec: &iamv1.GroupSpec{Members: []string{u.GetName()}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -980,7 +990,20 @@ func inlineFixture(t *testing.T) func(kind string, inline map[string]string) (ma
 	}
 	r := unpack(t, op, &iamv1.Role{})
 	mask := &fieldmaskpb.FieldMask{Paths: []string{"spec.inline_policies"}}
-	return func(kind string, inline map[string]string) (map[string]string, error) {
+	get := func(kind string) (map[string]string, error) {
+		switch kind {
+		case "user":
+			got, err := e.users.GetUser(ctx, &iamv1.GetUserRequest{Name: u.GetName()})
+			return got.GetSpec().GetInlinePolicies(), err
+		case "group":
+			got, err := e.groups.GetGroup(ctx, &iamv1.GetGroupRequest{Name: g.GetName()})
+			return got.GetSpec().GetInlinePolicies(), err
+		default:
+			got, err := e.roles.GetRole(ctx, &iamv1.GetRoleRequest{Name: r.GetName()})
+			return got.GetSpec().GetInlinePolicies(), err
+		}
+	}
+	put := func(kind string, inline map[string]string) (map[string]string, error) {
 		switch kind {
 		case "user":
 			if _, err := e.users.UpdateUser(ctx, &iamv1.UpdateUserRequest{
@@ -989,8 +1012,7 @@ func inlineFixture(t *testing.T) func(kind string, inline map[string]string) (ma
 			}); err != nil {
 				return nil, err
 			}
-			got, err := e.users.GetUser(ctx, &iamv1.GetUserRequest{Name: u.GetName()})
-			return got.GetSpec().GetInlinePolicies(), err
+			return get(kind)
 		case "group":
 			if _, err := e.groups.UpdateGroup(ctx, &iamv1.UpdateGroupRequest{
 				Group:      &iamv1.Group{Name: g.GetName(), Spec: &iamv1.GroupSpec{InlinePolicies: inline}},
@@ -998,8 +1020,7 @@ func inlineFixture(t *testing.T) func(kind string, inline map[string]string) (ma
 			}); err != nil {
 				return nil, err
 			}
-			got, err := e.groups.GetGroup(ctx, &iamv1.GetGroupRequest{Name: g.GetName()})
-			return got.GetSpec().GetInlinePolicies(), err
+			return get(kind)
 		default:
 			if _, err := e.roles.UpdateRole(ctx, &iamv1.UpdateRoleRequest{
 				Role:       &iamv1.Role{Name: r.GetName(), Spec: &iamv1.RoleSpec{InlinePolicies: inline}},
@@ -1007,10 +1028,15 @@ func inlineFixture(t *testing.T) func(kind string, inline map[string]string) (ma
 			}); err != nil {
 				return nil, err
 			}
-			got, err := e.roles.GetRole(ctx, &iamv1.GetRoleRequest{Name: r.GetName()})
-			return got.GetSpec().GetInlinePolicies(), err
+			return get(kind)
 		}
 	}
+	caller := &iamv1.Principal{Type: iamv1.PrincipalType_PRINCIPAL_TYPE_USER, Arn: u.GetStatus().GetArn(), Project: proj, UniqueId: u.GetStatus().GetUniqueId(), Resource: u.GetName()}
+	allowAlice := func(action string) (bool, error) {
+		resp, err := e.auth.Authorize(ctx, &iamv1.AuthorizeRequest{Principal: caller, Action: action})
+		return resp.GetDecision() == iamv1.Decision_DECISION_ALLOW, err
+	}
+	return inlineEnv{put: put, get: get, allowAlice: allowAlice}
 }
 
 // sizedDoc returns a valid identity policy of exactly n characters, none of
@@ -1033,7 +1059,10 @@ func sizedDoc(t *testing.T, n int) string {
 // characters for a user, 5,120 for a group and 10,240 for a role. Over the
 // limit is LimitExceeded with the AWS message, and nothing is stored.
 func TestInlinePolicyAggregateSize(t *testing.T) {
-	put := inlineFixture(t)
+	f := inlineFixture(t)
+	if ok, err := f.allowAlice("s3:GetObject"); err != nil || ok {
+		t.Fatalf("alice allowed before any inline policy: allowed=%v err=%v", ok, err)
+	}
 	for _, c := range []struct {
 		kind, name string
 		limit      int
@@ -1043,22 +1072,33 @@ func TestInlinePolicyAggregateSize(t *testing.T) {
 		a, b := sizedDoc(t, c.limit/2), sizedDoc(t, c.limit-c.limit/2)
 		b = strings.Replace(b, "{", "{"+strings.Repeat(" \n\t", 2100), 1)
 		at := map[string]string{"a": a, "b": b}
-		got, err := put(c.kind, at)
+		got, err := f.put(c.kind, at)
 		if err != nil {
 			t.Fatalf("%s: inline policies at the limit: %v", c.kind, err)
 		}
 		if len(got) != 2 || got["a"] != a || got["b"] != b {
 			t.Fatalf("%s: stored inline policies differ", c.kind)
 		}
+		// A stored document over policy.MaxSize still authorizes: alice gets
+		// s3:* from her own or her group's inline policies.
+		if c.kind != "role" {
+			if ok, err := f.allowAlice("s3:GetObject"); err != nil || !ok {
+				t.Fatalf("%s: authorize with inline policies over MaxSize: allowed=%v err=%v", c.kind, ok, err)
+			}
+		}
 		// One character over: LimitExceeded, the stored policies unchanged.
-		_, err = put(c.kind, map[string]string{"a": a, "b": sizedDoc(t, c.limit-c.limit/2+1)})
+		_, err = f.put(c.kind, map[string]string{"a": a, "b": sizedDoc(t, c.limit-c.limit/2+1)})
 		wantErr(t, err, codes.ResourceExhausted, "QUOTA_EXCEEDED", "LimitExceeded")
 		want := fmt.Sprintf("Maximum policy size of %d bytes exceeded for %s %s.", c.limit, c.kind, c.name)
 		if got := status.Convert(err).Message(); got != want {
 			t.Errorf("%s: message %q, want %q", c.kind, got, want)
 		}
-		if got, err := put(c.kind, at); err != nil || len(got) != 2 || got["b"] != b {
+		if got, err := f.get(c.kind); err != nil || len(got) != 2 || got["b"] != b {
 			t.Fatalf("%s: inline policies after the refused write: %v", c.kind, err)
+		}
+		// Clear them so the next kind starts from alice with no grant.
+		if _, err := f.put(c.kind, nil); err != nil {
+			t.Fatalf("%s: clear inline policies: %v", c.kind, err)
 		}
 	}
 }
@@ -1069,7 +1109,7 @@ func TestInlinePolicyAggregateSize(t *testing.T) {
 // anything else with INVALID_ARGUMENT.
 func TestInlinePolicyNameLength(t *testing.T) {
 	doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*"}]}`
-	put := inlineFixture(t)
+	put := inlineFixture(t).put
 	for _, kind := range []string{"user", "group", "role"} {
 		name := strings.Repeat("P", 128)
 		got, err := put(kind, map[string]string{name: doc})

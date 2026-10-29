@@ -3,6 +3,7 @@ package authz_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -89,5 +90,33 @@ func TestAuthorizeFailsClosed(t *testing.T) {
 	put(t, b, iam.User{Name: "trent", ID: "10", AttachedPolicies: []string{"arn:vws:iam::999999999999:policy/S3Read"}})
 	if _, err := a.Authorize(ctx, authz.Principal{Kind: authz.User, Name: "trent"}, "s3:GetObject", "*", nil); !errors.Is(err, authz.ErrNoSuchEntity) {
 		t.Fatalf("foreign-account policy: %v", err)
+	}
+}
+
+// TestAuthorizeInlineOverMaxSize checks that a stored inline policy over
+// policy.MaxSize, which the write path accepts under the aggregate quota,
+// still authorizes for a user, a group member and a role.
+func TestAuthorizeInlineOverMaxSize(t *testing.T) {
+	b := setup(t)
+	a := authz.New(b, acct, nil)
+	ctx := context.Background()
+	big := strings.Replace(`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"sqs:*","Resource":"*"}}`,
+		"{", "{"+strings.Repeat(" \n\t", policy.MaxSize/3+1), 1)
+	if len(big) <= policy.MaxSize {
+		t.Fatalf("document is %d bytes, want over %d", len(big), policy.MaxSize)
+	}
+	inline := map[string]string{"big": big}
+	put(t, b, iam.User{Name: "uma", ID: "20", InlinePolicies: inline})
+	put(t, b, iam.User{Name: "gus", ID: "21"})
+	put(t, b, iam.Group{Name: "queues", ID: "22", Members: []string{"gus"}, InlinePolicies: inline})
+	put(t, b, iam.Role{Name: "worker", ID: "23", AssumeRolePolicy: `{}`, InlinePolicies: inline})
+	for _, p := range []authz.Principal{
+		{Kind: authz.User, Name: "uma"},
+		{Kind: authz.User, Name: "gus"},
+		{Kind: authz.Role, Name: "worker", ARN: "arn:vws:sts::" + acct + ":assumed-role/worker/s1"},
+	} {
+		if d, err := a.Authorize(ctx, p, "sqs:SendMessage", "*", nil); err != nil || !d.Allowed {
+			t.Errorf("%s: %+v %v", p.Name, d, err)
+		}
 	}
 }
