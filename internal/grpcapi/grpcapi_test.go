@@ -954,6 +954,82 @@ func TestMfaDeviceLockoutStatus(t *testing.T) {
 	}
 }
 
+// TestInlinePolicyNameLength checks that UpdateUser, UpdateGroup and
+// UpdateRole take an inline policy name of 1 to 128 characters of
+// [A-Za-z0-9+=,.@_-], as AWS Put{User,Group,Role}Policy do, and refuse
+// anything else with INVALID_ARGUMENT.
+func TestInlinePolicyNameLength(t *testing.T) {
+	doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*"}]}`
+	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow",` +
+		`"Principal":{"AWS":"arn:vws:iam::acme:user/alice"},"Action":"sts:AssumeRole"}]}`
+	e := newEnv(t)
+	ctx := t.Context()
+	u := e.createUser(t, ctx, "alice")
+	op, err := e.groups.CreateGroup(ctx, &iamv1.CreateGroupRequest{
+		Parent: parentName, GroupId: "devs", Group: &iamv1.Group{Spec: &iamv1.GroupSpec{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := unpack(t, op, &iamv1.Group{})
+	op, err = e.roles.CreateRole(ctx, &iamv1.CreateRoleRequest{
+		Parent: parentName, RoleId: "deployer", Role: &iamv1.Role{Spec: &iamv1.RoleSpec{AssumeRolePolicy: trust}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := unpack(t, op, &iamv1.Role{})
+	mask := &fieldmaskpb.FieldMask{Paths: []string{"spec.inline_policies"}}
+	put := func(kind string, inline map[string]string) (map[string]string, error) {
+		switch kind {
+		case "user":
+			if _, err := e.users.UpdateUser(ctx, &iamv1.UpdateUserRequest{
+				User:       &iamv1.User{Name: u.GetName(), Spec: &iamv1.UserSpec{InlinePolicies: inline}},
+				UpdateMask: mask,
+			}); err != nil {
+				return nil, err
+			}
+			got, err := e.users.GetUser(ctx, &iamv1.GetUserRequest{Name: u.GetName()})
+			return got.GetSpec().GetInlinePolicies(), err
+		case "group":
+			if _, err := e.groups.UpdateGroup(ctx, &iamv1.UpdateGroupRequest{
+				Group:      &iamv1.Group{Name: g.GetName(), Spec: &iamv1.GroupSpec{InlinePolicies: inline}},
+				UpdateMask: mask,
+			}); err != nil {
+				return nil, err
+			}
+			got, err := e.groups.GetGroup(ctx, &iamv1.GetGroupRequest{Name: g.GetName()})
+			return got.GetSpec().GetInlinePolicies(), err
+		default:
+			if _, err := e.roles.UpdateRole(ctx, &iamv1.UpdateRoleRequest{
+				Role:       &iamv1.Role{Name: r.GetName(), Spec: &iamv1.RoleSpec{InlinePolicies: inline}},
+				UpdateMask: mask,
+			}); err != nil {
+				return nil, err
+			}
+			got, err := e.roles.GetRole(ctx, &iamv1.GetRoleRequest{Name: r.GetName()})
+			return got.GetSpec().GetInlinePolicies(), err
+		}
+	}
+	for _, kind := range []string{"user", "group", "role"} {
+		name := strings.Repeat("P", 128)
+		got, err := put(kind, map[string]string{name: doc})
+		if err != nil {
+			t.Fatalf("%s: 128-character inline policy: %v", kind, err)
+		}
+		if len(got) != 1 || got[name] != doc {
+			t.Fatalf("%s: stored inline policies %v", kind, got)
+		}
+		for _, bad := range []string{strings.Repeat("P", 129), "", "bad name", "a/b"} {
+			_, err := put(kind, map[string]string{bad: doc})
+			wantErr(t, err, codes.InvalidArgument, "INVALID_SPEC", "ValidationError")
+			if got, want := status.Convert(err).Message(), `inline policy name "`+bad+`"`; got != want {
+				t.Errorf("%s: message %q, want %q", kind, got, want)
+			}
+		}
+	}
+}
+
 func TestCreatePolicyNameLength(t *testing.T) {
 	doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*"}]}`
 	t.Run("128", func(t *testing.T) {
@@ -1026,7 +1102,7 @@ func TestCreatePolicyNameLength(t *testing.T) {
 		if got, want := status.Convert(err).Message(), `user id "`+userID+`" must match [A-Za-z0-9+=,.@_-]{1,64}`; got != want {
 			t.Errorf("message %q, want %q", got, want)
 		}
-		inline := strings.Repeat("p", 65)
+		inline := strings.Repeat("p", 129)
 		_, err = e.users.UpdateUser(ctx, &iamv1.UpdateUserRequest{
 			User:       &iamv1.User{Name: u.GetName(), Spec: &iamv1.UserSpec{InlinePolicies: map[string]string{inline: doc}}},
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.inline_policies"}},

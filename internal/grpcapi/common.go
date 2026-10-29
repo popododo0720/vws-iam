@@ -134,7 +134,7 @@ func (p project) policyNames(arns []string) []string {
 
 func checkInline(m map[string]string) error {
 	for k, doc := range m {
-		if !iam.ValidName(k) {
+		if !iam.ValidPolicyName(k) {
 			return invalidSpec("inline policy name " + quote(k))
 		}
 		if _, err := policy.ParseIdentity(doc); err != nil {
