@@ -15,21 +15,25 @@ type Kind string
 
 // The stored kinds. Each is one CRD in the vws-iam namespace.
 const (
-	KindUser      Kind = "IamUser"
-	KindGroup     Kind = "IamGroup"
-	KindRole      Kind = "IamRole"
-	KindPolicy    Kind = "IamPolicy"
-	KindAccessKey Kind = "IamAccessKey"
-	KindMfaDevice Kind = "IamMfaDevice"
-	KindKeyIndex  Kind = "IamAccessKeyIndex"
-	KindSession   Kind = "IamSession"
-	KindOperation Kind = "IamOperation"
-	KindReplay    Kind = "IamReplayEntry"
-	KindAttempt   Kind = "IamAttemptCounter"
+	KindUser       Kind = "IamUser"
+	KindGroup      Kind = "IamGroup"
+	KindRole       Kind = "IamRole"
+	KindPolicy     Kind = "IamPolicy"
+	KindAccessKey  Kind = "IamAccessKey"
+	KindMfaDevice  Kind = "IamMfaDevice"
+	KindKeyIndex   Kind = "IamAccessKeyIndex"
+	KindSession    Kind = "IamSession"
+	KindOperation  Kind = "IamOperation"
+	KindReplay     Kind = "IamReplayEntry"
+	KindAttempt    Kind = "IamAttemptCounter"
+	KindMemberLock Kind = "IamGroupMembershipLock"
 )
 
 // Kinds lists every stored kind.
-var Kinds = []Kind{KindUser, KindGroup, KindRole, KindPolicy, KindAccessKey, KindMfaDevice, KindKeyIndex, KindSession, KindOperation, KindReplay, KindAttempt}
+var Kinds = []Kind{
+	KindUser, KindGroup, KindRole, KindPolicy, KindAccessKey, KindMfaDevice,
+	KindKeyIndex, KindSession, KindOperation, KindReplay, KindAttempt, KindMemberLock,
+}
 
 // Meta is the resource envelope every API resource carries.
 type Meta struct {
