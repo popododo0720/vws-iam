@@ -83,7 +83,7 @@ type rawStatement struct {
 }
 
 type rawDoc struct {
-	Version   *string         `json:"Version"`
+	Version   json.RawMessage `json:"Version"`
 	ID        string          `json:"Id"`
 	Statement json.RawMessage `json:"Statement"`
 }
@@ -150,6 +150,21 @@ func scalar(b json.RawMessage) (string, error) {
 	return "", malformed("value %s is not a string", b)
 }
 
+// parseVersion returns the effective Version. An omitted Version is
+// Version2008; a present Version, including null, must be one of the two
+// supported strings, as in the AWS policy grammar.
+func parseVersion(b json.RawMessage) (string, error) {
+	if len(b) == 0 {
+		return Version2008, nil
+	}
+	var v string
+	if bytes.Equal(bytes.TrimSpace(b), []byte("null")) || json.Unmarshal(b, &v) != nil ||
+		(v != Version && v != Version2008) {
+		return "", malformed("Version must be %q or %q", Version, Version2008)
+	}
+	return v, nil
+}
+
 // Parse validates and parses a policy document.
 func Parse(doc string) (*Document, error) {
 	if len(doc) > MaxSize {
@@ -159,12 +174,9 @@ func Parse(doc string) (*Document, error) {
 	if err := strictDecode([]byte(doc), &rd); err != nil {
 		return nil, err
 	}
-	version := Version2008
-	if rd.Version != nil {
-		version = *rd.Version
-	}
-	if version != Version && version != Version2008 {
-		return nil, malformed("Version must be %q or %q", Version, Version2008)
+	version, err := parseVersion(rd.Version)
+	if err != nil {
+		return nil, err
 	}
 	var raws []rawStatement
 	st := bytes.TrimSpace(rd.Statement)

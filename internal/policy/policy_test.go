@@ -192,7 +192,6 @@ func TestPolicyVersion(t *testing.T) {
 		{"2012-10-17 substitutes variables", `{"Version":"2012-10-17",` + stmt + `}`, policy.Version, true},
 		{"2008-10-17 keeps variables literal", `{"Version":"2008-10-17",` + stmt + `}`, policy.Version2008, false},
 		{"missing Version keeps variables literal", `{` + stmt + `}`, policy.Version2008, false},
-		{"null Version is missing", `{"Version":null,` + stmt + `}`, policy.Version2008, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -209,7 +208,7 @@ func TestPolicyVersion(t *testing.T) {
 			}
 		})
 	}
-	for _, v := range []string{`"2012-10-18"`, `"2008-10-17 "`, `""`, `"latest"`, `20121017`} {
+	for _, v := range []string{`"2012-10-18"`, `"2008-10-17 "`, `""`, `"latest"`, `20121017`, `null`, `["2012-10-17"]`} {
 		t.Run("rejects Version "+v, func(t *testing.T) {
 			doc := `{"Version":` + v + `,` + stmt + `}`
 			if _, err := policy.Parse(doc); !errors.Is(err, policy.ErrMalformed) {
