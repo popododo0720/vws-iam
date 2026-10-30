@@ -31,9 +31,12 @@ var hashRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 // Session is a console login session. Key is the SHA-256 hex of the
 // session token; the token itself is never stored.
 type Session struct {
-	Hash     string    `json:"hash"`
-	Project  string    `json:"project"`
-	UserName string    `json:"userName,omitempty"` // empty for root
+	Hash     string `json:"hash"`
+	Project  string `json:"project"`
+	UserName string `json:"userName,omitempty"` // empty for root
+	// UserUID is the UID of the user that signed in (#134); empty in a
+	// session stored before it existed.
+	UserUID  string    `json:"userUid,omitempty"`
 	MFA      bool      `json:"mfa,omitempty"`
 	AuthTime time.Time `json:"authTime"`
 	Expires  time.Time `json:"expires"`
