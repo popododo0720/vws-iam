@@ -34,11 +34,16 @@ type keyGuard struct {
 	// its parts.
 	arn                          string
 	arnProject, arnPath, arnUser string
+	// userEtag is the parent user's version the caller read (#139).
+	userEtag string
 }
 
 // newKeyGuard parses the preconditions. An empty value means no check.
-func newKeyGuard(project, expectedPath, expectedARN string) (keyGuard, error) {
-	g := keyGuard{project: project, arn: expectedARN}
+func newKeyGuard(project, expectedPath, expectedARN, userEtag string) (keyGuard, error) {
+	if err := checkUserEtag(userEtag); err != nil {
+		return keyGuard{}, err
+	}
+	g := keyGuard{project: project, arn: expectedARN, userEtag: userEtag}
 	if expectedPath != "" {
 		pid, user, err := child(expectedPath, "users")
 		if err != nil {
@@ -59,6 +64,27 @@ func newKeyGuard(project, expectedPath, expectedARN string) (keyGuard, error) {
 	return g, nil
 }
 
+// maxEtagLen bounds a user_etag. Store versions are short (a decimal
+// counter or a Kubernetes resourceVersion).
+const maxEtagLen = 128
+
+// checkUserEtag rejects a user_etag no store version can equal.
+func checkUserEtag(etag string) error {
+	if len(etag) > maxEtagLen {
+		return invalidSpec(fmt.Sprintf("user_etag must be at most %d characters", maxEtagLen))
+	}
+	for _, r := range etag {
+		if r <= ' ' || r > '~' {
+			return invalidSpec("user_etag must be printable ASCII without spaces")
+		}
+	}
+	return nil
+}
+
+// fenced reports whether a write under g must commit on the parent user's
+// read version.
+func (g keyGuard) fenced() bool { return g.arn != "" || g.userEtag != "" }
+
 // userMismatch is a precondition that does not hold when it is checked.
 func userMismatch(field string) error {
 	return fail(codes.FailedPrecondition, "GENERATION_CONFLICT", "ConcurrentModification",
@@ -66,38 +92,45 @@ func userMismatch(field string) error {
 }
 
 // check runs the preconditions on k, the key as read for the write. With
-// expected_user_arn it reads the parent user, compares its current ARN,
-// and returns the precondition that the user is still at the version it
-// read. The caller commits the key write with store.UpdateIf or DeleteIf
+// expected_user_arn or a user etag it reads the parent user, compares its
+// current ARN and version, and returns the precondition that the user is
+// still at the version it read. The caller commits the key write with store.UpdateIf or DeleteIf
 // under it, so an UpdateUser path move that lands after this read makes
 // the write fail with ErrConflict (ABORTED, ConcurrentModification) and
-// change nothing. Without expected_user_arn, ok is false: no precondition.
+// change nothing. A user etag that is not the user's version is ABORTED.
+// Without either, ok is false: no precondition.
 func (g keyGuard) check(ctx context.Context, b store.Backend, k iam.AccessKey) (pre store.Pre, ok bool, err error) {
 	if g.pathSet && (g.pathProject != g.project || store.Fold(g.pathUser) != store.Fold(k.UserName)) {
 		return pre, false, userMismatch("expected_user_path")
 	}
-	if g.arn == "" {
+	if !g.fenced() {
 		return pre, false, nil
 	}
-	if g.arnProject != g.project || store.Fold(g.arnUser) != store.Fold(k.UserName) {
+	if g.arn != "" && (g.arnProject != g.project || store.Fold(g.arnUser) != store.Fold(k.UserName)) {
 		return pre, false, userMismatch("expected_user_arn")
 	}
 	u, err := store.Get[iam.User](ctx, b, k.UserName)
-	if errors.Is(err, store.ErrNotFound) {
+	switch {
+	case errors.Is(err, store.ErrNotFound) && g.arn != "":
 		return pre, false, userMismatch("expected_user_arn")
-	}
-	if err != nil {
+	case errors.Is(err, store.ErrNotFound):
+		return pre, false, userEtagMismatch()
+	case err != nil:
 		return pre, false, err
 	}
 	// The name folds like every IAM name; the path is compared exactly.
-	if iam.UserARN(g.project, u.Object) != iam.UserARN(g.project, iam.User{Name: u.Object.Name, Path: g.arnPath}) {
+	want := iam.User{Name: u.Object.Name, Path: g.arnPath}
+	if g.arn != "" && iam.UserARN(g.project, u.Object) != iam.UserARN(g.project, want) {
 		return pre, false, userMismatch("expected_user_arn")
+	}
+	if g.userEtag != "" && u.Version != g.userEtag {
+		return pre, false, userEtagMismatch()
 	}
 	return store.PreOf(u), true, nil
 }
 
-// updateKeyIf is update for an access key write under expected_user_arn:
-// the ARN check and the key write commit together through store.UpdateIf.
+// updateKeyIf is update for an access key write under a fenced keyGuard:
+// the user check and the key write commit together through store.UpdateIf.
 // A lost race is not retried: the caller authorized against the ARN it
 // sent, so a concurrent change of the user is ConcurrentModification.
 func updateKeyIf(
@@ -199,6 +232,16 @@ func (s *Server) ListAccessKeys(ctx context.Context, req *iamv1.ListAccessKeysRe
 // secret (vws-proto: after a lost response, delete the key and create
 // another). An empty request_id makes every call a new key.
 func (s *Server) CreateAccessKey(ctx context.Context, req *iamv1.CreateAccessKeyRequest) (*iamv1.CreateAccessKeyResponse, error) {
+	// TODO(#139): pass req.GetUserEtag() once vws-proto has the field.
+	return s.createAccessKey(ctx, req, "")
+}
+
+// createAccessKey is CreateAccessKey with the optional user etag (#139):
+// when not empty, the key is created only while the parent user is at
+// that version, else ABORTED and no key is created.
+func (s *Server) createAccessKey(
+	ctx context.Context, req *iamv1.CreateAccessKeyRequest, userEtag string,
+) (*iamv1.CreateAccessKeyResponse, error) {
 	pid, user, err := child(req.GetParent(), "users")
 	if err != nil {
 		return nil, err
@@ -207,8 +250,11 @@ func (s *Server) CreateAccessKey(ctx context.Context, req *iamv1.CreateAccessKey
 	if rid != "" && !iam.ValidRequestID(rid) {
 		return nil, invalidSpec(fmt.Sprintf("request_id must be 1 to %d characters of [A-Za-z0-9_-]", iam.MaxRequestIDLen))
 	}
+	if err := checkUserEtag(userEtag); err != nil {
+		return nil, err
+	}
 	p := s.project(pid)
-	cred, err := p.createKey(ctx, user, rid)
+	cred, err := p.createKey(ctx, user, rid, userEtag)
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
@@ -232,7 +278,7 @@ func (s *Server) UpdateAccessKey(ctx context.Context, req *iamv1.UpdateAccessKey
 	if req.GetAllowMissing() {
 		return nil, invalidSpec("allow_missing is not supported for access keys; use CreateAccessKey")
 	}
-	g, err := newKeyGuard(pid, req.GetExpectedUserPath(), req.GetExpectedUserArn())
+	g, err := newKeyGuard(pid, req.GetExpectedUserPath(), req.GetExpectedUserArn(), "")
 	if err != nil {
 		return nil, err
 	}
@@ -262,7 +308,7 @@ func (s *Server) UpdateAccessKey(ctx context.Context, req *iamv1.UpdateAccessKey
 	}
 	etag := req.GetAccessKey().GetEtag()
 	var v store.Versioned[iam.AccessKey]
-	if g.arn != "" && !req.GetValidateOnly() {
+	if g.fenced() && !req.GetValidateOnly() {
 		v, err = updateKeyIf(ctx, p.b, id, etag, g, apply)
 	} else {
 		bump := func(k *iam.AccessKey) { k.Generation++ }
@@ -283,11 +329,21 @@ func (s *Server) UpdateAccessKey(ctx context.Context, req *iamv1.UpdateAccessKey
 
 // DeleteAccessKey deletes a key and its index entry.
 func (s *Server) DeleteAccessKey(ctx context.Context, req *iamv1.DeleteAccessKeyRequest) (*longrunningpb.Operation, error) {
+	// TODO(#139): pass req.GetUserEtag() once vws-proto has the field.
+	return s.deleteAccessKey(ctx, req, "")
+}
+
+// deleteAccessKey is DeleteAccessKey with the optional user etag (#139):
+// when not empty, the key is deleted only while the parent user is at that
+// version, else ABORTED and the key stays.
+func (s *Server) deleteAccessKey(
+	ctx context.Context, req *iamv1.DeleteAccessKeyRequest, userEtag string,
+) (*longrunningpb.Operation, error) {
 	pid, user, id, err := keyRef(req.GetName())
 	if err != nil {
 		return nil, err
 	}
-	g, err := newKeyGuard(pid, req.GetExpectedUserPath(), req.GetExpectedUserArn())
+	g, err := newKeyGuard(pid, req.GetExpectedUserPath(), req.GetExpectedUserArn(), userEtag)
 	if err != nil {
 		return nil, err
 	}
