@@ -53,7 +53,8 @@ func TestDecodeAuthorizationMessageRoundTrip(t *testing.T) {
 	if len(enc) > sts.MaxEncodedMessageLen || strings.ContainsAny(enc, "\n\r =") {
 		t.Fatalf("encoded message %d chars: %q", len(enc), enc)
 	}
-	if strings.Contains(enc, "StopInstances") || strings.Contains(enc, "bob") {
+	// Long plaintext markers only: a short one can occur in random base64.
+	if strings.Contains(enc, "StopInstances") || strings.Contains(enc, "arn:vws:iam::") {
 		t.Fatal("encoded message is not opaque")
 	}
 	got, err := e.svc.DecodeAuthorizationMessage(ctx, e.caller(t, "auditor"), nil, enc)
