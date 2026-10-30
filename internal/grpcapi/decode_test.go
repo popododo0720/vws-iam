@@ -238,3 +238,68 @@ func TestDecodeAuthorizationMessageSourceIPDeny(t *testing.T) {
 		})
 	}
 }
+
+// TestDecodeAuthorizationMessageMFAAgeDeny: the decode permission is
+// evaluated with the trusted keys Authorize builds (aws:MultiFactorAuthAge,
+// aws:userid, aws:PrincipalAccount), so a Deny on MFA age refuses the
+// decode once the age passes the limit, on the SigV4 and console paths.
+func TestDecodeAuthorizationMessageMFAAgeDeny(t *testing.T) {
+	for _, bk := range renameBackends {
+		t.Run(bk.name, func(t *testing.T) {
+			now := time.Now().UTC()
+			e := newEnvOn(t, bk.open(), &now)
+			ctx := t.Context()
+			bob := e.keyedUser(t, "bob", `{"Version":"2012-10-17","Statement":[
+				{"Sid":"NoDelete","Effect":"Deny","Action":"s3:DeleteObject","Resource":"*"}]}`)
+			auditor := e.keyedUser(t, "auditor", `{"Version":"2012-10-17","Statement":[
+				{"Effect":"Allow","Action":"sts:DecodeAuthorizationMessage","Resource":"*",
+				 "Condition":{"StringEquals":{"aws:PrincipalAccount":"`+proj+`"},"StringLike":{"aws:userid":"?*"}}},
+				{"Effect":"Deny","Action":"sts:DecodeAuthorizationMessage","Resource":"*",
+				 "Condition":{"NumericGreaterThan":{"aws:MultiFactorAuthAge":"300"}}}]}`)
+			pair := strings.SplitN(enableMFA(t, e, ctx, "auditor"), "|", 2)
+			seed, serial := pair[0], pair[1]
+			a, err := e.auth.Authenticate(ctx, e.sign(bob.id, bob.secretKey, ""))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := &iamv1.AuthorizeRequest{Principal: a.GetPrincipal(), Action: "s3:DeleteObject"}
+			_, enc, err := e.api.AuthorizeEncoded(ctx, req)
+			if err != nil || enc == "" {
+				t.Fatalf("deny: %q %v", enc, err)
+			}
+
+			st, err := e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{
+				Authentication: gstSig(e.stsSign(auditor.id, auditor.secretKey, "", "GetSessionToken")),
+				SerialNumber:   serial, TokenCode: code(t, e, seed),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := st.GetCredentials()
+			const pw = "correct horse battery"
+			lp := &iamv1.SetLoginProfileRequest{Name: auditor.user.GetName(), Password: pw}
+			if _, err := e.users.SetLoginProfile(ctx, lp); err != nil {
+				t.Fatal(err)
+			}
+			*e.now = e.now.Add(30 * time.Second) // a fresh TOTP step
+			login := &iamv1.LoginRequest{Project: proj, UserName: "auditor", Password: pw, TotpCode: code(t, e, seed)}
+			l, err := e.auth.Login(ctx, login)
+			if err != nil || !l.GetPrincipal().GetMfaAuthenticated() {
+				t.Fatalf("mfa login %v %v", l, err)
+			}
+			decode := func() (sigv4, console error) {
+				signed := e.stsSign(c.GetAccessKeyId(), c.GetSecretAccessKey(), c.GetSessionToken(), decodeAction)
+				_, sigv4 = e.api.DecodeAuthorizationMessage(ctx, signed, "", enc)
+				_, console = e.api.DecodeAuthorizationMessage(ctx, nil, l.GetSessionToken(), enc)
+				return sigv4, console
+			}
+			if sErr, cErr := decode(); sErr != nil || cErr != nil {
+				t.Fatalf("fresh MFA: sigv4 %v, console %v", sErr, cErr)
+			}
+			*e.now = e.now.Add(301 * time.Second)
+			sErr, cErr := decode()
+			wantErr(t, sErr, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+			wantErr(t, cErr, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+		})
+	}
+}

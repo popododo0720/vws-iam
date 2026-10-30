@@ -179,7 +179,7 @@ func (s *Service) DecodeAuthorizationMessage(
 	if n := len(encoded); n < 1 || n > MaxEncodedMessageLen {
 		return "", fmt.Errorf("%w: EncodedMessage length %d outside [1, %d]", ErrInvalidRequest, n, MaxEncodedMessageLen)
 	}
-	d, err := s.authz.Authorize(ctx, c.principal, DecodeAction, "*", callerContext(c, reqCtx))
+	d, err := s.authz.Authorize(ctx, c.principal, DecodeAction, "*", s.callerContext(c, reqCtx))
 	if err != nil {
 		return "", err
 	}
