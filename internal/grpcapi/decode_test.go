@@ -202,7 +202,8 @@ func TestDecodeAuthorizationMessageSourceIPDeny(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, enc, err := e.api.AuthorizeEncoded(ctx, &iamv1.AuthorizeRequest{Principal: a.GetPrincipal(), Action: "s3:DeleteObject"})
+			req := &iamv1.AuthorizeRequest{Principal: a.GetPrincipal(), Action: "s3:DeleteObject"}
+			_, enc, err := e.api.AuthorizeEncoded(ctx, req)
 			if err != nil || enc == "" {
 				t.Fatalf("deny: %q %v", enc, err)
 			}

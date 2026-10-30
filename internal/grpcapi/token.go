@@ -98,7 +98,9 @@ func (s *Server) authenticatedCaller(ctx context.Context, a authn, action string
 // caller's source IP, taken only from how it authenticated: the address
 // the gateway saw for the SigV4 request, or the one stored with the
 // console session at Login. It is empty when neither recorded one.
-func (s *Server) authenticatedCallerFrom(ctx context.Context, a authn, action string) (project, sts.Caller, string, error) {
+func (s *Server) authenticatedCallerFrom(
+	ctx context.Context, a authn, action string,
+) (project, sts.Caller, string, error) {
 	switch {
 	case a.sigv4 != nil:
 		resp, err := s.authenticate(ctx, a.sigv4)
