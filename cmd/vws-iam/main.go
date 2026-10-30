@@ -420,7 +420,8 @@ func watchHealth(ctx context.Context, hs *grpchealth.Server, ready func(context.
 }
 
 // collectReplays deletes expired SigV4 replay entries (#33) and attempt
-// counters whose window and lockout are over (#12) every few minutes. Each replica runs it; races between them are harmless.
+// counters whose window and lockout are over (#12), and finishes renames
+// cut short by a crash (#134), every few minutes. Each replica runs it; races between them are harmless.
 func collectReplays(ctx context.Context, log *slog.Logger, api *grpcapi.Server) {
 	t := time.NewTicker(5 * time.Minute)
 	defer t.Stop()
@@ -433,7 +434,7 @@ func collectReplays(ctx context.Context, log *slog.Logger, api *grpcapi.Server) 
 		for _, gc := range []struct {
 			name string
 			run  func(context.Context) (int, error)
-		}{{"replay", api.GCReplayEntries}, {"attempt", api.GCAttemptCounters}} {
+		}{{"replay", api.GCReplayEntries}, {"attempt", api.GCAttemptCounters}, {"rename", api.ResumeRenames}} {
 			cctx, cancel := context.WithTimeout(ctx, time.Minute)
 			n, err := gc.run(cctx)
 			cancel()

@@ -144,6 +144,11 @@ func (s *Service) Enable(ctx context.Context, user, name, code1, code2 string) e
 	if err != nil {
 		return err
 	}
+	if u.Object.Renaming() {
+		// The device would name the old user after the rename moved its
+		// references (#134).
+		return fmt.Errorf("user %q: %w", user, store.ErrRenaming)
+	}
 	// Both codes must lie within ±Skew of now: code1 at step cur-1 or cur,
 	// code2 at the next step.
 	return s.attempt(ctx, name, func(d *iam.MfaDevice) (bool, error) {

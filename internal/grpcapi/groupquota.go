@@ -52,7 +52,7 @@ func (p project) checkGroupsPerUser(ctx context.Context, group string, users []s
 	if err != nil {
 		return err
 	}
-	for _, g := range all {
+	for _, g := range store.Visible(all) {
 		if store.Fold(g.Object.Name) == store.Fold(group) {
 			continue
 		}
@@ -65,6 +65,27 @@ func (p project) checkGroupsPerUser(ctx context.Context, group string, users []s
 				return groupsPerUserExceeded()
 			}
 			want[store.Fold(m)] = n + 1
+		}
+	}
+	return nil
+}
+
+// checkMembers runs under the membership lock: every added user must
+// still exist and have no rename in flight. A rename takes the lock after
+// it marks the user (renameUser), so an add that read the user before the
+// mark either commits before the rename moves the group references or
+// sees the mark here (#134).
+func (p project) checkMembers(ctx context.Context, users []string) error {
+	for _, n := range users {
+		u, err := store.Get[iam.User](ctx, p.b, n)
+		if errors.Is(err, store.ErrNotFound) {
+			return notFound("user " + quote(n) + " does not exist")
+		}
+		if err != nil {
+			return err
+		}
+		if u.Object.Renaming() {
+			return fmt.Errorf("user %q: %w", n, store.ErrRenaming)
 		}
 	}
 	return nil
@@ -168,7 +189,10 @@ func (p project) commitGroup(ctx context.Context, g store.Versioned[iam.Group], 
 		if err != nil {
 			return "", err
 		}
-		err = p.checkGroupsPerUser(ctx, g.Object.Name, added)
+		err = p.checkMembers(ctx, added)
+		if err == nil {
+			err = p.checkGroupsPerUser(ctx, g.Object.Name, added)
+		}
 		var v string
 		if err == nil {
 			v, err = store.UpdateIf(ctx, p.b, g.Object, g.Version, pre)

@@ -109,7 +109,9 @@ func (a *Authorizer) IdentityPolicies(ctx context.Context, p Principal) ([]polic
 		if out, err = a.collect(ctx, arn, u.Object.AttachedPolicies, u.Object.InlinePolicies, out); err != nil {
 			return nil, "", err
 		}
-		groups, err := GroupsOf(ctx, a.b, u.Object.Name)
+		// While a rename is in flight some groups may still list the
+		// other name; both name this user (#134).
+		groups, err := GroupsOf(ctx, a.b, u.Object.Name, u.Object.RenamePartner())
 		if err != nil {
 			return nil, "", err
 		}
@@ -172,16 +174,24 @@ func (a *Authorizer) Authorize(ctx context.Context, p Principal, action, resourc
 	return policy.Evaluate(r, ids, session), nil
 }
 
-// GroupsOf returns the groups whose members include user.
-func GroupsOf(ctx context.Context, b store.Backend, user string) ([]iam.Group, error) {
+// GroupsOf returns the groups whose members include one of names. The
+// new copy of a group whose rename has not committed is left out
+// (store.Visible).
+func GroupsOf(ctx context.Context, b store.Backend, names ...string) ([]iam.Group, error) {
 	all, err := store.List[iam.Group](ctx, b)
 	if err != nil {
 		return nil, err
 	}
+	want := map[string]bool{}
+	for _, n := range names {
+		if n != "" {
+			want[store.Fold(n)] = true
+		}
+	}
 	var out []iam.Group
-	for _, g := range all {
+	for _, g := range store.Visible(all) {
 		for _, m := range g.Object.Members {
-			if store.Fold(m) == store.Fold(user) {
+			if want[store.Fold(m)] {
 				out = append(out, g.Object)
 				break
 			}
