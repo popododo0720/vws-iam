@@ -32,6 +32,16 @@ func TestBuildVersion(t *testing.T) {
 			true, "c4ded37d70e1",
 		},
 		{"dirty pseudo-version", "", info("v0.0.0-20261015160424-c4ded37d70e1+dirty", "true"), true, "c4ded37d70e1-dirty"},
+		{
+			"pseudo-version after a pre-release tag falls through", "",
+			info("v0.4.1-rc.1.0.20261015160424-c4ded37d70e1", "false"),
+			true, "c4ded37d70e1",
+		},
+		{
+			"dirty pseudo-version after a pre-release tag", "",
+			info("v0.4.1-rc.1.0.20261015160424-c4ded37d70e1+dirty", "true"),
+			true, "c4ded37d70e1-dirty",
+		},
 		{"devel falls through", "", info("(devel)", "false"), true, "c4ded37d70e1"},
 		{"empty module version falls through", "", info("", "false"), true, "c4ded37d70e1"},
 		{"devel without vcs", "", &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}, true, ""},
