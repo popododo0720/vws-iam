@@ -100,9 +100,10 @@ func (h *hooked) DeleteIf(ctx context.Context, k iam.Kind, key, version string, 
 
 const testPassword = "correct horse battery"
 
-func (e *env) setPassword(t *testing.T, user, pw string) {
+func (e *env) setPassword(t *testing.T, ctx context.Context, user, pw string) {
 	t.Helper()
-	if _, err := e.users.SetLoginProfile(t.Context(), &iamv1.SetLoginProfileRequest{Name: userName(user), Password: pw}); err != nil {
+	req := &iamv1.SetLoginProfileRequest{Name: userName(user), Password: pw}
+	if _, err := e.users.SetLoginProfile(ctx, req); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -139,13 +140,15 @@ func TestLoginRefusedWhileRenaming(t *testing.T) {
 			e := newEnvOn(t, b, &now)
 			ctx := t.Context()
 			e.createUser(t, ctx, "alice")
-			e.setPassword(t, "alice", testPassword)
+			e.setPassword(t, ctx, "alice", testPassword)
 			seed := strings.SplitN(enableMFA(t, e, ctx, "alice"), "|", 2)[0]
 			markRename(t, b, "alice", "bob", now)
 
 			login := func(user, totpCode string) error {
 				t.Helper()
-				l, err := e.auth.Login(ctx, &iamv1.LoginRequest{Project: proj, UserName: user, Password: testPassword, TotpCode: totpCode})
+				l, err := e.auth.Login(ctx, &iamv1.LoginRequest{
+					Project: proj, UserName: user, Password: testPassword, TotpCode: totpCode,
+				})
 				if err == nil {
 					t.Errorf("login %s during the rename issued a session (mfa=%v)", user, l.GetPrincipal().GetMfaAuthenticated())
 				}
@@ -174,7 +177,9 @@ func TestLoginRefusedWhileRenaming(t *testing.T) {
 			}
 			_, err = e.auth.Login(ctx, &iamv1.LoginRequest{Project: proj, UserName: "bob", Password: testPassword})
 			wantAWS(t, err, codes.Unauthenticated, "MultiFactorAuthenticationRequired")
-			l, err := e.auth.Login(ctx, &iamv1.LoginRequest{Project: proj, UserName: "bob", Password: testPassword, TotpCode: code(t, e, seed)})
+			l, err := e.auth.Login(ctx, &iamv1.LoginRequest{
+				Project: proj, UserName: "bob", Password: testPassword, TotpCode: code(t, e, seed),
+			})
 			if err != nil || !l.GetPrincipal().GetMfaAuthenticated() {
 				t.Fatalf("login bob after the rename: %v %v", l, err)
 			}
@@ -214,7 +219,8 @@ func TestEnableMFARacingRename(t *testing.T) {
 			step := totp.Step(*e.now)
 			_, err = e.mfa.EnableMfaDevice(ctx, &iamv1.EnableMfaDeviceRequest{
 				Name: d.GetMfaDevice().GetName(), User: userName("alice"),
-				AuthenticationCode_1: totp.Code(seed, step-1, totp.Digits), AuthenticationCode_2: totp.Code(seed, step, totp.Digits),
+				AuthenticationCode_1: totp.Code(seed, step-1, totp.Digits),
+				AuthenticationCode_2: totp.Code(seed, step, totp.Digits),
 			})
 			if err == nil {
 				t.Error("enable committed after its user was renamed away")
@@ -249,14 +255,14 @@ func TestLoginSessionRacingRename(t *testing.T) {
 			e := newEnvOn(t, h, &now)
 			ctx := t.Context()
 			e.createUser(t, ctx, "alice")
-			e.setPassword(t, "alice", testPassword)
+			e.setPassword(t, ctx, "alice", testPassword)
 			var other *iamv1.User
 			h.at("create", iam.KindSession, "", func() error {
 				if _, err := e.api.UpdateUserRename(ctx, renameUserReq("alice", "", ""), "bob"); err != nil {
 					t.Errorf("rename: %v", err)
 				}
 				other = e.createUser(t, ctx, "alice")
-				e.setPassword(t, "alice", "another long password")
+				e.setPassword(t, ctx, "alice", "another long password")
 				return nil
 			})
 			l, err := e.auth.Login(ctx, &iamv1.LoginRequest{Project: proj, UserName: "alice", Password: testPassword})
