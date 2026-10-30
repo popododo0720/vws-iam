@@ -49,3 +49,29 @@ func (s *Server) UpdateGroupRename(
 ) (*longrunningpb.Operation, error) {
 	return s.updateGroup(ctx, req, newName)
 }
+
+// AuthorizeEncoded is Authorize that also returns the encoded
+// authorization message of a deny, which vws-proto does not carry yet
+// (#109).
+func (s *Server) AuthorizeEncoded(
+	ctx context.Context, req *iamv1.AuthorizeRequest,
+) (*iamv1.AuthorizeResponse, string, error) {
+	return s.authorize(ctx, req, true)
+}
+
+// DecodeAuthorizationMessage is STS DecodeAuthorizationMessage, which
+// vws-proto does not carry yet (#109).
+func (s *Server) DecodeAuthorizationMessage(
+	ctx context.Context, sigv4 *iamv1.AuthenticateRequest, console, encoded string,
+) (string, error) {
+	return s.decodeAuthorizationMessage(ctx, sigv4, console, "", encoded)
+}
+
+// DecodeAuthorizationMessageFrom is DecodeAuthorizationMessage with the
+// gateway-observed source IP of a console request, which vws-proto does
+// not carry yet (#109).
+func (s *Server) DecodeAuthorizationMessageFrom(
+	ctx context.Context, sigv4 *iamv1.AuthenticateRequest, console, consoleIP, encoded string,
+) (string, error) {
+	return s.decodeAuthorizationMessage(ctx, sigv4, console, consoleIP, encoded)
+}

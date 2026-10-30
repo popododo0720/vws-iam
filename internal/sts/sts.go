@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -58,6 +59,9 @@ type Caller struct {
 	mfa         bool
 	temporary   bool
 	authTime    time.Time
+	// sessionName is set for an assumed-role session; aws:userid is then
+	// "<role id>:<session name>", as AWS reports it.
+	sessionName string
 }
 
 // Principal is the caller's principal.
@@ -177,7 +181,10 @@ func (s Session) String() string { return "Session{" + s.AccessKeyID + " " + s.P
 
 // Caller returns the session as the caller of a further request.
 func (s Session) Caller() Caller {
-	return Caller{principal: s.Principal, principalID: s.PrincipalID, mfa: s.MFA, temporary: true, authTime: s.AuthTime}
+	return Caller{
+		principal: s.Principal, principalID: s.PrincipalID, mfa: s.MFA, temporary: true, authTime: s.AuthTime,
+		sessionName: s.SessionName,
+	}
 }
 
 // Context returns the request context keys a session carries.
@@ -222,16 +229,42 @@ var serverKeys = map[string]bool{
 }
 
 // callerContext copies request keys (aws:SourceIp, sts:ExternalId, ...),
-// drops any server key a client tried to set, and adds the server's own.
-func callerContext(c Caller, reqCtx map[string][]string) map[string][]string {
+// drops any server key a client tried to set, and adds the server's own:
+// the same trusted keys grpcapi Authorize builds, so a policy conditioned
+// on them is evaluated alike on every path.
+func (s *Service) callerContext(c Caller, reqCtx map[string][]string) map[string][]string {
 	m := map[string][]string{}
 	for k, v := range reqCtx {
 		if !serverKeys[strings.ToLower(k)] {
 			m[k] = v
 		}
 	}
-	m["aws:MultiFactorAuthPresent"] = []string{fmt.Sprint(c.mfa)}
+	m["aws:MultiFactorAuthPresent"] = []string{strconv.FormatBool(c.mfa)}
+	if c.mfa {
+		var age time.Duration // a zero authTime means now
+		if !c.authTime.IsZero() {
+			age = max(s.now().Sub(c.authTime), 0) / time.Second
+		}
+		m["aws:MultiFactorAuthAge"] = []string{strconv.FormatInt(int64(age), 10)}
+	}
+	if id := s.userID(c); id != "" {
+		m["aws:userid"] = []string{id}
+	}
+	m["aws:PrincipalAccount"] = []string{s.account}
 	return m
+}
+
+// userID is the caller's aws:userid: the account for root, the role id
+// and session name for an assumed role, else the principal's unique id.
+func (s *Service) userID(c Caller) string {
+	switch {
+	case c.principal.Kind == authz.Root:
+		return s.account
+	case c.sessionName != "":
+		return c.principalID + ":" + c.sessionName
+	default:
+		return c.principalID
+	}
 }
 
 // Resolve derives the caller from its credential: a session token is
@@ -401,7 +434,7 @@ func (s *Service) AssumeRole(ctx context.Context, c Caller, reqCtx map[string][]
 	}
 
 	// The caller's own permissions must allow sts:AssumeRole on the role.
-	d, err := s.authz.Authorize(ctx, c.principal, "sts:AssumeRole", roleARN, callerContext(c, reqCtx))
+	d, err := s.authz.Authorize(ctx, c.principal, "sts:AssumeRole", roleARN, s.callerContext(c, reqCtx))
 	if err != nil {
 		return Credentials{}, err
 	}
@@ -423,7 +456,7 @@ func (s *Service) AssumeRole(ctx context.Context, c Caller, reqCtx map[string][]
 			return Credentials{}, err
 		}
 	}
-	tctx := callerContext(c, reqCtx)
+	tctx := s.callerContext(c, reqCtx)
 	tctx["aws:PrincipalArn"] = []string{callerARN}
 	td := policy.Evaluate(policy.Request{Principal: callerARN, Account: s.account, Action: "sts:AssumeRole", Resource: roleARN, Context: tctx}, []policy.Named{{Name: roleARN + " trust policy", Doc: trust}}, nil)
 	if !td.Allowed {
