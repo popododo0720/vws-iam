@@ -58,7 +58,7 @@ func (s *Server) TagMFADevice(ctx context.Context, req *iamv1.TagMFADeviceReques
 				merged[tag.GetKey()] = tag.GetValue()
 			}
 			if len(merged) > iam.MaxMFADeviceTags {
-				return quota("a virtual MFA device can have at most " + strconv.Itoa(iam.MaxMFADeviceTags) + " tags")
+				return quota("Cannot exceed quota for TagsPerMfaDevice: " + strconv.Itoa(iam.MaxMFADeviceTags))
 			}
 			d.Tags = merged
 			return nil
