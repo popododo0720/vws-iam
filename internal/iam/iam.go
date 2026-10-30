@@ -66,6 +66,9 @@ const nameAlphabet = "A-Za-z0-9+=,.@_-"
 const (
 	maxNameLen       = 64
 	MaxPolicyNameLen = 128
+	// MaxGroupNameLen is the AWS GroupName limit; user, role, and other
+	// names stay at maxNameLen (#135).
+	MaxGroupNameLen = 128
 )
 
 func namePattern(max int) string {
@@ -76,9 +79,14 @@ func ResourceNamePattern() string { return namePattern(maxNameLen) }
 
 func PolicyNamePattern() string { return namePattern(MaxPolicyNameLen) }
 
+// GroupNamePattern is the AWS GroupName rule: 1 to MaxGroupNameLen
+// characters of the IAM name alphabet.
+func GroupNamePattern() string { return namePattern(MaxGroupNameLen) }
+
 var (
 	nameRE       = regexp.MustCompile("^" + ResourceNamePattern() + "$")
 	policyNameRE = regexp.MustCompile("^" + PolicyNamePattern() + "$")
+	groupNameRE  = regexp.MustCompile("^" + GroupNamePattern() + "$")
 	pathRE       = regexp.MustCompile(`^/([\x21-\x7e]{0,510}/)?$`)
 )
 
@@ -103,6 +111,10 @@ func ValidRequestID(s string) bool { return requestIDRE.MatchString(s) }
 // ValidPolicyName reports whether s is a managed or inline policy name: 1 to
 // 128 characters of [A-Za-z0-9+=,.@_-], the AWS PolicyName rule.
 func ValidPolicyName(s string) bool { return policyNameRE.MatchString(s) }
+
+// ValidGroupName reports whether s is a group name: 1 to 128 characters of
+// [A-Za-z0-9+=,.@_-], the AWS GroupName rule.
+func ValidGroupName(s string) bool { return groupNameRE.MatchString(s) }
 
 func checkPath(what, path string) error {
 	if path != "" && !pathRE.MatchString(path) {
@@ -211,7 +223,10 @@ type Group struct {
 func (Group) Kind() Kind    { return KindGroup }
 func (g Group) Key() string { return g.Name }
 func (g Group) Validate() error {
-	if err := checkName("group", g.Name, g.Path); err != nil {
+	if !ValidGroupName(g.Name) {
+		return invalid("group name %q", g.Name)
+	}
+	if err := checkPath("group", g.Path); err != nil {
 		return err
 	}
 	seen := map[string]bool{}

@@ -197,7 +197,6 @@ func TestOtherNamesStayAt64(t *testing.T) {
 		bad  iam.Object
 	}{
 		{"user", iam.User{Name: n64}, iam.User{Name: n65}},
-		{"group", iam.Group{Name: n64}, iam.Group{Name: n65}},
 		{
 			"role",
 			iam.Role{Name: n64, AssumeRolePolicy: trust, MaxSessionDuration: time.Hour},
@@ -227,5 +226,37 @@ func TestOtherNamesStayAt64(t *testing.T) {
 		if err := tc.bad.Validate(); !errors.Is(err, iam.ErrInvalid) {
 			t.Errorf("%s of 65: %v", tc.name, err)
 		}
+	}
+}
+
+// TestGroupNamesUpTo128: a group name is 1 to 128 characters of the IAM
+// name alphabet, the AWS GroupName rule (#135); a member (user) name stays
+// at 64.
+func TestGroupNamesUpTo128(t *testing.T) {
+	ok := []string{"a", strings.Repeat("g", 64), strings.Repeat("g", 65), strings.Repeat("g", 128), "A.z+9=,_@-"}
+	for _, name := range ok {
+		if err := (iam.Group{Name: name}).Validate(); err != nil {
+			t.Errorf("group name of %d characters: %v", len(name), err)
+		}
+		if !iam.ValidGroupName(name) {
+			t.Errorf("ValidGroupName(%d characters) = false", len(name))
+		}
+	}
+	for _, name := range []string{strings.Repeat("g", 129), "", "bad name", "a/b", "a:b", strings.Repeat("\u00e9", 4)} {
+		err := (iam.Group{Name: name}).Validate()
+		want := `invalid: group name "` + name + `"`
+		if err == nil || err.Error() != want || !errors.Is(err, iam.ErrInvalid) {
+			t.Errorf("group name %q: %v, want %s", name, err, want)
+		}
+		if iam.ValidGroupName(name) {
+			t.Errorf("ValidGroupName(%q) = true", name)
+		}
+	}
+	if err := (iam.Group{Name: strings.Repeat("g", 128), Path: "bad"}).Validate(); !errors.Is(err, iam.ErrInvalid) {
+		t.Errorf("group with bad path: %v", err)
+	}
+	member65 := iam.Group{Name: strings.Repeat("g", 128), Members: []string{strings.Repeat("u", 65)}}
+	if err := member65.Validate(); !errors.Is(err, iam.ErrInvalid) {
+		t.Errorf("group member of 65: %v", err)
 	}
 }

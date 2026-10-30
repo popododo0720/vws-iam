@@ -114,7 +114,7 @@ func (s *Server) CreateGroup(ctx context.Context, req *iamv1.CreateGroupRequest)
 	if err != nil {
 		return nil, err
 	}
-	if err := checkID(req.GetGroupId(), "group"); err != nil {
+	if err := checkGroupID(req.GetGroupId()); err != nil {
 		return nil, err
 	}
 	p := s.project(pid)
@@ -173,7 +173,7 @@ func (s *Server) UpdateGroup(ctx context.Context, req *iamv1.UpdateGroupRequest)
 			Meta: iam.Meta{UID: iam.NewUID(), RequestID: req.GetRequestId()},
 			Name: id, ID: iam.NewUniqueID("AGPA"), Created: s.now().UTC(),
 		}
-		if err := checkID(id, "group"); err != nil {
+		if err := checkGroupID(id); err != nil {
 			return g, err
 		}
 		return g, apply(&g)

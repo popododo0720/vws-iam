@@ -52,6 +52,13 @@ func checkID(id, what string) error {
 	return nil
 }
 
+func checkGroupID(id string) error {
+	if !iam.ValidGroupName(id) {
+		return invalidID("group id " + quote(id) + " must match " + iam.GroupNamePattern())
+	}
+	return nil
+}
+
 func checkPolicyID(id string) error {
 	if !iam.ValidPolicyName(id) {
 		return invalidID("policy id " + quote(id) + " must match " + iam.PolicyNamePattern())
