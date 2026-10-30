@@ -115,7 +115,7 @@ func testRevokeSessions(t *testing.T, b store.Backend) {
 	}
 	// Refused on both replicas and after a restart; the role session is not.
 	for _, e := range []*env{a, rb, newEnvOn(t, b, a.now)} {
-		wantErr(t, use(e, userSess.GetCredentials()), codes.Unauthenticated, "INVALID_CREDENTIALS", "InvalidClientTokenId")
+		wantErr(t, use(e, userSess.GetCredentials()), codes.Unauthenticated, "INVALID_CREDENTIALS", "InvalidToken")
 		if err := use(e, roleSess.GetCredentials()); err != nil {
 			t.Fatalf("role session must survive a user revocation: %v", err)
 		}
@@ -146,7 +146,7 @@ func testRevokeSessions(t *testing.T, b store.Backend) {
 	if r := unpack(t, op, &iamv1.Role{}); !r.GetStatus().GetSessionsRevokeTime().AsTime().Equal(*a.now) {
 		t.Fatalf("role sessions_revoke_time %v", r.GetStatus().GetSessionsRevokeTime())
 	}
-	wantErr(t, use(rb, roleSess.GetCredentials()), codes.Unauthenticated, "INVALID_CREDENTIALS", "InvalidClientTokenId")
+	wantErr(t, use(rb, roleSess.GetCredentials()), codes.Unauthenticated, "INVALID_CREDENTIALS", "InvalidToken")
 
 	// Hostile and missing targets.
 	_, err = a.users.RevokeUserSessions(ctx, &iamv1.RevokeUserSessionsRequest{Name: parentName + "/users/nobody"})

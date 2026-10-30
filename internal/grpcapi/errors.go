@@ -105,7 +105,7 @@ var mapping = []struct {
 	{store.ErrConflict, codes.Aborted, "GENERATION_CONFLICT", "ConcurrentModification"},
 	{accesskey.ErrLimitExceeded, codes.ResourceExhausted, "QUOTA_EXCEEDED", "LimitExceeded"},
 	{accesskey.ErrInactive, codes.Unauthenticated, "INVALID_CREDENTIALS", "InvalidClientTokenId"},
-	{sts.ErrInvalidToken, codes.Unauthenticated, "INVALID_CREDENTIALS", "InvalidClientTokenId"},
+	{sts.ErrInvalidToken, codes.Unauthenticated, "INVALID_CREDENTIALS", "InvalidToken"},
 	{sts.ErrExpired, codes.Unauthenticated, "TOKEN_EXPIRED", "ExpiredToken"},
 	{mfa.ErrInvalidCode, codes.Unauthenticated, "INVALID_CREDENTIALS", "InvalidAuthenticationCode"},
 	{mfa.ErrLocked, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied"},
