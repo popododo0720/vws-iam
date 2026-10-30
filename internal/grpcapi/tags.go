@@ -73,10 +73,16 @@ func (s *Server) TagPolicy(ctx context.Context, req *iamv1.TagPolicyRequest) (*l
 		if len(merged) > iam.MaxPolicyTags {
 			return quota("Cannot exceed quota for TagsPerPolicy: " + strconv.Itoa(iam.MaxPolicyTags))
 		}
+		if maps.Equal(merged, pol.Tags) {
+			return errNoop
+		}
 		pol.Tags = merged
 		// AWS changes a policy's UpdateDate only for a new version, not for a tag change.
 		return nil
 	}, nil)
+	if errors.Is(err, errNoop) {
+		err = nil
+	}
 	if err != nil {
 		return nil, missingPolicy(ctx, err, pid, id)
 	}
@@ -113,17 +119,23 @@ func (s *Server) UntagPolicy(ctx context.Context, req *iamv1.UntagPolicyRequest)
 	}
 	v, err := mutateOrValidate(ctx, p.b, id, "", req.GetValidateOnly(), false, bumpPolicy, func(pol *iam.Policy) error {
 		if len(pol.Tags) == 0 {
-			return nil
+			return errNoop
 		}
 		kept := make(map[string]string, len(pol.Tags))
 		maps.Copy(kept, pol.Tags)
 		for _, key := range keys {
 			delete(kept, key)
 		}
+		if maps.Equal(kept, pol.Tags) {
+			return errNoop
+		}
 		pol.Tags = kept
 		// AWS changes a policy's UpdateDate only for a new version, not for a tag change.
 		return nil
 	}, nil)
+	if errors.Is(err, errNoop) {
+		err = nil
+	}
 	if err != nil {
 		return nil, missingPolicy(ctx, err, pid, id)
 	}

@@ -118,6 +118,80 @@ func TestPolicyTags(t *testing.T) {
 	wantErr(t, err, codes.Aborted, "IDEMPOTENCY_CONFLICT", "IdempotentParameterMismatch")
 }
 
+// Retagging with the tags already stored, or untagging a key that is not
+// attached, changes nothing, so it does not bump the policy generation.
+func TestPolicyTagsNoopKeepsGeneration(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	pol := e.createPolicy(t, ctx, "noop", tagPolicyDoc)
+	generation := func() int64 {
+		p, err := e.policies.GetPolicy(ctx, &iamv1.GetPolicyRequest{Name: pol.GetName()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p.GetGeneration()
+	}
+	add := &iamv1.TagPolicyRequest{Name: pol.GetName(), Tags: []*iamv1.Tag{tag("env", "prod"), tag("Team", "platform")}}
+	if _, err := e.policies.TagPolicy(ctx, add); err != nil {
+		t.Fatal(err)
+	}
+	afterAdd := generation()
+	op, err := e.policies.TagPolicy(ctx, add)
+	if err != nil {
+		t.Fatalf("identical retag: %v", err)
+	}
+	unpack(t, op, &iamv1.Policy{})
+	if got := generation(); got != afterAdd {
+		t.Fatalf("identical retag bumped generation %d -> %d", afterAdd, got)
+	}
+	// The order of the tags in the request does not matter.
+	shuffled := &iamv1.TagPolicyRequest{
+		Name: pol.GetName(), Tags: []*iamv1.Tag{tag("Team", "platform"), tag("env", "prod")},
+	}
+	op, err = e.policies.TagPolicy(ctx, shuffled)
+	if err != nil {
+		t.Fatalf("reordered retag: %v", err)
+	}
+	unpack(t, op, &iamv1.Policy{})
+	if got := generation(); got != afterAdd {
+		t.Fatalf("reordered retag bumped generation %d -> %d", afterAdd, got)
+	}
+	// A different value for a stored key is a change.
+	if _, err := e.policies.TagPolicy(ctx, &iamv1.TagPolicyRequest{
+		Name: pol.GetName(), Tags: []*iamv1.Tag{tag("env", "dev")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	afterChange := generation()
+	if afterChange <= afterAdd {
+		t.Fatalf("changed value did not bump generation: %d -> %d", afterAdd, afterChange)
+	}
+	// Untagging a key that is not attached changes nothing.
+	op, err = e.policies.UntagPolicy(ctx, &iamv1.UntagPolicyRequest{Name: pol.GetName(), TagKeys: []string{"missing"}})
+	if err != nil {
+		t.Fatalf("untag of an absent key: %v", err)
+	}
+	unpack(t, op, &iamv1.Policy{})
+	if got := generation(); got != afterChange {
+		t.Fatalf("untag of an absent key bumped generation %d -> %d", afterChange, got)
+	}
+	// Untagging a key that is attached is a change.
+	if _, err := e.policies.UntagPolicy(ctx, &iamv1.UntagPolicyRequest{
+		Name: pol.GetName(), TagKeys: []string{"env"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := generation(); got <= afterChange {
+		t.Fatalf("untag of an attached key did not bump generation: %d -> %d", afterChange, got)
+	}
+	// validate_only of an identical tag still succeeds and stores nothing.
+	if _, err := e.policies.TagPolicy(ctx, &iamv1.TagPolicyRequest{
+		Name: pol.GetName(), Tags: []*iamv1.Tag{tag("Team", "platform")}, ValidateOnly: true,
+	}); err != nil {
+		t.Fatalf("validate_only identical retag: %v", err)
+	}
+}
+
 func TestPolicyTagsPage(t *testing.T) {
 	e := newEnv(t)
 	ctx := t.Context()
