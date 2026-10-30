@@ -119,6 +119,19 @@ func (a *Authorizer) IdentityPolicies(ctx context.Context, p Principal) ([]polic
 		if err != nil {
 			return nil, "", err
 		}
+		if partner != "" {
+			// The rename may have committed since the partner check,
+			// and a new user under the partner name joined a group
+			// before the group read. A partner that still matches after
+			// the read matched during it: the old object never returns.
+			again, err := RenamePartner(ctx, a.b, u.Object)
+			if err != nil {
+				return nil, "", err
+			}
+			if store.Fold(again) != store.Fold(partner) {
+				groups = memberOf(groups, u.Object.Name)
+			}
+		}
 		for _, g := range groups {
 			if out, err = a.collect(ctx, iam.GroupARN(a.account, g), g.AttachedPolicies, g.InlinePolicies, out); err != nil {
 				return nil, "", err
@@ -230,4 +243,18 @@ func GroupsOf(ctx context.Context, b store.Backend, names ...string) ([]iam.Grou
 		}
 	}
 	return out, nil
+}
+
+// memberOf returns the groups of gs whose members include name.
+func memberOf(gs []iam.Group, name string) []iam.Group {
+	var out []iam.Group
+	for _, g := range gs {
+		for _, m := range g.Members {
+			if store.Fold(m) == store.Fold(name) {
+				out = append(out, g)
+				break
+			}
+		}
+	}
+	return out
 }
