@@ -182,3 +182,58 @@ func TestDecodeAuthorizationMessage(t *testing.T) {
 		})
 	}
 }
+
+// TestDecodeAuthorizationMessageSourceIPDeny: the decode permission is
+// evaluated with the caller's aws:SourceIp, from the SigV4 request or the
+// console session, so an IP-conditioned explicit Deny refuses the decode.
+func TestDecodeAuthorizationMessageSourceIPDeny(t *testing.T) {
+	for _, bk := range renameBackends {
+		t.Run(bk.name, func(t *testing.T) {
+			now := time.Now().UTC()
+			e := newEnvOn(t, bk.open(), &now)
+			ctx := t.Context()
+			bob := e.keyedUser(t, "bob", `{"Version":"2012-10-17","Statement":[
+				{"Sid":"NoDelete","Effect":"Deny","Action":"s3:DeleteObject","Resource":"*"}]}`)
+			auditor := e.keyedUser(t, "auditor", `{"Version":"2012-10-17","Statement":[
+				{"Effect":"Allow","Action":"sts:DecodeAuthorizationMessage","Resource":"*"},
+				{"Effect":"Deny","Action":"sts:DecodeAuthorizationMessage","Resource":"*",
+				 "Condition":{"IpAddress":{"aws:SourceIp":"10.0.0.0/8"}}}]}`)
+			a, err := e.auth.Authenticate(ctx, e.sign(bob.id, bob.secretKey, ""))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, enc, err := e.api.AuthorizeEncoded(ctx, &iamv1.AuthorizeRequest{Principal: a.GetPrincipal(), Action: "s3:DeleteObject"})
+			if err != nil || enc == "" {
+				t.Fatalf("deny: %q %v", enc, err)
+			}
+			from := func(ip string) *iamv1.AuthenticateRequest {
+				r := e.stsSign(auditor.id, auditor.secretKey, "", decodeAction)
+				r.SourceIp = ip
+				return r
+			}
+			_, err = e.api.DecodeAuthorizationMessage(ctx, from("10.1.2.3"), "", enc)
+			wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+			if _, err := e.api.DecodeAuthorizationMessage(ctx, from("192.0.2.1"), "", enc); err != nil {
+				t.Fatalf("outside the denied range: %v", err)
+			}
+
+			const pw = "correct horse battery"
+			lp := &iamv1.SetLoginProfileRequest{Name: auditor.user.GetName(), Password: pw}
+			if _, err := e.users.SetLoginProfile(ctx, lp); err != nil {
+				t.Fatal(err)
+			}
+			for ip, deny := range map[string]bool{"10.9.9.9": true, "192.0.2.7": false} {
+				l, err := e.auth.Login(ctx, &iamv1.LoginRequest{Project: proj, UserName: "auditor", Password: pw, SourceIp: ip})
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = e.api.DecodeAuthorizationMessage(ctx, nil, l.GetSessionToken(), enc)
+				if deny {
+					wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+				} else if err != nil {
+					t.Fatalf("console from %s: %v", ip, err)
+				}
+			}
+		})
+	}
+}

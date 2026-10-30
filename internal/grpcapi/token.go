@@ -90,28 +90,37 @@ func missingAuthentication() error {
 // derives the STS caller from it (sts.Resolve or the stored console
 // session). Nothing in the request body names the caller.
 func (s *Server) authenticatedCaller(ctx context.Context, a authn, action string) (project, sts.Caller, error) {
+	p, c, _, err := s.authenticatedCallerFrom(ctx, a, action)
+	return p, c, err
+}
+
+// authenticatedCallerFrom is authenticatedCaller that also returns the
+// caller's source IP, taken only from how it authenticated: the address
+// the gateway saw for the SigV4 request, or the one stored with the
+// console session at Login. It is empty when neither recorded one.
+func (s *Server) authenticatedCallerFrom(ctx context.Context, a authn, action string) (project, sts.Caller, string, error) {
 	switch {
 	case a.sigv4 != nil:
 		resp, err := s.authenticate(ctx, a.sigv4)
 		if err != nil {
-			return project{}, sts.Caller{}, err
+			return project{}, sts.Caller{}, "", err
 		}
 		if err := s.stsSigv4(ctx, a.sigv4, action); err != nil {
-			return project{}, sts.Caller{}, err
+			return project{}, sts.Caller{}, "", err
 		}
 		p := s.project(resp.GetAccount())
 		c, err := p.sts.Resolve(ctx, sts.Credential{AccessKeyID: a.sigv4.GetAccessKeyId(), SessionToken: a.sigv4.GetSessionToken()})
-		return p, c, err
+		return p, c, a.sigv4.GetSourceIp(), err
 	case a.console != "":
 		v, err := s.consoleSession(ctx, a.console)
 		if err != nil {
-			return project{}, sts.Caller{}, err
+			return project{}, sts.Caller{}, "", err
 		}
 		p := s.project(v.Project)
 		c, err := p.sts.ConsoleCaller(ctx, v.UserName, v.MFA, v.AuthTime)
-		return p, c, err
+		return p, c, v.SourceIP, err
 	}
-	return project{}, sts.Caller{}, missingAuthentication()
+	return project{}, sts.Caller{}, "", missingAuthentication()
 }
 
 // AssumeRole issues role credentials to the authenticated caller, of the
