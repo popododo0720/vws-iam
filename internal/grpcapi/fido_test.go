@@ -142,3 +142,84 @@ func TestFidoOrphanAfterCrash(t *testing.T) {
 		t.Fatalf("second register of an owned credential = %v, want ErrEntityInUse", err)
 	}
 }
+
+// beforeUserDelete runs hook once, just before the first user delete
+// reaches the backend.
+type beforeUserDelete struct {
+	store.Backend
+	once sync.Once
+	hook func()
+}
+
+func (b *beforeUserDelete) Delete(ctx context.Context, kind iam.Kind, key, version string) error {
+	if kind == iam.KindUser {
+		b.once.Do(b.hook)
+	}
+	return b.Backend.Delete(ctx, kind, key, version)
+}
+
+// TestFidoRegistrationDuringDeleteUser: a whole RegisterFido runs after
+// DeleteUser listed the user's (no) FIDO keys and before its delete. Both
+// must not succeed: the registration wins, DeleteUser fails, and the user
+// and its readable key remain.
+func TestFidoRegistrationDuringDeleteUser(t *testing.T) {
+	ctx := t.Context()
+	b := &beforeUserDelete{Backend: memstore.New()}
+	now := time.Now().UTC()
+	e := newEnvOn(t, b, &now)
+	u := e.createUser(t, ctx, "alice")
+	fido := mfa.New(store.Scoped(b, proj), nil, proj, nil)
+	cred := mfa.FidoCredential{ID: []byte("alice-credential-1"), PublicKey: []byte{0xa5}}
+	var d iam.FidoDevice
+	var regErr error
+	b.hook = func() { d, regErr = fido.RegisterFido(ctx, "alice", "yubikey", cred) }
+	_, delErr := e.users.DeleteUser(ctx, &iamv1.DeleteUserRequest{Name: u.GetName()})
+	if regErr != nil {
+		t.Fatalf("RegisterFido during DeleteUser: %v", regErr)
+	}
+	if delErr == nil {
+		t.Fatal("DeleteUser and RegisterFido both succeeded; the key is an orphan")
+	}
+	wantErr(t, delErr, codes.Aborted, "ETAG_MISMATCH", "ConcurrentModification")
+	if _, err := e.users.GetUser(ctx, &iamv1.GetUserRequest{Name: u.GetName()}); err != nil {
+		t.Fatalf("user gone after the failed delete: %v", err)
+	}
+	if _, err := fido.GetFido(ctx, fido.FidoSerial(d), "alice"); err != nil {
+		t.Fatalf("registered key not readable: %v", err)
+	}
+	_, err := e.users.DeleteUser(ctx, &iamv1.DeleteUserRequest{Name: u.GetName()})
+	wantErr(t, err, codes.FailedPrecondition, "DEPENDENCY_MISSING", "DeleteConflict")
+}
+
+// TestFidoRegistrationSurvivesUserUpdate: an unrelated update of the
+// user between RegisterFido's read and its commit does not fail the
+// registration; the commit reads the user again and retries.
+func TestFidoRegistrationSurvivesUserUpdate(t *testing.T) {
+	ctx := t.Context()
+	b := &beforeFidoCreate{Backend: memstore.New()}
+	now := time.Now().UTC()
+	e := newEnvOn(t, b, &now)
+	u := e.createUser(t, ctx, "alice")
+	sb := store.Scoped(b, proj)
+	b.hook = func() {
+		if _, err := store.Mutate(ctx, sb, "alice", func(u *iam.User) error {
+			u.Labels = map[string]string{"team": "a"}
+			return nil
+		}); err != nil {
+			t.Errorf("update during registration: %v", err)
+		}
+	}
+	fido := mfa.New(sb, nil, proj, nil)
+	cred := mfa.FidoCredential{ID: []byte("alice-credential-1"), PublicKey: []byte{0xa5}}
+	d, err := fido.RegisterFido(ctx, "alice", "yubikey", cred)
+	if err != nil {
+		t.Fatalf("RegisterFido after an unrelated user update: %v", err)
+	}
+	if _, err := fido.GetFido(ctx, fido.FidoSerial(d), "alice"); err != nil {
+		t.Fatalf("GetFido: %v", err)
+	}
+	got, err := e.users.GetUser(ctx, &iamv1.GetUserRequest{Name: u.GetName()})
+	if err != nil || got.GetLabels()["team"] != "a" {
+		t.Fatalf("GetUser = %v, %v; want the update kept", got.GetLabels(), err)
+	}
+}
