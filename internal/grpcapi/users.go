@@ -252,11 +252,17 @@ func (s *Server) DeleteUser(ctx context.Context, req *iamv1.DeleteUserRequest) (
 		if x, err = p.extras(ctx); err != nil {
 			return err
 		}
+		fido, err := p.mfa.ListFido(ctx, u.Name)
+		if err != nil {
+			return err
+		}
 		switch {
 		case len(keys) > 0:
 			return deleteConflict("user has access keys")
 		case len(x.mfa[store.Fold(u.Name)]) > 0:
 			return deleteConflict("user has an enabled MFA device")
+		case len(fido) > 0:
+			return deleteConflict("user has a FIDO security key")
 		case u.PasswordHash != "":
 			return deleteConflict("user has a login profile")
 		case len(x.groups[store.Fold(u.Name)]) > 0:
