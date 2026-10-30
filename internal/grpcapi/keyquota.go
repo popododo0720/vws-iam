@@ -23,6 +23,15 @@ func accessKeysPerUserExceeded() error {
 // create is retried.
 var errLockLost = errors.New("quota lock lost during key create")
 
+// errSweepFailed is a key create that could not remove a pending key of
+// the user, so it stopped before counting. A transient cause is retried
+// up to maxSweepAttempts times; the cause is wrapped with it.
+var errSweepFailed = errors.New("pending access key not removed")
+
+// maxSweepAttempts bounds how often one create retries a sweep that hit
+// store.ErrUnavailable before it returns that error.
+const maxSweepAttempts = 3
+
 // requestRepeated is a CreateAccessKey request_id that already created
 // key id. It names the key and never carries its secret.
 func requestRepeated(id string) error {
@@ -36,10 +45,29 @@ func requestRepeated(id string) error {
 // already created a key of user is ALREADY_EXISTS; it is checked and
 // stored under the same lock hold, so concurrent creates with one
 // requestID make one key.
-func (p project) createKey(ctx context.Context, user, requestID string) (accesskey.Credential, error) {
+//
+// A non-empty userEtag is the user version the caller read (#139). A user
+// at another version is ABORTED before any write, and the key is activated
+// only while the user is still at userEtag, so a change of the user that
+// lands before the activation commits makes the create ABORTED too.
+func (p project) createKey(ctx context.Context, user, requestID, userEtag string) (accesskey.Credential, error) {
+	sweepFailures := 0
 	for attempt := 0; ; attempt++ {
-		cred, err := p.createKeyLocked(ctx, user, requestID)
-		if !errors.Is(err, errLockLost) {
+		var userPre *store.Pre
+		if userEtag != "" {
+			pre, err := p.userAt(ctx, user, userEtag)
+			if err != nil {
+				return accesskey.Credential{}, err
+			}
+			userPre = &pre
+		}
+		cred, err := p.createKeyLocked(ctx, user, requestID, userPre)
+		retry := errors.Is(err, errLockLost)
+		if errors.Is(err, errSweepFailed) && errors.Is(err, store.ErrUnavailable) {
+			sweepFailures++
+			retry = sweepFailures < maxSweepAttempts
+		}
+		if !retry {
 			if errors.Is(err, accesskey.ErrLimitExceeded) {
 				return cred, accessKeysPerUserExceeded()
 			}
@@ -65,7 +93,19 @@ func (p project) createKey(ctx context.Context, user, requestID string) (accessk
 // the lock cannot activate it, so of two creates with one requestID only
 // the one whose activation commits under its hold makes a key; the other
 // retries under a later hold and finds that key.
-func (p project) createKeyLocked(ctx context.Context, user, requestID string) (accesskey.Credential, error) {
+//
+// With userPre the key is first reserved by store.UpdateIf on the lock and
+// then activated by store.UpdateIf on the user. The reservation commits
+// under this hold, so a later holder finds the key and sweeps it (it is
+// still pending) unless the activation won the key's compare-and-swap
+// first. A later holder that cannot remove a pending key stops here
+// without counting (errSweepFailed; createKey retries a transient cause a
+// few times), so the count never passes accesskey.MaxPerUser. If the
+// activation fails, the create is retried and the user check refuses it
+// when the user moved.
+func (p project) createKeyLocked(
+	ctx context.Context, user, requestID string, userPre *store.Pre,
+) (accesskey.Credential, error) {
 	pre, unlock, err := p.lockMembership(ctx)
 	if err != nil {
 		return accesskey.Credential{}, err
@@ -79,7 +119,7 @@ func (p project) createKeyLocked(ctx context.Context, user, requestID string) (a
 		if errors.Is(err, store.ErrConflict) {
 			return accesskey.Credential{}, errLockLost
 		}
-		return accesskey.Credential{}, err
+		return accesskey.Credential{}, fmt.Errorf("%w: %w", errSweepFailed, err)
 	}
 	// A conditional delete may advance the lock's version (kubestore
 	// fences); the hold is still ours while holder and epoch are.
@@ -99,7 +139,15 @@ func (p project) createKeyLocked(ctx context.Context, user, requestID string) (a
 	if err != nil {
 		return accesskey.Credential{}, err
 	}
-	aerr := p.keys.Activate(ctx, cred.AccessKeyID, version, pre)
+	var aerr error
+	if userPre == nil {
+		aerr = p.keys.Activate(ctx, cred.AccessKeyID, version, pre)
+	} else {
+		var rv string
+		if rv, aerr = p.keys.Reserve(ctx, cred.AccessKeyID, version, pre); aerr == nil {
+			aerr = p.keys.Activate(ctx, cred.AccessKeyID, rv, *userPre)
+		}
+	}
 	if aerr == nil {
 		return cred, nil
 	}
@@ -115,13 +163,35 @@ func (p project) createKeyLocked(ctx context.Context, user, requestID string) (a
 	if !errors.Is(aerr, store.ErrConflict) && !errors.Is(aerr, store.ErrNotFound) {
 		err = fmt.Errorf("activate access key: %w", aerr)
 	}
-	// Best effort: a pending key left behind is inert and swept by the
-	// next create, so a failed removal does not block the retry.
+	// Best effort: a pending key left behind is swept by the next create,
+	// which stops before counting until the key is gone.
 	if derr := p.keys.DeletePending(dctx, cred.AccessKeyID, version, nil); derr != nil {
 		slog.Default().LogAttrs(ctx, slog.LevelWarn, "pending access key left for the next sweep",
 			slog.String("access_key_id", cred.AccessKeyID), slog.String("error", derr.Error()))
 	}
 	return accesskey.Credential{}, err
+}
+
+// userEtagMismatch is a user_etag that is not the user's current version.
+func userEtagMismatch() error {
+	return fail(codes.Aborted, "ETAG_MISMATCH", "ConcurrentModification",
+		"the access key's parent user changed since user_etag was read")
+}
+
+// userAt returns the precondition that user is at version etag, or
+// userEtagMismatch if it is not.
+func (p project) userAt(ctx context.Context, user, etag string) (store.Pre, error) {
+	u, err := store.Get[iam.User](ctx, p.b, user)
+	if errors.Is(err, store.ErrNotFound) {
+		return store.Pre{}, fmt.Errorf("%q: %w", user, accesskey.ErrNoSuchUser)
+	}
+	if err != nil {
+		return store.Pre{}, fmt.Errorf("read user: %w", err)
+	}
+	if u.Version != etag {
+		return store.Pre{}, userEtagMismatch()
+	}
+	return store.PreOf(u), nil
 }
 
 // lockHold reads the quota lock taken at pre: its holder and epoch name

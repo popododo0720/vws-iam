@@ -143,16 +143,34 @@ func (s *Service) Activate(ctx context.Context, id, version string, pre store.Pr
 		return store.ErrConflict
 	}
 	k.Object.Status = iam.KeyActive
+	k.Object.Reserved = false
 	_, err = store.UpdateIf(ctx, s.b, k.Object, k.Version, pre)
 	return err
 }
 
+// Reserve marks the pending key id, still at version, reserved while pre
+// holds (store.UpdateIf) and returns its new version. The key stays
+// pending, so Activate can then commit it under another precondition. If
+// pre moved, the key is unchanged and the error is store.ErrConflict.
+func (s *Service) Reserve(ctx context.Context, id, version string, pre store.Pre) (string, error) {
+	k, err := store.Get[iam.AccessKey](ctx, s.b, id)
+	if err != nil {
+		return "", err
+	}
+	if k.Version != version || k.Object.Status != iam.KeyPending {
+		return "", store.ErrConflict
+	}
+	k.Object.Reserved = true
+	return store.UpdateIf(ctx, s.b, k.Object, k.Version, pre)
+}
+
 // SweepPending removes user's pending keys and their index entries while
 // pre holds. The caller holds the quota lock pre names: a pending key
-// that exists then was written under an older hold, so Activate can never
-// commit it. Pending keys are never counted, so the sweep is housekeeping:
-// only store.ErrConflict (pre moved) is returned; other failures leave the
-// key for the next sweep.
+// that exists then was written under an older hold. A reserved one can
+// still be activated under its user's precondition (#139), so the caller
+// may count and create only once every pending key is gone. Any failure
+// to remove one is returned, store.ErrConflict when pre moved; a key
+// already gone is not a failure.
 func (s *Service) SweepPending(ctx context.Context, user string, pre store.Pre) error {
 	all, err := store.List[iam.AccessKey](ctx, s.b)
 	if err != nil {
@@ -162,7 +180,7 @@ func (s *Service) SweepPending(ctx context.Context, user string, pre store.Pre) 
 		if k.Object.Status != iam.KeyPending || k.Object.Root || store.Fold(k.Object.UserName) != store.Fold(user) {
 			continue
 		}
-		if err := s.DeletePending(ctx, k.Object.ID, k.Version, &pre); errors.Is(err, store.ErrConflict) {
+		if err := s.DeletePending(ctx, k.Object.ID, k.Version, &pre); err != nil {
 			return err
 		}
 	}
