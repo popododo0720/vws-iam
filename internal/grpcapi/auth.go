@@ -382,6 +382,9 @@ func (s *Server) Login(ctx context.Context, req *iamv1.LoginRequest) (resp *iamv
 	if needMFA {
 		return nil, fail(codes.Unauthenticated, "MFA_REQUIRED", "MultiFactorAuthenticationRequired", "an MFA code is required")
 	}
+	if err := sameLoginUser(ctx, p, u); err != nil {
+		return nil, toStatus(ctx, err)
+	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return nil, toStatus(ctx, err)
@@ -411,6 +414,24 @@ func (s *Server) Login(ctx context.Context, req *iamv1.LoginRequest) (resp *iamv
 			Resource: name(pid, "users", u.Object.Name), MfaAuthenticated: mfaOK, AuthTime: timestamppb.New(now),
 		},
 	}, nil
+}
+
+// sameLoginUser fences a console session on the user Login checked: the
+// MFA devices were listed after u was read, so a rename marked since may
+// have moved them away and the check saw too few (#134). A rename marks
+// the user and bumps its generation, and the mark stays until the old
+// object is deleted, so the same UID and generation without a mark mean
+// the device list was complete. Anything else is ConcurrentModification.
+func sameLoginUser(ctx context.Context, p project, u store.Versioned[iam.User]) error {
+	again, err := store.Get[iam.User](ctx, p.b, u.Object.Name)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+	if err != nil || again.Object.UID != u.Object.UID || again.Object.Generation != u.Object.Generation ||
+		again.Object.Renaming() {
+		return fmt.Errorf("user %q changed during sign-in: %w", u.Object.Name, store.ErrRenaming)
+	}
+	return nil
 }
 
 // ValidateSession returns the principal of a console session.
