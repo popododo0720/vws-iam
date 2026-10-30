@@ -5,6 +5,7 @@ import (
 	"errors"
 	"unicode/utf8"
 
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	commonv1 "github.com/popododo0720/vws-proto/gen/go/vws/common/v1"
@@ -28,7 +29,7 @@ func (p project) extras(ctx context.Context) (userExtras, error) {
 	if err != nil {
 		return x, err
 	}
-	for _, g := range gs {
+	for _, g := range store.Visible(gs) {
 		for _, m := range g.Object.Members {
 			x.groups[store.Fold(m)] = append(x.groups[store.Fold(m)], name(p.id, "groups", g.Object.Name))
 		}
@@ -45,6 +46,16 @@ func (p project) extras(ctx context.Context) (userExtras, error) {
 	return x, nil
 }
 
+// of returns the entries of m for user u. While a rename of u is in
+// flight a reference may still name the other side (#134).
+func of(m map[string][]string, u iam.User) []string {
+	out := m[store.Fold(u.Name)]
+	if o := u.RenamePartner(); o != "" {
+		out = append(append([]string(nil), out...), m[store.Fold(o)]...)
+	}
+	return out
+}
+
 func (p project) userProto(v store.Versioned[iam.User], x userExtras) *iamv1.User {
 	u := v.Object
 	return &iamv1.User{
@@ -52,8 +63,9 @@ func (p project) userProto(v store.Versioned[iam.User], x userExtras) *iamv1.Use
 		Spec: &iamv1.UserSpec{Path: defaultPath(u.Path), AttachedPolicies: p.policyNames(u.AttachedPolicies), InlinePolicies: u.InlinePolicies},
 		Status: &iamv1.UserStatus{
 			Observed: ready(u.Generation), Arn: iam.UserARN(p.id, u), UniqueId: u.ID,
-			Groups: x.groups[store.Fold(u.Name)], LoginProfile: u.PasswordHash != "", PasswordResetRequired: u.PasswordResetRequired,
-			PasswordLastUsedTime: ts(u.PasswordLastUsed), MfaDevices: x.mfa[store.Fold(u.Name)], SessionsRevokeTime: ts(u.SessionsRevokedBefore),
+			Groups: of(x.groups, u), LoginProfile: u.PasswordHash != "", PasswordResetRequired: u.PasswordResetRequired,
+			PasswordLastUsedTime: ts(u.PasswordLastUsed), MfaDevices: of(x.mfa, u),
+			SessionsRevokeTime: ts(u.SessionsRevokedBefore),
 		},
 		CreateTime: ts(u.Created), UpdateTime: ts(u.Updated),
 	}
@@ -95,6 +107,7 @@ func (s *Server) ListUsers(ctx context.Context, req *iamv1.ListUsersRequest) (*i
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
+	all = store.Visible(all)
 	items, next, err := page(all, func(v store.Versioned[iam.User]) string { return v.Object.Name }, req.GetPageSize(), req.GetPageToken())
 	if err != nil {
 		return nil, err
@@ -183,8 +196,21 @@ func (s *Server) CreateUser(ctx context.Context, req *iamv1.CreateUserRequest) (
 	return op, toStatus(ctx, err)
 }
 
-// UpdateUser changes spec and labels. The name cannot change.
+// UpdateUser changes spec and labels.
 func (s *Server) UpdateUser(ctx context.Context, req *iamv1.UpdateUserRequest) (*longrunningpb.Operation, error) {
+	// TODO(#134): pass req.GetNewUserName() once vws-proto carries the
+	// AWS NewUserName field (popododo0720/vws-proto#79).
+	return s.updateUser(ctx, req, "")
+}
+
+// updateUser is UpdateUser; a non-empty newName renames the user
+// (renameUserOp).
+func (s *Server) updateUser(
+	ctx context.Context, req *iamv1.UpdateUserRequest, newName string,
+) (*longrunningpb.Operation, error) {
+	if newName != "" {
+		return s.renameUserOp(ctx, req, newName)
+	}
 	pid, id, err := child(req.GetUser().GetName(), "users")
 	if err != nil {
 		return nil, err
@@ -229,7 +255,75 @@ func (s *Server) UpdateUser(ctx context.Context, req *iamv1.UpdateUserRequest) (
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
-	op, err := s.done(ctx, opArgs{project: pid, method: "UpdateUser", requestID: req.GetRequestId(), req: req, resource: resp.Name, verb: commonv1.OperationVerb_OPERATION_VERB_UPDATE, generation: v.Object.Generation, response: resp, validateOnly: req.GetValidateOnly()})
+	op, err := s.done(ctx, opArgs{
+		project: pid, method: "UpdateUser", requestID: req.GetRequestId(), req: req, resource: resp.Name,
+		verb: commonv1.OperationVerb_OPERATION_VERB_UPDATE, generation: v.Object.Generation,
+		response: resp, validateOnly: req.GetValidateOnly(),
+	})
+	return op, toStatus(ctx, err)
+}
+
+// renamePaths is the update mask of a rename: AWS UpdateUser and
+// UpdateGroup change only the name and the path, so spec.path and labels
+// may change with it. An omitted mask renames only.
+func renamePaths(mask *fieldmaskpb.FieldMask) (map[string]bool, error) {
+	if len(mask.GetPaths()) == 0 {
+		return map[string]bool{}, nil
+	}
+	set, err := paths(mask, "spec.path")
+	if err != nil {
+		return nil, err
+	}
+	for k := range set {
+		if k != "spec.path" && k != "labels" {
+			return nil, invalidSpec("update_mask path " + quote(k) + " cannot change with a rename")
+		}
+	}
+	return set, nil
+}
+
+// renameUserOp renames the user to newName (AWS UpdateUser NewUserName,
+// #134) and returns a done operation on the renamed user.
+func (s *Server) renameUserOp(
+	ctx context.Context, req *iamv1.UpdateUserRequest, newName string,
+) (*longrunningpb.Operation, error) {
+	pid, id, err := child(req.GetUser().GetName(), "users")
+	if err != nil {
+		return nil, err
+	}
+	set, err := renamePaths(req.GetUpdateMask())
+	if err != nil {
+		return nil, err
+	}
+	if req.GetAllowMissing() {
+		return nil, invalidSpec("allow_missing cannot be combined with a rename")
+	}
+	p := s.project(pid)
+	if op, err := s.replay(ctx, pid, "UpdateUser", req.GetRequestId(), req); op != nil || err != nil {
+		return op, toStatus(ctx, err)
+	}
+	apply := func(u *iam.User) error {
+		if set["spec.path"] {
+			u.Path = req.GetUser().GetSpec().GetPath()
+		}
+		if set["labels"] {
+			u.Labels = req.GetUser().GetLabels()
+		}
+		return u.Validate()
+	}
+	v, err := s.renameUser(ctx, p, id, newName, req.GetUser().GetEtag(), req.GetRequestId(), apply, req.GetValidateOnly())
+	if err != nil {
+		return nil, toStatus(ctx, err)
+	}
+	resp, err := s.userOne(ctx, p, v)
+	if err != nil {
+		return nil, toStatus(ctx, err)
+	}
+	op, err := s.done(ctx, opArgs{
+		project: pid, method: "UpdateUser", requestID: req.GetRequestId(), req: req, resource: resp.Name,
+		verb: commonv1.OperationVerb_OPERATION_VERB_UPDATE, generation: v.Object.Generation,
+		response: resp, validateOnly: req.GetValidateOnly(),
+	})
 	return op, toStatus(ctx, err)
 }
 

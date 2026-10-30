@@ -3,6 +3,7 @@ package grpcapi
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/store"
@@ -57,6 +58,9 @@ func remove[T iam.Object](ctx context.Context, b store.Backend, key, etag string
 	}
 	if err := checkEtag(etag, cur.Version); err != nil {
 		return cur, false, err
+	}
+	if r, ok := any(cur.Object).(iam.Renamable); ok && r.Rename().Renaming() {
+		return cur, false, fmt.Errorf("%s %q: %w", cur.Object.Kind(), key, store.ErrRenaming)
 	}
 	if check != nil {
 		if err := check(cur.Object); err != nil {

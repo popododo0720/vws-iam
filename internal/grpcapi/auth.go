@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -330,7 +331,7 @@ func (s *Server) Login(ctx context.Context, req *iamv1.LoginRequest) (resp *iamv
 	// The whole password + MFA check is one counted attempt per user and
 	// source IP (limit.go); an MFA_REQUIRED answer is not a failure.
 	var u store.Versioned[iam.User]
-	mfaOK, needMFA := false, false
+	mfaOK, needMFA, renaming := false, false, false
 	err = s.limitedVerify(ctx, callers{userSubject(pid, req.GetUserName())}.withIP(req.GetSourceIp()), func() error {
 		var err error
 		u, err = store.Get[iam.User](ctx, p.b, req.GetUserName())
@@ -344,6 +345,13 @@ func (s *Server) Login(ctx context.Context, req *iamv1.LoginRequest) (resp *iamv
 		}
 		if password.Verify(req.GetPassword(), u.Object.PasswordHash) != nil {
 			return badCredentials()
+		}
+		if u.Object.Renaming() {
+			// The MFA devices may name either side of the rename
+			// (#134): refuse rather than check too few. The password
+			// was right, so the attempt is not a failure.
+			renaming = true
+			return nil
 		}
 		devices, err := p.mfa.List(ctx, u.Object.Name)
 		if err != nil {
@@ -368,8 +376,14 @@ func (s *Server) Login(ctx context.Context, req *iamv1.LoginRequest) (resp *iamv
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
+	if renaming {
+		return nil, toStatus(ctx, fmt.Errorf("user %q: %w", u.Object.Name, store.ErrRenaming))
+	}
 	if needMFA {
 		return nil, fail(codes.Unauthenticated, "MFA_REQUIRED", "MultiFactorAuthenticationRequired", "an MFA code is required")
+	}
+	if err := sameLoginUser(ctx, p, u); err != nil {
+		return nil, toStatus(ctx, err)
 	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
@@ -377,11 +391,17 @@ func (s *Server) Login(ctx context.Context, req *iamv1.LoginRequest) (resp *iamv
 	}
 	tok := base64.RawURLEncoding.EncodeToString(raw)
 	now := s.now().UTC()
-	sess := iam.Session{Hash: hashToken(tok), Project: pid, UserName: u.Object.Name, MFA: mfaOK, AuthTime: now, Expires: now.Add(LoginSessionTTL), SourceIP: req.GetSourceIp()}
+	sess := iam.Session{
+		Hash: hashToken(tok), Project: pid, UserName: u.Object.Name, UserUID: u.Object.UID, MFA: mfaOK,
+		AuthTime: now, Expires: now.Add(LoginSessionTTL), SourceIP: req.GetSourceIp(),
+	}
 	if _, err := store.Create(ctx, s.b, sess); err != nil {
 		return nil, toStatus(ctx, err)
 	}
 	if _, err := store.Mutate(ctx, p.b, u.Object.Name, func(x *iam.User) error {
+		if x.UID != u.Object.UID {
+			return store.ErrNotFound // renamed away: not this user
+		}
 		x.PasswordLastUsed = now.Truncate(time.Second)
 		return nil
 	}); err != nil {
@@ -396,15 +416,33 @@ func (s *Server) Login(ctx context.Context, req *iamv1.LoginRequest) (resp *iamv
 	}, nil
 }
 
+// sameLoginUser fences a console session on the user Login checked: the
+// MFA devices were listed after u was read, so a rename marked since may
+// have moved them away and the check saw too few (#134). A rename marks
+// the user and bumps its generation, and the mark stays until the old
+// object is deleted, so the same UID and generation without a mark mean
+// the device list was complete. Anything else is ConcurrentModification.
+func sameLoginUser(ctx context.Context, p project, u store.Versioned[iam.User]) error {
+	again, err := store.Get[iam.User](ctx, p.b, u.Object.Name)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+	if err != nil || again.Object.UID != u.Object.UID || again.Object.Generation != u.Object.Generation ||
+		again.Object.Renaming() {
+		return fmt.Errorf("user %q changed during sign-in: %w", u.Object.Name, store.ErrRenaming)
+	}
+	return nil
+}
+
 // ValidateSession returns the principal of a console session.
 func (s *Server) ValidateSession(ctx context.Context, req *iamv1.ValidateSessionRequest) (*iamv1.ValidateSessionResponse, error) {
 	sess, err := s.consoleSession(ctx, req.GetSessionToken())
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
-	u, err := store.Get[iam.User](ctx, s.project(sess.Project).b, sess.UserName)
+	u, err := s.sessionUser(ctx, sess)
 	if err != nil {
-		return nil, badCredentials()
+		return nil, err
 	}
 	return &iamv1.ValidateSessionResponse{ExpireTime: timestamppb.New(sess.Expires), Principal: &iamv1.Principal{
 		Type: iamv1.PrincipalType_PRINCIPAL_TYPE_USER, Arn: iam.UserARN(sess.Project, u.Object), Project: sess.Project, UniqueId: u.Object.ID,
@@ -432,11 +470,22 @@ func (s *Server) consoleSession(ctx context.Context, tok string) (iam.Session, e
 		}
 		return iam.Session{}, fail(codes.Unauthenticated, "TOKEN_EXPIRED", "ExpiredToken", "the session has expired")
 	}
-	u, err := store.Get[iam.User](ctx, s.project(sess.Project).b, sess.UserName)
-	if err != nil || u.Object.PasswordHash == "" {
-		return iam.Session{}, badCredentials()
+	if _, err := s.sessionUser(ctx, sess); err != nil {
+		return iam.Session{}, err
 	}
 	return sess, nil
+}
+
+// sessionUser returns the user of a console session: it must still exist
+// with a console password and be the same user (UID) that signed in, so
+// a session never passes to another user later given its name (#134). A
+// session stored before UserUID existed has none and matches by name.
+func (s *Server) sessionUser(ctx context.Context, sess iam.Session) (store.Versioned[iam.User], error) {
+	u, err := store.Get[iam.User](ctx, s.project(sess.Project).b, sess.UserName)
+	if err != nil || u.Object.PasswordHash == "" || (sess.UserUID != "" && u.Object.UID != sess.UserUID) {
+		return store.Versioned[iam.User]{}, badCredentials()
+	}
+	return u, nil
 }
 
 // Logout ends a console session. Unknown tokens are fine (idempotent).

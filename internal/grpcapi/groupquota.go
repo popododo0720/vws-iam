@@ -52,7 +52,7 @@ func (p project) checkGroupsPerUser(ctx context.Context, group string, users []s
 	if err != nil {
 		return err
 	}
-	for _, g := range all {
+	for _, g := range store.Visible(all) {
 		if store.Fold(g.Object.Name) == store.Fold(group) {
 			continue
 		}
@@ -65,6 +65,27 @@ func (p project) checkGroupsPerUser(ctx context.Context, group string, users []s
 				return groupsPerUserExceeded()
 			}
 			want[store.Fold(m)] = n + 1
+		}
+	}
+	return nil
+}
+
+// checkMembers runs under the membership lock: every added user must
+// still exist and have no rename in flight. A rename takes the lock after
+// it marks the user (renameUser), so an add that read the user before the
+// mark either commits before the rename moves the group references or
+// sees the mark here (#134).
+func (p project) checkMembers(ctx context.Context, users []string) error {
+	for _, n := range users {
+		u, err := store.Get[iam.User](ctx, p.b, n)
+		if errors.Is(err, store.ErrNotFound) {
+			return notFound("user " + quote(n) + " does not exist")
+		}
+		if err != nil {
+			return err
+		}
+		if u.Object.Renaming() {
+			return fmt.Errorf("user %q: %w", n, store.ErrRenaming)
 		}
 	}
 	return nil
@@ -168,7 +189,10 @@ func (p project) commitGroup(ctx context.Context, g store.Versioned[iam.Group], 
 		if err != nil {
 			return "", err
 		}
-		err = p.checkGroupsPerUser(ctx, g.Object.Name, added)
+		err = p.checkMembers(ctx, added)
+		if err == nil {
+			err = p.checkGroupsPerUser(ctx, g.Object.Name, added)
+		}
 		var v string
 		if err == nil {
 			v, err = store.UpdateIf(ctx, p.b, g.Object, g.Version, pre)
@@ -194,7 +218,8 @@ func (p project) commitGroup(ctx context.Context, g store.Versioned[iam.Group], 
 // createGroup stores a new group. A group with members is stored empty
 // first and the members are added by commitGroup, because a create cannot
 // be conditional on the lock. If the add is refused, the empty group is
-// removed again. A retry of the same request adopts the group it left.
+// removed again, unless a rename has marked it. A retry of the same
+// request adopts the group it left.
 func (p project) createGroup(ctx context.Context, g iam.Group, requestID string) (store.Versioned[iam.Group], error) {
 	if err := p.checkGroupsPerUser(ctx, g.Name, g.Members); err != nil {
 		return store.Versioned[iam.Group]{}, err
@@ -215,7 +240,11 @@ func (p project) createGroup(ctx context.Context, g iam.Group, requestID string)
 	v.Object.Members = g.Members
 	ver, err := p.commitGroup(ctx, v, prev)
 	if err != nil {
-		if len(prev) == 0 {
+		// A rename may have marked the group this request left (a retry
+		// adopts it with the mark). Only the rename coordinator may remove
+		// a marked group; the versioned delete below fails if a mark lands
+		// after v was read.
+		if len(prev) == 0 && !v.Object.Renaming() && !errors.Is(err, store.ErrRenaming) {
 			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
 			// Best effort: an empty group left behind holds no quota.

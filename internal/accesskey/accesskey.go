@@ -216,6 +216,11 @@ func (s *Service) checkLimit(ctx context.Context, user string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if u.Object.Renaming() {
+		// A key made now could name the old user after the rename moved
+		// its references (#134).
+		return "", fmt.Errorf("user %q: %w", user, store.ErrRenaming)
+	}
 	n, err := s.count(ctx, u.Object.Name)
 	if err != nil {
 		return "", err

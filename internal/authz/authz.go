@@ -109,9 +109,28 @@ func (a *Authorizer) IdentityPolicies(ctx context.Context, p Principal) ([]polic
 		if out, err = a.collect(ctx, arn, u.Object.AttachedPolicies, u.Object.InlinePolicies, out); err != nil {
 			return nil, "", err
 		}
-		groups, err := GroupsOf(ctx, a.b, u.Object.Name)
+		// While a rename is in flight some groups may still list the
+		// other name; both name this user (#134).
+		partner, err := RenamePartner(ctx, a.b, u.Object)
 		if err != nil {
 			return nil, "", err
+		}
+		groups, err := GroupsOf(ctx, a.b, u.Object.Name, partner)
+		if err != nil {
+			return nil, "", err
+		}
+		if partner != "" {
+			// The rename may have committed since the partner check,
+			// and a new user under the partner name joined a group
+			// before the group read. A partner that still matches after
+			// the read matched during it: the old object never returns.
+			again, err := RenamePartner(ctx, a.b, u.Object)
+			if err != nil {
+				return nil, "", err
+			}
+			if store.Fold(again) != store.Fold(partner) {
+				groups = memberOf(groups, u.Object.Name)
+			}
 		}
 		for _, g := range groups {
 			if out, err = a.collect(ctx, iam.GroupARN(a.account, g), g.AttachedPolicies, g.InlinePolicies, out); err != nil {
@@ -172,20 +191,70 @@ func (a *Authorizer) Authorize(ctx context.Context, p Principal, action, resourc
 	return policy.Evaluate(r, ids, session), nil
 }
 
-// GroupsOf returns the groups whose members include user.
-func GroupsOf(ctx context.Context, b store.Backend, user string) ([]iam.Group, error) {
+// RenamePartner returns the other name of u's in-flight rename while that
+// name still holds u's counterpart: the same UID with the reciprocal
+// marker (RenameTo naming u on the old object, RenamedFrom on the new
+// one). Otherwise it is "": a rename that deleted the old object moved
+// every reference first, and a user created again under the old name is
+// someone else, whose groups u must not inherit (#134).
+func RenamePartner(ctx context.Context, b store.Backend, u iam.User) (string, error) {
+	other := u.RenamePartner()
+	if other == "" {
+		return "", nil
+	}
+	v, err := store.Get[iam.User](ctx, b, other)
+	if errors.Is(err, store.ErrNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	back := v.Object.RenameTo
+	if u.RenameTo != "" {
+		back = v.Object.RenamedFrom
+	}
+	if v.Object.UID != u.UID || store.Fold(back) != store.Fold(u.Name) {
+		return "", nil
+	}
+	return other, nil
+}
+
+// GroupsOf returns the groups whose members include one of names. The
+// new copy of a group whose rename has not committed is left out
+// (store.Visible).
+func GroupsOf(ctx context.Context, b store.Backend, names ...string) ([]iam.Group, error) {
 	all, err := store.List[iam.Group](ctx, b)
 	if err != nil {
 		return nil, err
 	}
+	want := map[string]bool{}
+	for _, n := range names {
+		if n != "" {
+			want[store.Fold(n)] = true
+		}
+	}
 	var out []iam.Group
-	for _, g := range all {
+	for _, g := range store.Visible(all) {
 		for _, m := range g.Object.Members {
-			if store.Fold(m) == store.Fold(user) {
+			if want[store.Fold(m)] {
 				out = append(out, g.Object)
 				break
 			}
 		}
 	}
 	return out, nil
+}
+
+// memberOf returns the groups of gs whose members include name.
+func memberOf(gs []iam.Group, name string) []iam.Group {
+	var out []iam.Group
+	for _, g := range gs {
+		for _, m := range g.Members {
+			if store.Fold(m) == store.Fold(name) {
+				out = append(out, g)
+				break
+			}
+		}
+	}
+	return out
 }

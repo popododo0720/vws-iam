@@ -3,6 +3,7 @@ package grpcapi
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"cloud.google.com/go/longrunning/autogen/longrunningpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -51,6 +52,9 @@ func (p project) groupSpec(ctx context.Context, g *iam.Group, spec *iamv1.GroupS
 			if err != nil {
 				return err
 			}
+			if u.Object.Renaming() {
+				return fmt.Errorf("user %q: %w", u.Object.Name, store.ErrRenaming)
+			}
 			g.Members = append(g.Members, u.Object.Name)
 		}
 	}
@@ -97,6 +101,7 @@ func (s *Server) ListGroups(ctx context.Context, req *iamv1.ListGroupsRequest) (
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
+	all = store.Visible(all)
 	items, next, err := page(all, func(v store.Versioned[iam.Group]) string { return v.Object.Name }, req.GetPageSize(), req.GetPageToken())
 	if err != nil {
 		return nil, err
@@ -144,6 +149,19 @@ func (s *Server) CreateGroup(ctx context.Context, req *iamv1.CreateGroupRequest)
 
 // UpdateGroup changes spec (including members) and labels.
 func (s *Server) UpdateGroup(ctx context.Context, req *iamv1.UpdateGroupRequest) (*longrunningpb.Operation, error) {
+	// TODO(#134): pass req.GetNewGroupName() once vws-proto carries the
+	// AWS NewGroupName field (popododo0720/vws-proto#79).
+	return s.updateGroup(ctx, req, "")
+}
+
+// updateGroup is UpdateGroup; a non-empty newName renames the group
+// (renameGroupOp).
+func (s *Server) updateGroup(
+	ctx context.Context, req *iamv1.UpdateGroupRequest, newName string,
+) (*longrunningpb.Operation, error) {
+	if newName != "" {
+		return s.renameGroupOp(ctx, req, newName)
+	}
 	pid, id, err := child(req.GetGroup().GetName(), "groups")
 	if err != nil {
 		return nil, err
@@ -191,7 +209,54 @@ func (s *Server) UpdateGroup(ctx context.Context, req *iamv1.UpdateGroupRequest)
 		return nil, toStatus(ctx, err)
 	}
 	resp := p.groupProto(v)
-	op, err := s.done(ctx, opArgs{project: pid, method: "UpdateGroup", requestID: req.GetRequestId(), req: req, resource: resp.Name, verb: commonv1.OperationVerb_OPERATION_VERB_UPDATE, generation: v.Object.Generation, response: resp, validateOnly: req.GetValidateOnly()})
+	op, err := s.done(ctx, opArgs{
+		project: pid, method: "UpdateGroup", requestID: req.GetRequestId(), req: req, resource: resp.Name,
+		verb: commonv1.OperationVerb_OPERATION_VERB_UPDATE, generation: v.Object.Generation,
+		response: resp, validateOnly: req.GetValidateOnly(),
+	})
+	return op, toStatus(ctx, err)
+}
+
+// renameGroupOp renames the group to newName (AWS UpdateGroup
+// NewGroupName, #134) and returns a done operation on the renamed group.
+func (s *Server) renameGroupOp(
+	ctx context.Context, req *iamv1.UpdateGroupRequest, newName string,
+) (*longrunningpb.Operation, error) {
+	pid, id, err := child(req.GetGroup().GetName(), "groups")
+	if err != nil {
+		return nil, err
+	}
+	set, err := renamePaths(req.GetUpdateMask())
+	if err != nil {
+		return nil, err
+	}
+	if req.GetAllowMissing() {
+		return nil, invalidSpec("allow_missing cannot be combined with a rename")
+	}
+	p := s.project(pid)
+	if op, err := s.replay(ctx, pid, "UpdateGroup", req.GetRequestId(), req); op != nil || err != nil {
+		return op, toStatus(ctx, err)
+	}
+	apply := func(g *iam.Group) error {
+		if set["spec.path"] {
+			g.Path = req.GetGroup().GetSpec().GetPath()
+		}
+		if set["labels"] {
+			g.Labels = req.GetGroup().GetLabels()
+		}
+		return g.Validate()
+	}
+	v, err := s.renameGroup(ctx, p, id, newName, req.GetGroup().GetEtag(), req.GetRequestId(),
+		apply, req.GetValidateOnly())
+	if err != nil {
+		return nil, toStatus(ctx, err)
+	}
+	resp := p.groupProto(v)
+	op, err := s.done(ctx, opArgs{
+		project: pid, method: "UpdateGroup", requestID: req.GetRequestId(), req: req, resource: resp.Name,
+		verb: commonv1.OperationVerb_OPERATION_VERB_UPDATE, generation: v.Object.Generation,
+		response: resp, validateOnly: req.GetValidateOnly(),
+	})
 	return op, toStatus(ctx, err)
 }
 
