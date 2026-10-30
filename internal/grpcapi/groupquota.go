@@ -218,7 +218,8 @@ func (p project) commitGroup(ctx context.Context, g store.Versioned[iam.Group], 
 // createGroup stores a new group. A group with members is stored empty
 // first and the members are added by commitGroup, because a create cannot
 // be conditional on the lock. If the add is refused, the empty group is
-// removed again. A retry of the same request adopts the group it left.
+// removed again, unless a rename has marked it. A retry of the same
+// request adopts the group it left.
 func (p project) createGroup(ctx context.Context, g iam.Group, requestID string) (store.Versioned[iam.Group], error) {
 	if err := p.checkGroupsPerUser(ctx, g.Name, g.Members); err != nil {
 		return store.Versioned[iam.Group]{}, err
@@ -239,7 +240,11 @@ func (p project) createGroup(ctx context.Context, g iam.Group, requestID string)
 	v.Object.Members = g.Members
 	ver, err := p.commitGroup(ctx, v, prev)
 	if err != nil {
-		if len(prev) == 0 {
+		// A rename may have marked the group this request left (a retry
+		// adopts it with the mark). Only the rename coordinator may remove
+		// a marked group; the versioned delete below fails if a mark lands
+		// after v was read.
+		if len(prev) == 0 && !v.Object.Renaming() && !errors.Is(err, store.ErrRenaming) {
 			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
 			// Best effort: an empty group left behind holds no quota.
