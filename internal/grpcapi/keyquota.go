@@ -83,7 +83,8 @@ func (p project) createKey(ctx context.Context, user, requestID, userEtag string
 // then activated by store.UpdateIf on the user. The reservation commits
 // under this hold, so a later holder finds the key and sweeps it (it is
 // still pending) unless the activation won the key's compare-and-swap
-// first; either way the count never passes accesskey.MaxPerUser. If the
+// first. A later holder that cannot remove a reserved key fails here
+// without counting, so the count never passes accesskey.MaxPerUser. If the
 // activation fails, the create is retried and the user check refuses it
 // when the user moved.
 func (p project) createKeyLocked(
