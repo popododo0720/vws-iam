@@ -44,8 +44,16 @@ const (
 // attempt runs check on device name under the lockout policy and persists
 // the outcome: a failure counts (and may lock), a success resets.
 func (s *Service) attempt(ctx context.Context, name string, check func(d *iam.MfaDevice) (bool, error)) error {
+	return s.attemptIf(ctx, name, nil, check)
+}
+
+// attemptIf is attempt whose device write commits only while pre is
+// unchanged when pre is set; then a conflict is returned, not retried.
+func (s *Service) attemptIf(
+	ctx context.Context, name string, pre *store.Pre, check func(d *iam.MfaDevice) (bool, error),
+) error {
 	var verr error
-	_, err := store.Mutate(ctx, s.b, name, func(d *iam.MfaDevice) error {
+	err := mutateIf(ctx, s.b, name, pre, func(d *iam.MfaDevice) error {
 		verr = nil
 		now := s.now().UTC()
 		if now.Before(d.LockedUntil) {
@@ -82,6 +90,24 @@ func (s *Service) attempt(ctx context.Context, name string, check func(d *iam.Mf
 
 // errNoWrite ends a Mutate without writing.
 var errNoWrite = errors.New("no write")
+
+// mutateIf is store.Mutate on an MFA device; with pre the write is
+// store.UpdateIf on pre and a conflict ends it.
+func mutateIf(ctx context.Context, b store.Backend, name string, pre *store.Pre, fn func(*iam.MfaDevice) error) error {
+	if pre == nil {
+		_, err := store.Mutate(ctx, b, name, fn)
+		return err
+	}
+	cur, err := store.Get[iam.MfaDevice](ctx, b, name)
+	if err != nil {
+		return err
+	}
+	if err := fn(&cur.Object); err != nil {
+		return err
+	}
+	_, err = store.UpdateIf(ctx, b, cur.Object, cur.Version, *pre)
+	return err
+}
 
 // Enrollment is returned once by CreateVirtual. Never log it.
 type Enrollment struct {
@@ -138,20 +164,63 @@ func (s *Service) CreateVirtual(ctx context.Context, name, path string) (Enrollm
 
 func (s *Service) seed(d iam.MfaDevice) ([]byte, error) { return s.keys.Open(d.Seed, aad(d.Name)) }
 
-// Enable assigns device name to user after two consecutive codes.
+// maxEnableAttempts bounds how often Enable reads the user again after
+// an unrelated change of the user beat its device write.
+const maxEnableAttempts = 8
+
+// Enable assigns device name to user after two consecutive codes. The
+// device write commits only while the user is unchanged since it was
+// read (store.UpdateIf), so it never lands after a rename or delete of
+// that user (#134): the user gone is NotFound, renaming or replaced by
+// another user under the name is ErrRenaming or ErrConflict.
 func (s *Service) Enable(ctx context.Context, user, name, code1, code2 string) error {
+	uid := ""
+	for attempt := 0; ; attempt++ {
+		u, err := store.Get[iam.User](ctx, s.b, user)
+		if err != nil {
+			return err
+		}
+		if u.Object.Renaming() {
+			return fmt.Errorf("user %q: %w", user, store.ErrRenaming)
+		}
+		if uid != "" && u.Object.UID != uid {
+			return fmt.Errorf("user %q was replaced: %w", user, store.ErrConflict)
+		}
+		uid = u.Object.UID
+		pre := store.PreOf(u)
+		err = s.enable(ctx, u.Object.Name, name, code1, code2, &pre)
+		if errors.Is(err, store.ErrConflict) && attempt+1 < maxEnableAttempts {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		return s.checkEnabledFor(ctx, user, uid, name)
+	}
+}
+
+// checkEnabledFor undoes an Enable whose user is gone or another user
+// under the same name by the time the device committed. A backend whose
+// versions can repeat across a delete and create (the fake API server of
+// the tests) would otherwise let the conditional write through.
+func (s *Service) checkEnabledFor(ctx context.Context, user, uid, name string) error {
 	u, err := store.Get[iam.User](ctx, s.b, user)
-	if err != nil {
+	if err == nil && u.Object.UID == uid && !u.Object.Renaming() {
+		return nil
+	}
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return err
 	}
-	if u.Object.Renaming() {
-		// The device would name the old user after the rename moved its
-		// references (#134).
-		return fmt.Errorf("user %q: %w", user, store.ErrRenaming)
+	if derr := s.Deactivate(context.WithoutCancel(ctx), user, name); derr != nil && !errors.Is(derr, ErrNotAssociated) {
+		return errors.Join(fmt.Errorf("user %q changed: %w", user, store.ErrConflict), derr)
 	}
+	return fmt.Errorf("user %q changed: %w", user, store.ErrConflict)
+}
+
+func (s *Service) enable(ctx context.Context, user, name, code1, code2 string, pre *store.Pre) error {
 	// Both codes must lie within ±Skew of now: code1 at step cur-1 or cur,
 	// code2 at the next step.
-	return s.attempt(ctx, name, func(d *iam.MfaDevice) (bool, error) {
+	return s.attemptIf(ctx, name, pre, func(d *iam.MfaDevice) (bool, error) {
 		if d.Enabled {
 			return false, ErrEntityInUse
 		}
@@ -164,7 +233,7 @@ func (s *Service) Enable(ctx context.Context, user, name, code1, code2 string) e
 		if !ok || first+1 > cur+Skew || first+1 <= d.LastStep || !totp.Equal(totp.Code(seed, first+1, totp.Digits), code2) {
 			return false, nil
 		}
-		d.UserName, d.Enabled, d.LastStep, d.EnableTime = u.Object.Name, true, first+1, s.now().UTC()
+		d.UserName, d.Enabled, d.LastStep, d.EnableTime = user, true, first+1, s.now().UTC()
 		return true, nil
 	})
 }
