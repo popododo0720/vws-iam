@@ -97,6 +97,7 @@ var mapping = []struct {
 	{iam.ErrInvalid, codes.InvalidArgument, "INVALID_SPEC", "ValidationError"},
 	{sts.ErrInvalidRequest, codes.InvalidArgument, "INVALID_SPEC", "ValidationError"},
 	{sts.ErrInvalidAuthorizationMessage, codes.InvalidArgument, "INVALID_SPEC", "InvalidAuthorizationMessageException"},
+	{sts.ErrNoSuchAccessKey, codes.NotFound, "RESOURCE_NOT_FOUND", "InvalidClientTokenId"},
 	{store.ErrNotFound, codes.NotFound, "RESOURCE_NOT_FOUND", "NoSuchEntity"},
 	{authz.ErrNoSuchEntity, codes.NotFound, "RESOURCE_NOT_FOUND", "NoSuchEntity"},
 	{accesskey.ErrNoSuchUser, codes.NotFound, "RESOURCE_NOT_FOUND", "NoSuchEntity"},
