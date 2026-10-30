@@ -30,9 +30,11 @@ func (s *Service) FidoSerial(d iam.FidoDevice) string { return iam.FidoDeviceARN
 // is derived from the credential id, so registering one credential twice
 // in an account is ErrEntityInUse, also after a restart and when two
 // registrations race (the store create admits one). The device is bound
-// to the user's UID: if the user is deleted while this runs, the device
-// is removed again and the call is ErrNotAssociated, and a device left by
-// a crash in that window belongs to nobody (see owned). A missing user is
+// to the user's UID and committed by a write to the user (claimUser): a
+// DeleteUser that checked the user's keys before that write fails its
+// versioned delete, and if the user is deleted first the device is
+// removed again and the call is ErrNotAssociated. A device left by a
+// crash in that window belongs to nobody (see owned). A missing user is
 // ErrNotAssociated; invalid input is iam.ErrInvalid and stores nothing.
 func (s *Service) RegisterFido(ctx context.Context, user, label string, c FidoCredential) (iam.FidoDevice, error) {
 	u, err := store.Get[iam.User](ctx, s.b, user)
@@ -58,19 +60,51 @@ func (s *Service) RegisterFido(ctx context.Context, user, label string, c FidoCr
 	if err != nil {
 		return iam.FidoDevice{}, err
 	}
-	// The user may have been deleted after the read above, by a
-	// DeleteUser that listed this user's keys before the create. Check
-	// again and undo; reads skip the device either way.
-	if ok, err := s.owned(ctx, d); err != nil || !ok {
+	// Commit by writing the user. A DeleteUser that listed this user's
+	// keys before the create deletes at the version it read, so it either
+	// deletes first (claim sees the user gone and the create is undone)
+	// or loses its versioned delete to this write.
+	if err := s.claimUser(ctx, d, u); err != nil {
 		if derr := store.Delete[iam.FidoDevice](ctx, s.b, d.ID, v); derr != nil && !errors.Is(derr, store.ErrNotFound) {
-			return iam.FidoDevice{}, fmt.Errorf("register fido device: undo for a deleted user: %w", derr)
+			return iam.FidoDevice{}, fmt.Errorf("register fido device: undo: %w", derr)
 		}
-		if err != nil {
-			return iam.FidoDevice{}, fmt.Errorf("register fido device: %w", err)
-		}
-		return iam.FidoDevice{}, fmt.Errorf("user %q: %w", user, ErrNotAssociated)
+		return iam.FidoDevice{}, err
 	}
 	return d, nil
+}
+
+// maxClaimAttempts bounds the user writes of one registration when other
+// updates of the same user keep winning.
+const maxClaimAttempts = 8
+
+// claimUser bumps the FIDO registration count of d's user, starting from
+// u, the version read before d was created. The user must still exist
+// with d's UID, else ErrNotAssociated. A write that loses to an unrelated
+// update of the user reads it again and retries.
+func (s *Service) claimUser(ctx context.Context, d iam.FidoDevice, u store.Versioned[iam.User]) error {
+	for attempt := 1; ; attempt++ {
+		if u.Object.UID != d.UserUID {
+			return fmt.Errorf("user %q: %w", d.UserName, ErrNotAssociated)
+		}
+		u.Object.FidoRegistrations++
+		_, err := store.Update(ctx, s.b, u.Object, u.Version)
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("user %q: %w", d.UserName, ErrNotAssociated)
+		}
+		if !errors.Is(err, store.ErrConflict) || attempt == maxClaimAttempts {
+			return fmt.Errorf("register fido device: %w", err)
+		}
+		u, err = store.Get[iam.User](ctx, s.b, d.UserName)
+		if errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("user %q: %w", d.UserName, ErrNotAssociated)
+		}
+		if err != nil {
+			return fmt.Errorf("register fido device: %w", err)
+		}
+	}
 }
 
 // createFido stores d. A device already stored under d's id that belongs
