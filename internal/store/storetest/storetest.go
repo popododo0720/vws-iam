@@ -486,6 +486,38 @@ func renameMarkers(t *testing.T, b store.Backend) {
 	if vis := store.Visible(vs); len(vis) != 1 || vis[0].Object.Name != "alice" {
 		t.Fatalf("visible %+v", vis)
 	}
+	// The copy is confirmed before the old user is deleted; it stays
+	// hidden while the old user is listed.
+	cv, err := store.Get[iam.User](ctx, b, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cv.Object.RenameConfirmed = true
+	if _, err := store.UpdateMarked(ctx, b, cv.Object, cv.Version); err != nil {
+		t.Fatal(err)
+	}
+	if vs, err = store.List[iam.User](ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	if vis := store.Visible(vs); len(vis) != 1 || vis[0].Object.Name != "alice" {
+		t.Fatalf("visible with a confirmed copy %+v", vis)
+	}
+	// An unconfirmed copy whose old user is gone is never shown.
+	orphan := iam.User{Name: "carol", ID: "AIDA2", RenameState: iam.RenameState{
+		RenamedFrom: "dave", RenameStarted: started,
+	}}
+	if _, err := store.CreateMarked(ctx, b, orphan); err != nil {
+		t.Fatal(err)
+	}
+	if vs, err = store.List[iam.User](ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	if vis := store.Visible(vs); len(vis) != 1 || vis[0].Object.Name != "alice" {
+		t.Fatalf("visible with an unconfirmed orphan copy %+v", vis)
+	}
+	if err := b.Delete(ctx, iam.KindUser, "carol", ""); err != nil {
+		t.Fatal(err)
+	}
 	// Once the old user is gone the copy is the user.
 	if err := b.Delete(ctx, iam.KindUser, "alice", got.Version); err != nil {
 		t.Fatal(err)

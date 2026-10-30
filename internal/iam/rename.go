@@ -23,6 +23,12 @@ type RenameState struct {
 	RenameTo string `json:"renameTo,omitempty"`
 	// RenamedFrom is the old name, on the new object.
 	RenamedFrom string `json:"renamedFrom,omitempty"`
+	// RenameConfirmed is set on the new object, conditionally on the old
+	// object still holding its mark at the version read, just before the
+	// old object is deleted. A new object whose old object is gone is
+	// promoted only when confirmed; an unconfirmed one was created by a
+	// stale coordinator after the rename finished, and is dropped.
+	RenameConfirmed bool `json:"renameConfirmed,omitempty"`
 	// RenameRequestID is the request_id of the latest rename. It stays
 	// after the rename finished, so a retry is answered from the new
 	// object once the old one is gone.
@@ -53,6 +59,8 @@ func (r RenameState) check(what, name string, valid func(string) bool) error {
 		return invalid("%s %q rename target %q", what, name, r.RenameTo)
 	case r.RenamedFrom != "" && (!valid(r.RenamedFrom) || strings.EqualFold(r.RenamedFrom, name)):
 		return invalid("%s %q rename source %q", what, name, r.RenamedFrom)
+	case r.RenameConfirmed && r.RenamedFrom == "":
+		return invalid("%s %q rename confirmed without a source", what, name)
 	case r.RenameRequestID != "" && !ValidRequestID(r.RenameRequestID):
 		return invalid("%s %q rename request id", what, name)
 	case r.Renaming() && r.RenameStarted.IsZero():

@@ -193,21 +193,27 @@ func UpdateMarkedIf[T iam.Renamable](ctx context.Context, b Backend, obj T, vers
 
 // Visible drops the new copy of an uncommitted rename from vs: an object
 // renamed from a name whose object is still listed with RenameTo naming
-// it. Until the old object is deleted it is the one that counts, so a
-// listing shows each user or group once.
+// it, or one not yet confirmed (iam.RenameState.RenameConfirmed). Until
+// the old object is deleted it is the one that counts, so a listing shows
+// each user or group once, and a stale copy left by a coordinator that
+// died is never shown before the sweep drops it.
 func Visible[T iam.Renamable](vs []Versioned[T]) []Versioned[T] {
 	to := map[string]string{}
+	marked := false
 	for _, v := range vs {
-		if r := v.Object.Rename(); r.RenameTo != "" {
+		r := v.Object.Rename()
+		if r.RenameTo != "" {
 			to[Fold(v.Object.Key())] = Fold(r.RenameTo)
 		}
+		marked = marked || r.Renaming()
 	}
-	if len(to) == 0 {
+	if !marked {
 		return vs
 	}
 	out := make([]Versioned[T], 0, len(vs))
 	for _, v := range vs {
-		if from := v.Object.Rename().RenamedFrom; from != "" && to[Fold(from)] == Fold(v.Object.Key()) {
+		r := v.Object.Rename()
+		if r.RenamedFrom != "" && (!r.RenameConfirmed || to[Fold(r.RenamedFrom)] == Fold(v.Object.Key())) {
 			continue
 		}
 		out = append(out, v)

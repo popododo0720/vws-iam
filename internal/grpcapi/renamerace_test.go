@@ -303,7 +303,7 @@ func TestRenameSweepLeavesRecreatedName(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			bob.Object.RenamedFrom, bob.Object.RenameStarted = "alice", now
+			bob.Object.RenamedFrom, bob.Object.RenameStarted, bob.Object.RenameConfirmed = "alice", now, true
 			if _, err := store.UpdateMarked(ctx, pb, bob.Object, bob.Version); err != nil {
 				t.Fatal(err)
 			}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/store"
@@ -35,7 +36,11 @@ import (
 //     while the old object still holds the old name for this rename
 //     (store.UpdateIf on it), so a reference of a user created again
 //     under the old name is never moved.
-//  5. commit: the old object is deleted at the version read. A group
+//  5. commit: the copy is confirmed (RenameConfirmed) only while the old
+//     object still holds the mark at the version read, then the old
+//     object is deleted at that version. A copy whose old object is gone
+//     is promoted only when confirmed, so a stale coordinator that copies
+//     after the rename finished never brings a deleted object back. A group
 //     moved by a concurrent user rename since the copy is copied again.
 //     The copy of an existing new object commits only while the old
 //     object is unchanged, so a coordinator holding a stale old object
@@ -293,6 +298,20 @@ func (r renamer[T]) drive(ctx context.Context, src store.Versioned[T]) (store.Ve
 			src = again
 			continue
 		}
+		if !dst.Object.Rename().RenameConfirmed {
+			dst, again, err = r.confirm(ctx, dst, again)
+			switch {
+			case errors.Is(err, errSourceMoved):
+				src = again
+				continue
+			case errors.Is(err, errSourceGone):
+				// Confirmed by the coordinator that committed: dst is
+				// not this call's to drop.
+				return r.committed(ctx, dst, false)
+			case err != nil:
+				return zero, err
+			}
+		}
 		err = r.p.b.Delete(ctx, again.Object.Kind(), again.Object.Key(), again.Version)
 		if err == nil {
 			return r.finish(ctx, dst)
@@ -307,6 +326,48 @@ func (r renamer[T]) drive(ctx context.Context, src store.Versioned[T]) (store.Ve
 		// member of this group since the copy. Copy again.
 		src = again
 	}
+}
+
+// errSourceGone is a confirm whose old object was deleted or replaced
+// since it was read: another coordinator committed the rename.
+var errSourceGone = errors.New("the renamed object is gone")
+
+// confirm sets RenameConfirmed on dst, the copy of src's rename, only
+// while src still holds the mark at the version read, and returns dst and
+// src read again (a kubestore fence may move src's version). A refused
+// write is errSourceMoved (src changed, or dst moved by a concurrent user
+// rename) or errSourceGone. Only a confirmed copy is promoted once src is
+// gone, so a copy a stale coordinator creates after the rename finished
+// is dropped, not promoted (finish).
+func (r renamer[T]) confirm(
+	ctx context.Context, dst, src store.Versioned[T],
+) (store.Versioned[T], store.Versioned[T], error) {
+	obj := dst.Object
+	_, st := r.mutable(&obj)
+	st.RenameConfirmed = true
+	ver, err := store.UpdateMarkedIf(ctx, r.p.b, obj, dst.Version, store.PreOf(src))
+	if err != nil && !errors.Is(err, store.ErrConflict) {
+		return dst, src, err
+	}
+	again, gone, rerr := r.reread(ctx, src)
+	switch {
+	case rerr != nil:
+		return dst, src, rerr
+	case gone && err == nil:
+		// Confirmed while src held the mark; src went since.
+		return store.Versioned[T]{Object: obj, Version: ver}, src, errSourceGone
+	case gone:
+		cur, gerr := store.Get[T](ctx, r.p.b, dst.Object.Key())
+		if gerr != nil {
+			return dst, src, gerr
+		}
+		return cur, src, errSourceGone
+	case err != nil:
+		return dst, again, errSourceMoved
+	case !sameSpec(again.Object, src.Object):
+		return store.Versioned[T]{Object: obj, Version: ver}, again, errSourceMoved
+	}
+	return store.Versioned[T]{Object: obj, Version: ver}, again, nil
 }
 
 // reread reads src again. gone reports that src's rename was committed
@@ -374,7 +435,9 @@ func (r renamer[T]) copyOf(ctx context.Context, src store.Versioned[T]) (store.V
 	want := src.Object
 	name, st := r.mutable(&want)
 	from := *name
-	*name, st.RenamedFrom, st.RenameTo = src.Object.Rename().RenameTo, from, ""
+	// The copy starts unconfirmed: until drive confirms it under the old
+	// object's mark, finish never promotes it (RenameConfirmed).
+	*name, st.RenamedFrom, st.RenameTo, st.RenameConfirmed = src.Object.Rename().RenameTo, from, "", false
 	ver, err := store.CreateMarked(ctx, r.p.b, want)
 	if err == nil {
 		return store.Versioned[T]{Object: want, Version: ver}, true, nil
@@ -445,9 +508,27 @@ func (r renamer[T]) finish(ctx context.Context, dst store.Versioned[T]) (store.V
 		case err != nil && !errors.Is(err, store.ErrNotFound):
 			return zero, err
 		}
+		if !dst.Object.Rename().RenameConfirmed {
+			// Never confirmed under the old object's mark: a stale
+			// coordinator created dst after the rename finished (and the
+			// new object was deleted or renamed again). Drop it.
+			err := r.p.b.Delete(ctx, dst.Object.Kind(), dst.Object.Key(), dst.Version)
+			if err == nil || errors.Is(err, store.ErrNotFound) {
+				slog.Default().LogAttrs(ctx, slog.LevelInfo, "stale rename copy dropped", slog.String("project", r.p.id),
+					slog.String("kind", r.what), slog.String("from", from), slog.String("to", dst.Object.Key()))
+				return zero, notFound(r.what + " " + quote(from) + " does not exist")
+			}
+			if !errors.Is(err, store.ErrConflict) || attempt >= maxRenamePasses {
+				return zero, err
+			}
+			if dst, err = store.Get[T](ctx, r.p.b, dst.Object.Key()); err != nil {
+				return zero, err
+			}
+			continue
+		}
 		obj := dst.Object
 		_, st := r.mutable(&obj)
-		st.RenamedFrom, st.RenameStarted = "", time.Time{}
+		st.RenamedFrom, st.RenameStarted, st.RenameConfirmed = "", time.Time{}, false
 		ver, err := store.UpdateMarked(ctx, r.p.b, obj, dst.Version)
 		if err == nil {
 			slog.Default().LogAttrs(ctx, slog.LevelInfo, "rename finished", slog.String("project", r.p.id),
@@ -677,6 +758,9 @@ func resume[T iam.Renamable](ctx context.Context, r renamer[T], name string) err
 		_, err = r.drive(ctx, v)
 	case st.RenamedFrom != "":
 		_, err = r.finish(ctx, v)
+	}
+	if status.Code(err) == codes.NotFound {
+		return nil // the object is gone: a stale copy was dropped
 	}
 	return err
 }

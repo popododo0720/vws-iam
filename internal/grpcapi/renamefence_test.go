@@ -1,6 +1,7 @@
 package grpcapi_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -79,7 +80,7 @@ func TestRenamePartnerMustMatch(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			bob.Object.RenamedFrom, bob.Object.RenameStarted = "alice", now
+			bob.Object.RenamedFrom, bob.Object.RenameStarted, bob.Object.RenameConfirmed = "alice", now, true
 			if _, err := store.UpdateMarked(ctx, pb, bob.Object, bob.Version); err != nil {
 				t.Fatal(err)
 			}
@@ -109,6 +110,55 @@ func TestRenamePartnerMustMatch(t *testing.T) {
 			}
 			if allowed(e.getUser(t, "bob")) {
 				t.Error("bob inherits the groups of the new alice")
+			}
+		})
+	}
+}
+
+// TestStaleCopyAfterDeleteIsNotPromoted: coordinator A marks devs, then
+// coordinator B finishes the rename and builders is deleted before A
+// copies; A creates its stale copy and dies right after. The sweep must
+// drop the copy, not bring builders back.
+func TestStaleCopyAfterDeleteIsNotPromoted(t *testing.T) {
+	for _, bc := range renameBackends {
+		t.Run(bc.name, func(t *testing.T) {
+			c := &crashing{Backend: bc.open()}
+			h := &hooked{Backend: c}
+			now := time.Now().UTC()
+			e := newEnvOn(t, h, &now)
+			ctx := t.Context()
+			e.createGroupWith(t, "devs")
+			ran := false
+			h.at("create", iam.KindGroup, "builders", func() error {
+				ran = true
+				if _, err := e.api.UpdateGroupRename(ctx, renameGroupReq("devs", "", ""), "builders"); err != nil {
+					t.Errorf("coordinator B: %v", err)
+				}
+				if _, err := e.groups.DeleteGroup(ctx, &iamv1.DeleteGroupRequest{Name: groupName("builders")}); err != nil {
+					t.Errorf("delete builders: %v", err)
+				}
+				// A dies at the write after its create.
+				c.arm(2, false)
+				return nil
+			})
+			_, _ = e.api.UpdateGroupRename(ctx, renameGroupReq("devs", "", ""), "builders") //nolint:errcheck // A dies
+			if !ran {
+				t.Fatal("the hook did not run")
+			}
+			if !c.revive() {
+				t.Fatal("coordinator A did not crash")
+			}
+			*e.now = e.now.Add(2 * time.Minute)
+			if _, err := e.api.ResumeRenames(ctx); err != nil {
+				t.Fatal(err)
+			}
+			for _, n := range []string{"devs", "builders"} {
+				g, err := e.groups.GetGroup(ctx, &iamv1.GetGroupRequest{Name: groupName(n)})
+				if err == nil {
+					t.Errorf("group %s came back: %v", n, strings.TrimSpace(g.String()))
+					continue
+				}
+				wantAWS(t, err, codes.NotFound, "NoSuchEntity")
 			}
 		})
 	}

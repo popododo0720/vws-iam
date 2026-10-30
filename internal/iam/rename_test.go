@@ -16,6 +16,7 @@ func TestRenameStateValidation(t *testing.T) {
 		iam.User{Name: "alice", RenameState: iam.RenameState{RenameTo: "bob", RenameStarted: at}},
 		iam.User{Name: "bob", RenameState: iam.RenameState{RenamedFrom: "alice", RenameRequestID: "r-1", RenameStarted: at}},
 		iam.User{Name: "bob", RenameState: iam.RenameState{RenameRequestID: "r-1"}},
+		iam.User{Name: "bob", RenameState: iam.RenameState{RenamedFrom: "alice", RenameConfirmed: true, RenameStarted: at}},
 		iam.Group{Name: "devs", RenameState: iam.RenameState{RenameTo: strings.Repeat("g", 128), RenameStarted: at}},
 	}
 	for _, o := range good {
@@ -31,6 +32,8 @@ func TestRenameStateValidation(t *testing.T) {
 		iam.User{Name: "bob", RenameState: iam.RenameState{RenamedFrom: "bad name", RenameStarted: at}},
 		iam.User{Name: "alice", RenameState: iam.RenameState{RenameTo: "bob"}},
 		iam.User{Name: "alice", RenameState: iam.RenameState{RenameRequestID: "bad id!"}},
+		iam.User{Name: "bob", RenameState: iam.RenameState{RenameConfirmed: true}},
+		iam.User{Name: "alice", RenameState: iam.RenameState{RenameTo: "bob", RenameConfirmed: true, RenameStarted: at}},
 		iam.Group{Name: "devs", RenameState: iam.RenameState{RenameTo: strings.Repeat("g", 129), RenameStarted: at}},
 	}
 	for _, o := range bad {
