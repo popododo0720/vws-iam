@@ -456,12 +456,67 @@ func TestFailedSweepOfReservedKeyFailsClosed(t *testing.T) {
 	}
 }
 
-// TestFailedSweepOfUnreservedKeyIsHousekeeping keeps the old behaviour for
-// a pending key that was never reserved: it can never be activated, so a
-// failed removal does not block the create.
-func TestFailedSweepOfUnreservedKeyIsHousekeeping(t *testing.T) {
-	failing := false
-	b := failingKeyDelete{Backend: memstore.New(), on: &failing}
+// TestFailedSweepOfPendingKeyFailsClosed: a pending key that was never
+// reserved is not housekeeping either. The sweep returns any failure to
+// remove it, so the caller never counts while it is stored (#139); a key
+// another writer already removed is not a failure.
+func TestFailedSweepOfPendingKeyFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		open func() store.Backend
+	}{
+		{"memstore", func() store.Backend { return memstore.New() }},
+		{"kubestore", func() store.Backend { return kubestore.New(fakeKube(), "vws-iam") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			failing := false
+			b := failingKeyDelete{Backend: tc.open(), on: &failing}
+			withUser(t, b, "gina")
+			svc := accesskey.New(b, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t)}), nil)
+			ctx := context.Background()
+			lock := iam.MembershipLock{Name: iam.MembershipLockKey}
+			lv, err := store.Create(ctx, b, lock)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pre := store.PreOf(store.Versioned[iam.MembershipLock]{Object: lock, Version: lv})
+			pending, _, err := svc.CreatePending(ctx, "gina", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			failing = true
+			if err := svc.SweepPending(ctx, "gina", pre); !errors.Is(err, store.ErrUnavailable) {
+				t.Fatalf("failed removal of a pending key: %v, want ErrUnavailable", err)
+			}
+			if _, err := store.Get[iam.AccessKey](ctx, b, pending.AccessKeyID); err != nil {
+				t.Fatalf("pending key after the failed sweep: %v", err)
+			}
+			failing = false
+			if err := svc.SweepPending(ctx, "gina", pre); err != nil {
+				t.Fatalf("sweep: %v", err)
+			}
+			if _, err := store.Get[iam.AccessKey](ctx, b, pending.AccessKeyID); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("pending key not swept: %v", err)
+			}
+		})
+	}
+}
+
+// goneKeyDelete answers every conditional access key delete with
+// store.ErrNotFound, as if another writer removed the key first.
+type goneKeyDelete struct{ store.Backend }
+
+func (g goneKeyDelete) DeleteIf(ctx context.Context, kind iam.Kind, key, version string, pre store.Pre) error {
+	if kind == iam.KindAccessKey {
+		return store.ErrNotFound
+	}
+	return g.Backend.DeleteIf(ctx, kind, key, version, pre)
+}
+
+// TestSweepOfGoneKeyIsNotAFailure: a pending key already removed by
+// another writer does not stop the sweep.
+func TestSweepOfGoneKeyIsNotAFailure(t *testing.T) {
+	b := goneKeyDelete{memstore.New()}
 	withUser(t, b, "gina")
 	svc := accesskey.New(b, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t)}), nil)
 	ctx := context.Background()
@@ -474,8 +529,7 @@ func TestFailedSweepOfUnreservedKeyIsHousekeeping(t *testing.T) {
 	if _, _, err := svc.CreatePending(ctx, "gina", ""); err != nil {
 		t.Fatal(err)
 	}
-	failing = true
 	if err := svc.SweepPending(ctx, "gina", pre); err != nil {
-		t.Fatalf("failed removal of an unreserved pending key: %v, want nil", err)
+		t.Fatalf("sweep of a key already gone: %v, want nil", err)
 	}
 }

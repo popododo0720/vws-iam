@@ -23,6 +23,15 @@ func accessKeysPerUserExceeded() error {
 // create is retried.
 var errLockLost = errors.New("quota lock lost during key create")
 
+// errSweepFailed is a key create that could not remove a pending key of
+// the user, so it stopped before counting. A transient cause is retried
+// up to maxSweepAttempts times; the cause is wrapped with it.
+var errSweepFailed = errors.New("pending access key not removed")
+
+// maxSweepAttempts bounds how often one create retries a sweep that hit
+// store.ErrUnavailable before it returns that error.
+const maxSweepAttempts = 3
+
 // requestRepeated is a CreateAccessKey request_id that already created
 // key id. It names the key and never carries its secret.
 func requestRepeated(id string) error {
@@ -42,6 +51,7 @@ func requestRepeated(id string) error {
 // only while the user is still at userEtag, so a change of the user that
 // lands before the activation commits makes the create ABORTED too.
 func (p project) createKey(ctx context.Context, user, requestID, userEtag string) (accesskey.Credential, error) {
+	sweepFailures := 0
 	for attempt := 0; ; attempt++ {
 		var userPre *store.Pre
 		if userEtag != "" {
@@ -52,7 +62,12 @@ func (p project) createKey(ctx context.Context, user, requestID, userEtag string
 			userPre = &pre
 		}
 		cred, err := p.createKeyLocked(ctx, user, requestID, userPre)
-		if !errors.Is(err, errLockLost) {
+		retry := errors.Is(err, errLockLost)
+		if errors.Is(err, errSweepFailed) && errors.Is(err, store.ErrUnavailable) {
+			sweepFailures++
+			retry = sweepFailures < maxSweepAttempts
+		}
+		if !retry {
 			if errors.Is(err, accesskey.ErrLimitExceeded) {
 				return cred, accessKeysPerUserExceeded()
 			}
@@ -83,8 +98,9 @@ func (p project) createKey(ctx context.Context, user, requestID, userEtag string
 // then activated by store.UpdateIf on the user. The reservation commits
 // under this hold, so a later holder finds the key and sweeps it (it is
 // still pending) unless the activation won the key's compare-and-swap
-// first. A later holder that cannot remove a reserved key fails here
-// without counting, so the count never passes accesskey.MaxPerUser. If the
+// first. A later holder that cannot remove a pending key stops here
+// without counting (errSweepFailed; createKey retries a transient cause a
+// few times), so the count never passes accesskey.MaxPerUser. If the
 // activation fails, the create is retried and the user check refuses it
 // when the user moved.
 func (p project) createKeyLocked(
@@ -103,7 +119,7 @@ func (p project) createKeyLocked(
 		if errors.Is(err, store.ErrConflict) {
 			return accesskey.Credential{}, errLockLost
 		}
-		return accesskey.Credential{}, err
+		return accesskey.Credential{}, fmt.Errorf("%w: %w", errSweepFailed, err)
 	}
 	// A conditional delete may advance the lock's version (kubestore
 	// fences); the hold is still ours while holder and epoch are.
@@ -147,8 +163,8 @@ func (p project) createKeyLocked(
 	if !errors.Is(aerr, store.ErrConflict) && !errors.Is(aerr, store.ErrNotFound) {
 		err = fmt.Errorf("activate access key: %w", aerr)
 	}
-	// Best effort: a pending key left behind is inert and swept by the
-	// next create, so a failed removal does not block the retry.
+	// Best effort: a pending key left behind is swept by the next create,
+	// which stops before counting until the key is gone.
 	if derr := p.keys.DeletePending(dctx, cred.AccessKeyID, version, nil); derr != nil {
 		slog.Default().LogAttrs(ctx, slog.LevelWarn, "pending access key left for the next sweep",
 			slog.String("access_key_id", cred.AccessKeyID), slog.String("error", derr.Error()))

@@ -166,12 +166,11 @@ func (s *Service) Reserve(ctx context.Context, id, version string, pre store.Pre
 
 // SweepPending removes user's pending keys and their index entries while
 // pre holds. The caller holds the quota lock pre names: a pending key
-// that exists then was written under an older hold. An unreserved one can
-// never be activated (Activate is fenced on that older hold), so its
-// removal is housekeeping and a failure leaves it for the next sweep.
-// A reserved key can still be activated under its user's precondition
-// (#139), so the caller may count and create only once it is gone: any
-// failure to remove it is returned, as is store.ErrConflict (pre moved).
+// that exists then was written under an older hold. A reserved one can
+// still be activated under its user's precondition (#139), so the caller
+// may count and create only once every pending key is gone. Any failure
+// to remove one is returned, store.ErrConflict when pre moved; a key
+// already gone is not a failure.
 func (s *Service) SweepPending(ctx context.Context, user string, pre store.Pre) error {
 	all, err := store.List[iam.AccessKey](ctx, s.b)
 	if err != nil {
@@ -181,8 +180,7 @@ func (s *Service) SweepPending(ctx context.Context, user string, pre store.Pre) 
 		if k.Object.Status != iam.KeyPending || k.Object.Root || store.Fold(k.Object.UserName) != store.Fold(user) {
 			continue
 		}
-		err := s.DeletePending(ctx, k.Object.ID, k.Version, &pre)
-		if errors.Is(err, store.ErrConflict) || (err != nil && k.Object.Reserved) {
+		if err := s.DeletePending(ctx, k.Object.ID, k.Version, &pre); err != nil {
 			return err
 		}
 	}

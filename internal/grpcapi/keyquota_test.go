@@ -207,8 +207,10 @@ func (f failKeyDelete) DeleteIf(ctx context.Context, kind iam.Kind, key, version
 
 // TestAccessKeyCreateLockLostNoCleanup: a key written after its writer
 // lost the quota lock, and never removed, is inert: it is not listed or
-// counted and authenticates nothing, so the user still ends with at most
-// two usable keys, and the next create removes it (#138).
+// counted and authenticates nothing (#138). While it cannot be removed a
+// create stops before counting and fails UNAVAILABLE after a few sweep
+// attempts (#139), so the user never passes two keys; once the store
+// recovers the next create removes it.
 func TestAccessKeyCreateLockLostNoCleanup(t *testing.T) {
 	inner := memstore.New()
 	var down atomic.Bool
@@ -218,8 +220,12 @@ func TestAccessKeyCreateLockLostNoCleanup(t *testing.T) {
 	e := newEnvOn(t, b, &now)
 	ctx := t.Context()
 	u := e.createUser(t, ctx, "alice")
-	if _, err := e.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: u.GetName()}); err != nil {
-		t.Fatal(err)
+	_, err := e.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: u.GetName()})
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("create with an unremovable pending key: %v, want UNAVAILABLE", err)
+	}
+	if n := keysOf(t, inner, "alice"); n != 1 {
+		t.Fatalf("alice has %d stored keys after the failed create, want only the orphan", n)
 	}
 	orphan := b.first[strings.LastIndex(b.first, "/")+1:]
 	if orphan == "" {
@@ -234,8 +240,10 @@ func TestAccessKeyCreateLockLostNoCleanup(t *testing.T) {
 		t.Fatalf("orphan key %s signs: %v, want ErrInactive", orphan, err)
 	}
 	down.Store(false)
-	if _, err := e.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: u.GetName()}); err != nil {
-		t.Fatalf("second key refused with an orphan stored: %v", err)
+	for i := range 2 {
+		if _, err := e.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: u.GetName()}); err != nil {
+			t.Fatalf("key %d refused after the store recovered: %v", i+1, err)
+		}
 	}
 	_, err = e.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: u.GetName()})
 	wantAccessKeysPerUser(t, err)
@@ -251,5 +259,68 @@ func TestAccessKeyCreateLockLostNoCleanup(t *testing.T) {
 	}
 	if n := keysOf(t, inner, "alice"); n != 2 {
 		t.Fatalf("alice has %d stored keys, want 2", n)
+	}
+}
+
+// flakyKeyDelete fails the first fails conditional access key deletes
+// with store.ErrUnavailable and counts every one.
+type flakyKeyDelete struct {
+	store.Backend
+	fails, calls atomic.Int32
+}
+
+func (f *flakyKeyDelete) DeleteIf(ctx context.Context, kind iam.Kind, key, version string, pre store.Pre) error {
+	if kind == iam.KindAccessKey && f.calls.Add(1) <= f.fails.Load() {
+		return store.ErrUnavailable
+	}
+	return f.Backend.DeleteIf(ctx, kind, key, version, pre)
+}
+
+// TestAccessKeyCreateRetriesFailedSweep: a create whose sweep cannot
+// remove a stored pending key never counts past it (#139). A transient
+// failure is retried and the create then succeeds with the key removed;
+// a lasting one fails UNAVAILABLE after maxSweepAttempts (3) sweeps and
+// writes nothing.
+func TestAccessKeyCreateRetriesFailedSweep(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		fails int32
+		want  codes.Code
+		calls int32
+	}{
+		{"transient", 1, codes.OK, 2},
+		{"lasting", 1000, codes.Unavailable, 3}, // maxSweepAttempts
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inner := memstore.New()
+			b := &flakyKeyDelete{Backend: inner}
+			now := time.Now().UTC()
+			e := newEnvOn(t, b, &now)
+			ctx := t.Context()
+			u := e.createUser(t, ctx, "alice")
+			ring, err := secret.NewKeyring("k1", map[string][]byte{"k1": make([]byte, 32)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			svc := accesskey.New(store.Scoped(inner, proj), inner, proj, ring, nil)
+			pending, _, err := svc.CreatePending(ctx, "alice", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			b.fails.Store(tc.fails)
+			_, err = e.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: u.GetName()})
+			if status.Code(err) != tc.want {
+				t.Fatalf("create: %v, want %v", err, tc.want)
+			}
+			if n := b.calls.Load(); n != tc.calls {
+				t.Fatalf("%d conditional key deletes, want %d", n, tc.calls)
+			}
+			_, gerr := store.Get[iam.AccessKey](ctx, store.Scoped(inner, proj), pending.AccessKeyID)
+			if n := keysOf(t, inner, "alice"); tc.want == codes.OK && (n != 1 || !errors.Is(gerr, store.ErrNotFound)) {
+				t.Fatalf("after a retried sweep: %d keys, pending key %v; want 1 key and the pending one gone", n, gerr)
+			} else if tc.want != codes.OK && (n != 1 || gerr != nil) {
+				t.Fatalf("after a lasting sweep failure: %d keys, pending key %v; want only the pending key", n, gerr)
+			}
+		})
 	}
 }
