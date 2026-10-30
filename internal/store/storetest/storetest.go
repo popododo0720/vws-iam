@@ -33,6 +33,13 @@ func Samples() []iam.Object {
 		iam.Operation{ID: "op-1", Project: "proj-a", Response: []byte{1}, Created: now},
 		iam.ReplayEntry{Hash: strings.Repeat("cd", 32), Expires: now.Add(time.Hour)},
 		iam.AttemptCounter{Hash: strings.Repeat("ef", 32), Scope: iam.AttemptIP, Failures: 1, WindowStart: now},
+		iam.FidoDevice{
+			ID: iam.FidoID([]byte("credential-id-0001")), UserName: "Alice", UserUID: "u-1", Label: "yubikey",
+			CredentialID: []byte("credential-id-0001"), PublicKey: []byte{0xa5, 1, 2},
+			AAGUID:    "cb69481e-8ff7-4039-93ec-0a2729a154a8",
+			SignCount: 7, EnableTime: now, Certifications: map[string]string{"FIDO": "L1", "FIDO-FIPS-140-2": "L2"},
+			Meta: iam.Meta{UID: "f-1", Generation: 1},
+		},
 	}
 }
 
@@ -127,6 +134,10 @@ func Run(t *testing.T, open func(t *testing.T) store.Backend) {
 			case iam.AttemptCounter:
 				c := o
 				c.Failures, c.LockedUntil = 2, later
+				roundTrip(t, b, o, c)
+			case iam.FidoDevice:
+				c := o
+				c.SignCount = 8
 				roundTrip(t, b, o, c)
 			}
 		}

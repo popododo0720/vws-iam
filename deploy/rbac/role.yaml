@@ -6,5 +6,5 @@ metadata:
   namespace: vws-iam
 rules:
   - apiGroups: [iam.vws.popododo0720.io]
-    resources: [iamusers, iamgroups, iamroles, iampolicies, iamaccesskeys, iammfadevices, iamaccesskeyindexes, iamsessions, iamoperations, iamreplayentries, iamattemptcounters, iamgroupmembershiplocks]
+    resources: [iamusers, iamgroups, iamroles, iampolicies, iamaccesskeys, iammfadevices, iamaccesskeyindexes, iamsessions, iamoperations, iamreplayentries, iamattemptcounters, iamgroupmembershiplocks, iamfidodevices]
     verbs: [get, list, create, update, delete]

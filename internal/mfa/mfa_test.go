@@ -37,7 +37,8 @@ func setup(t *testing.T) (*mfa.Service, store.Backend, *clock) {
 	}
 	b := memstore.New()
 	for _, n := range []string{"alice", "bob"} {
-		if _, err := store.Create(context.Background(), b, iam.User{Name: n, ID: n}); err != nil {
+		u := iam.User{Meta: iam.Meta{UID: "uid-" + n}, Name: n, ID: n}
+		if _, err := store.Create(context.Background(), b, u); err != nil {
 			t.Fatal(err)
 		}
 	}

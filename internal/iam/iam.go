@@ -27,12 +27,13 @@ const (
 	KindReplay     Kind = "IamReplayEntry"
 	KindAttempt    Kind = "IamAttemptCounter"
 	KindMemberLock Kind = "IamGroupMembershipLock"
+	KindFidoDevice Kind = "IamFidoDevice"
 )
 
 // Kinds lists every stored kind.
 var Kinds = []Kind{
 	KindUser, KindGroup, KindRole, KindPolicy, KindAccessKey, KindMfaDevice,
-	KindKeyIndex, KindSession, KindOperation, KindReplay, KindAttempt, KindMemberLock,
+	KindKeyIndex, KindSession, KindOperation, KindReplay, KindAttempt, KindMemberLock, KindFidoDevice,
 }
 
 // Meta is the resource envelope every API resource carries.
@@ -170,6 +171,10 @@ type User struct {
 	// revocations (at most MaxRevokeRequests), so a duplicate request
 	// racing its first delivery does not bump the generation twice (#48).
 	SessionsRevokeRequests []string `json:"sessionsRevokeRequests,omitempty"`
+	// FidoRegistrations counts FIDO security key registrations. Each one
+	// writes it, so a DeleteUser that checked for keys before the
+	// registration fails its versioned delete (#133).
+	FidoRegistrations uint64 `json:"fidoRegistrations,omitempty"`
 }
 
 // MaxRevokeRequests bounds SessionsRevokeRequests.
