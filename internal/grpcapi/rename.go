@@ -312,7 +312,10 @@ func (r renamer[T]) drive(ctx context.Context, src store.Versioned[T]) (store.Ve
 				return zero, err
 			}
 		}
-		err = r.p.b.Delete(ctx, again.Object.Kind(), again.Object.Key(), again.Version)
+		// The old object goes only while dst is still the copy confirm
+		// wrote: a concurrent coordinator that rewrote dst since makes
+		// the delete fail, and the copy is confirmed again first.
+		err = r.p.b.DeleteIf(ctx, again.Object.Kind(), again.Object.Key(), again.Version, store.PreOf(dst))
 		if err == nil {
 			return r.finish(ctx, dst)
 		}
@@ -323,7 +326,8 @@ func (r renamer[T]) drive(ctx context.Context, src store.Versioned[T]) (store.Ve
 			return zero, errors.Join(errRenameBusy, err)
 		}
 		// Only rename writes touch a frozen object: a user rename moved a
-		// member of this group since the copy. Copy again.
+		// member of this group, or another coordinator rewrote dst, since
+		// the copy. Copy again.
 		src = again
 	}
 }
@@ -463,6 +467,11 @@ func (r renamer[T]) copyOf(ctx context.Context, src store.Versioned[T]) (store.V
 		}
 		return zero, false, alreadyExists(r.what + " " + quote(*name) + " already exists")
 	}
+	// Never downgrade a copy confirmed under src's mark: the confirming
+	// coordinator may delete src next, and an unconfirmed copy whose old
+	// object is gone is dropped (finish).
+	_, wst := r.mutable(&want)
+	wst.RenameConfirmed = got.Object.Rename().RenameConfirmed
 	ver, err = store.UpdateMarkedIf(ctx, r.p.b, want, got.Version, store.PreOf(src))
 	if errors.Is(err, store.ErrConflict) {
 		return got, false, errSourceMoved
