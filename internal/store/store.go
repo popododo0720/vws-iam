@@ -181,6 +181,16 @@ func UpdateMarked[T iam.Renamable](ctx context.Context, b Backend, obj T, versio
 	return b.Update(ctx, obj.Kind(), obj.Key(), spec, version)
 }
 
+// UpdateMarkedIf is UpdateIf without the rename guard. Only the rename
+// coordinator calls it.
+func UpdateMarkedIf[T iam.Renamable](ctx context.Context, b Backend, obj T, version string, pre Pre) (string, error) {
+	spec, err := encode(obj)
+	if err != nil {
+		return "", err
+	}
+	return b.UpdateIf(ctx, obj.Kind(), obj.Key(), spec, version, pre)
+}
+
 // Visible drops the new copy of an uncommitted rename from vs: an object
 // renamed from a name whose object is still listed with RenameTo naming
 // it. Until the old object is deleted it is the one that counts, so a

@@ -1,6 +1,7 @@
 package grpcapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,10 +31,19 @@ import (
 //     by anything else undoes the mark and is EntityAlreadyExists.
 //  4. references (users): group members, access keys, MFA devices, FIDO
 //     keys and console sessions are moved to the new name, pass after
-//     pass until one pass finds nothing left.
+//     pass until one pass finds nothing left. Every move commits only
+//     while the old object still holds the old name for this rename
+//     (store.UpdateIf on it), so a reference of a user created again
+//     under the old name is never moved.
 //  5. commit: the old object is deleted at the version read. A group
 //     moved by a concurrent user rename since the copy is copied again.
-//  6. finish: RenamedFrom is cleared on the new object.
+//     The copy of an existing new object commits only while the old
+//     object is unchanged, so a coordinator holding a stale old object
+//     never overwrites a fresher copy.
+//  6. finish: RenamedFrom is cleared on the new object. Once the old
+//     object is gone nothing names the old name: every writer that adds
+//     a reference to a user is fenced against the mark (membership lock,
+//     user version, or user UID), so no reference sweep runs then.
 //
 // A retry of the request, a rename to the same name, or the sweep
 // (ResumeRenames, every few minutes on each replica) finishes a rename cut
@@ -51,6 +61,10 @@ const maxRenamePasses = 8
 // errRenameBusy is a rename that kept losing races. It stays marked.
 var errRenameBusy = fmt.Errorf("%w: the rename did not settle; it is finished in the background", store.ErrConflict)
 
+// errSourceMoved is a conditional rename write whose old object changed
+// or is gone since it was read.
+var errSourceMoved = fmt.Errorf("%w: the renamed object moved", store.ErrConflict)
+
 func alreadyExists(msg string) error {
 	return fail(codes.AlreadyExists, "ALREADY_EXISTS", "EntityAlreadyExists", msg)
 }
@@ -67,8 +81,9 @@ type renamer[T iam.Renamable] struct {
 	uid     func(T) string
 	bump    func(*T)
 	// moveRefs moves every reference from one name to another; nil when
-	// nothing else names the object.
-	moveRefs func(ctx context.Context, from, to string) error
+	// nothing else names the object. A non-nil held returns, before each
+	// move, the precondition that the old object still holds the name.
+	moveRefs func(ctx context.Context, from, to string, held func(context.Context) (store.Pre, error)) error
 }
 
 func (s *Server) userRenamer(p project) renamer[iam.User] {
@@ -81,7 +96,9 @@ func (s *Server) userRenamer(p project) renamer[iam.User] {
 			u.Generation++
 			u.Updated = s.now().UTC()
 		},
-		moveRefs: func(ctx context.Context, from, to string) error { return s.moveUserRefs(ctx, p, from, to) },
+		moveRefs: func(ctx context.Context, from, to string, held func(context.Context) (store.Pre, error)) error {
+			return s.moveUserRefs(ctx, p, from, to, held)
+		},
 	}
 }
 
@@ -213,7 +230,7 @@ func renameEntity[T iam.Renamable](
 		if err == nil && sameKey && r.moveRefs != nil {
 			// References compare case-insensitively; this only shows
 			// the new case in group members.
-			err = r.moveRefs(ctx, old, newName)
+			err = r.moveRefs(ctx, old, newName, nil)
 		}
 		if err != nil || sameKey {
 			return cur, err
@@ -235,43 +252,124 @@ func (r renamer[T]) drive(ctx context.Context, src store.Versioned[T]) (store.Ve
 		unlock()
 	}
 	for attempt := 0; ; attempt++ {
-		dst, err := r.copyOf(ctx, src)
+		if attempt > maxRenamePasses {
+			return zero, errRenameBusy
+		}
+		dst, created, err := r.copyOf(ctx, src)
+		if err == nil && r.moveRefs != nil {
+			from, _ := r.mutable(&src.Object)
+			err = r.moveRefs(ctx, *from, dst.Object.Key(), func(ctx context.Context) (store.Pre, error) {
+				cur, gone, err := r.reread(ctx, src)
+				if err == nil && gone {
+					err = errSourceMoved
+				}
+				return store.PreOf(cur), err
+			})
+		}
+		if errors.Is(err, errSourceMoved) {
+			again, gone, rerr := r.reread(ctx, src)
+			switch {
+			case rerr != nil:
+				return zero, rerr
+			case gone:
+				return r.committed(ctx, dst, created)
+			}
+			src = again
+			continue
+		}
 		if err != nil {
 			return zero, err
 		}
-		from, _ := r.mutable(&src.Object)
-		if r.moveRefs != nil {
-			if err := r.moveRefs(ctx, *from, dst.Object.Key()); err != nil {
-				return zero, err
-			}
+		// Conditional writes may move src's version (kubestore fences)
+		// without changing it; anything else is copied again.
+		again, gone, err := r.reread(ctx, src)
+		if err != nil {
+			return zero, err
 		}
-		err = r.p.b.Delete(ctx, src.Object.Kind(), src.Object.Key(), src.Version)
-		if err == nil || errors.Is(err, store.ErrNotFound) {
+		if gone {
+			return r.committed(ctx, dst, created)
+		}
+		if !sameSpec(again.Object, src.Object) {
+			src = again
+			continue
+		}
+		err = r.p.b.Delete(ctx, again.Object.Kind(), again.Object.Key(), again.Version)
+		if err == nil {
 			return r.finish(ctx, dst)
 		}
-		if !errors.Is(err, store.ErrConflict) || attempt >= maxRenamePasses {
+		if errors.Is(err, store.ErrNotFound) {
+			return r.committed(ctx, dst, created)
+		}
+		if !errors.Is(err, store.ErrConflict) {
 			return zero, errors.Join(errRenameBusy, err)
 		}
 		// Only rename writes touch a frozen object: a user rename moved a
 		// member of this group since the copy. Copy again.
-		again, err := store.Get[T](ctx, r.p.b, src.Object.Key())
-		if errors.Is(err, store.ErrNotFound) {
-			return r.finish(ctx, dst)
-		}
-		if err != nil {
-			return zero, err
-		}
-		if r.uid(again.Object) != r.uid(src.Object) || again.Object.Rename().RenameTo != src.Object.Rename().RenameTo {
-			return zero, errRenameBusy
-		}
 		src = again
 	}
 }
 
+// reread reads src again. gone reports that src's rename was committed
+// by another coordinator: the old object is deleted, or its name holds
+// another object. A mark undone since is errRenameBusy.
+func (r renamer[T]) reread(ctx context.Context, src store.Versioned[T]) (store.Versioned[T], bool, error) {
+	again, err := store.Get[T](ctx, r.p.b, src.Object.Key())
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return src, true, nil
+	case err != nil:
+		return src, false, err
+	case r.uid(again.Object) != r.uid(src.Object):
+		return src, true, nil
+	case store.Fold(again.Object.Rename().RenameTo) != store.Fold(src.Object.Rename().RenameTo):
+		return src, false, errRenameBusy
+	}
+	return again, false, nil
+}
+
+// committed handles a rename another coordinator committed while this
+// one held a stale old object. If this call created dst and nobody wrote
+// it since, dst was created after the committed copy was gone (deleted
+// after the rename finished): it is removed again, not brought back.
+func (r renamer[T]) committed(ctx context.Context, dst store.Versioned[T], created bool) (store.Versioned[T], error) {
+	var zero store.Versioned[T]
+	cur, err := store.Get[T](ctx, r.p.b, dst.Object.Key())
+	if errors.Is(err, store.ErrNotFound) {
+		return zero, notFound(r.what + " " + quote(dst.Object.Rename().RenamedFrom) + " does not exist")
+	}
+	if err != nil {
+		return zero, err
+	}
+	if created && cur.Version == dst.Version {
+		err := r.p.b.Delete(ctx, cur.Object.Kind(), cur.Object.Key(), cur.Version)
+		if err == nil || errors.Is(err, store.ErrNotFound) {
+			return zero, notFound(r.what + " " + quote(dst.Object.Rename().RenamedFrom) + " does not exist")
+		}
+		if !errors.Is(err, store.ErrConflict) {
+			return zero, err
+		}
+		if cur, err = store.Get[T](ctx, r.p.b, dst.Object.Key()); err != nil {
+			return zero, err
+		}
+	}
+	if r.uid(cur.Object) != r.uid(dst.Object) {
+		return zero, errRenameBusy
+	}
+	return r.finish(ctx, cur)
+}
+
+// sameSpec reports whether a and b store the same spec.
+func sameSpec[T iam.Renamable](a, b T) bool {
+	ja, erra := json.Marshal(a)
+	jb, errb := json.Marshal(b)
+	return erra == nil && errb == nil && bytes.Equal(ja, jb)
+}
+
 // copyOf creates the new object of src's rename, or brings the one an
-// earlier attempt created up to date with src. A new name held by another
-// object undoes the mark and is EntityAlreadyExists.
-func (r renamer[T]) copyOf(ctx context.Context, src store.Versioned[T]) (store.Versioned[T], error) {
+// earlier attempt created up to date with src; created reports a create.
+// The update commits only while src is unchanged (errSourceMoved). A new
+// name held by another object undoes the mark and is EntityAlreadyExists.
+func (r renamer[T]) copyOf(ctx context.Context, src store.Versioned[T]) (store.Versioned[T], bool, error) {
 	var zero store.Versioned[T]
 	want := src.Object
 	name, st := r.mutable(&want)
@@ -279,29 +377,37 @@ func (r renamer[T]) copyOf(ctx context.Context, src store.Versioned[T]) (store.V
 	*name, st.RenamedFrom, st.RenameTo = src.Object.Rename().RenameTo, from, ""
 	ver, err := store.CreateMarked(ctx, r.p.b, want)
 	if err == nil {
-		return store.Versioned[T]{Object: want, Version: ver}, nil
+		return store.Versioned[T]{Object: want, Version: ver}, true, nil
 	}
 	if !errors.Is(err, store.ErrExists) {
-		return zero, err
+		return zero, false, err
 	}
 	got, err := store.Get[T](ctx, r.p.b, *name)
 	if errors.Is(err, store.ErrNotFound) {
-		return zero, errRenameBusy // deleted in between: the next call creates it
+		return zero, false, errRenameBusy // deleted in between: the next call creates it
 	}
 	if err != nil {
-		return zero, err
+		return zero, false, err
 	}
 	if r.uid(got.Object) != r.uid(src.Object) || store.Fold(got.Object.Rename().RenamedFrom) != store.Fold(from) {
-		if uerr := r.undo(ctx, src); uerr != nil {
-			return zero, uerr
+		if _, gone, err := r.reread(ctx, src); err == nil && gone {
+			// Committed by another coordinator, then the new object
+			// was renamed or deleted: nothing to undo.
+			return zero, false, notFound(r.what + " " + quote(from) + " does not exist")
 		}
-		return zero, alreadyExists(r.what + " " + quote(*name) + " already exists")
+		if uerr := r.undo(ctx, src); uerr != nil {
+			return zero, false, uerr
+		}
+		return zero, false, alreadyExists(r.what + " " + quote(*name) + " already exists")
 	}
-	ver, err = store.UpdateMarked(ctx, r.p.b, want, got.Version)
+	ver, err = store.UpdateMarkedIf(ctx, r.p.b, want, got.Version, store.PreOf(src))
+	if errors.Is(err, store.ErrConflict) {
+		return got, false, errSourceMoved
+	}
 	if err != nil {
-		return zero, err
+		return zero, false, err
 	}
-	return store.Versioned[T]{Object: want, Version: ver}, nil
+	return store.Versioned[T]{Object: want, Version: ver}, false, nil
 }
 
 // undo clears the mark of a rename whose new name was taken before the
@@ -321,8 +427,9 @@ func (r renamer[T]) undo(ctx context.Context, src store.Versioned[T]) error {
 
 // finish runs step 6 on dst, the new object. If the old object is still
 // there and still renamed to dst, the rename has not committed and is
-// driven from it. If the old name was created again by someone else, the
-// references are left alone: they may be the new object's.
+// driven from it. Otherwise every reference was moved before the old
+// object was deleted, and a reference to the old name now belongs to
+// whoever holds that name again: it is left alone.
 func (r renamer[T]) finish(ctx context.Context, dst store.Versioned[T]) (store.Versioned[T], error) {
 	var zero store.Versioned[T]
 	for attempt := 0; ; attempt++ {
@@ -335,12 +442,6 @@ func (r renamer[T]) finish(ctx context.Context, dst store.Versioned[T]) (store.V
 		case err == nil && r.uid(src.Object) == r.uid(dst.Object) &&
 			store.Fold(src.Object.Rename().RenameTo) == store.Fold(dst.Object.Key()):
 			return r.drive(ctx, src)
-		case errors.Is(err, store.ErrNotFound) && r.moveRefs != nil:
-			// Stragglers: a reference written by a call that read the
-			// old name before the mark.
-			if err := r.moveRefs(ctx, from, dst.Object.Key()); err != nil {
-				return zero, err
-			}
 		case err != nil && !errors.Is(err, store.ErrNotFound):
 			return zero, err
 		}
@@ -365,22 +466,35 @@ func (r renamer[T]) finish(ctx context.Context, dst store.Versioned[T]) (store.V
 // moveUserRefs moves every reference to user from in project p to the
 // name to: group members, access keys, MFA devices, FIDO keys and console
 // sessions. A pass that moved something or lost a race is repeated, so it
-// returns once a pass found nothing to move.
-func (s *Server) moveUserRefs(ctx context.Context, p project, from, to string) error {
+// returns once a pass found nothing to move. With held, each move commits
+// only while held's precondition (the old user) is unchanged.
+func (s *Server) moveUserRefs(
+	ctx context.Context, p project, from, to string, held func(context.Context) (store.Pre, error),
+) error {
 	// A case-only rename folds from and to alike: rewrite only names
 	// that are not already to, so a pass settles.
 	is := func(n string) bool { return n != "" && n != to && store.Fold(n) == store.Fold(from) }
 	for range maxRenamePasses {
 		moved := 0
-		count := func(err error) error {
-			switch {
+		// move runs one reference write, under held's precondition.
+		move := func(write func(pre *store.Pre) error) error {
+			var pre *store.Pre
+			if held != nil {
+				v, err := held(ctx)
+				if err != nil {
+					return err
+				}
+				pre = &v
+			}
+			switch err := write(pre); {
 			case err == nil, errors.Is(err, store.ErrConflict):
 				moved++
 				return nil
 			case errors.Is(err, store.ErrNotFound):
 				return nil
+			default:
+				return err
 			}
-			return err
 		}
 		groups, err := store.List[iam.Group](ctx, p.b)
 		if err != nil {
@@ -393,10 +507,18 @@ func (s *Server) moveUserRefs(ctx context.Context, p project, from, to string) e
 					g.Object.Members[i], hit = to, true
 				}
 			}
-			if hit {
-				if _, err := store.UpdateMarked(ctx, p.b, g.Object, g.Version); count(err) != nil {
+			if !hit {
+				continue
+			}
+			if err := move(func(pre *store.Pre) error {
+				if pre == nil {
+					_, err := store.UpdateMarked(ctx, p.b, g.Object, g.Version)
 					return err
 				}
+				_, err := store.UpdateMarkedIf(ctx, p.b, g.Object, g.Version, *pre)
+				return err
+			}); err != nil {
+				return err
 			}
 		}
 		keys, err := store.List[iam.AccessKey](ctx, p.b)
@@ -406,7 +528,7 @@ func (s *Server) moveUserRefs(ctx context.Context, p project, from, to string) e
 		for _, k := range keys {
 			if !k.Object.Root && is(k.Object.UserName) {
 				k.Object.UserName = to
-				if _, err := store.Update(ctx, p.b, k.Object, k.Version); count(err) != nil {
+				if err := move(func(pre *store.Pre) error { return updateRef(ctx, p.b, k, pre) }); err != nil {
 					return err
 				}
 			}
@@ -418,7 +540,7 @@ func (s *Server) moveUserRefs(ctx context.Context, p project, from, to string) e
 		for _, d := range devs {
 			if is(d.Object.UserName) {
 				d.Object.UserName = to
-				if _, err := store.Update(ctx, p.b, d.Object, d.Version); count(err) != nil {
+				if err := move(func(pre *store.Pre) error { return updateRef(ctx, p.b, d, pre) }); err != nil {
 					return err
 				}
 			}
@@ -430,7 +552,7 @@ func (s *Server) moveUserRefs(ctx context.Context, p project, from, to string) e
 		for _, d := range fido {
 			if is(d.Object.UserName) {
 				d.Object.UserName = to
-				if _, err := store.Update(ctx, p.b, d.Object, d.Version); count(err) != nil {
+				if err := move(func(pre *store.Pre) error { return updateRef(ctx, p.b, d, pre) }); err != nil {
 					return err
 				}
 			}
@@ -442,7 +564,13 @@ func (s *Server) moveUserRefs(ctx context.Context, p project, from, to string) e
 		for _, v := range sessions {
 			if v.Object.Project == p.id && is(v.Object.UserName) {
 				v.Object.UserName = to
-				if _, err := store.Update(ctx, s.b, v.Object, v.Version); count(err) != nil {
+				if err := move(func(pre *store.Pre) error {
+					if pre != nil {
+						// Sessions live outside the project scope.
+						pre.Key = p.id + "/" + pre.Key
+					}
+					return updateRef(ctx, s.b, v, pre)
+				}); err != nil {
 					return err
 				}
 			}
@@ -454,6 +582,17 @@ func (s *Server) moveUserRefs(ctx context.Context, p project, from, to string) e
 	return errRenameBusy
 }
 
+// updateRef writes v back, conditionally on pre when it is set.
+func updateRef[T iam.Object](ctx context.Context, b store.Backend, v store.Versioned[T], pre *store.Pre) error {
+	var err error
+	if pre == nil {
+		_, err = store.Update(ctx, b, v.Object, v.Version)
+	} else {
+		_, err = store.UpdateIf(ctx, b, v.Object, v.Version, *pre)
+	}
+	return err
+}
+
 // renameMarks is the part of a stored user or group the sweep reads.
 type renameMarks struct {
 	Name string `json:"name"`
@@ -463,39 +602,65 @@ type renameMarks struct {
 // ResumeRenames finishes every user and group rename that has been in
 // flight for at least renameGrace, in every project, and returns how many
 // it finished. cmd/vws-iam runs it every few minutes on each replica;
-// races between replicas are harmless.
+// races between replicas are harmless. It lists in pages (gcPage).
 func (s *Server) ResumeRenames(ctx context.Context) (int, error) {
 	n := 0
 	var errs []error
 	for _, kind := range []iam.Kind{iam.KindUser, iam.KindGroup} {
-		es, err := s.b.List(ctx, kind)
+		err := s.listPages(ctx, kind, func(es []store.Entry) {
+			for _, e := range es {
+				var m renameMarks
+				if err := json.Unmarshal(e.Spec, &m); err != nil {
+					errs = append(errs, fmt.Errorf("decode %s %s: %w", kind, e.Key, err))
+					continue
+				}
+				pid, _, ok := strings.Cut(e.Key, "/")
+				if !m.Renaming() || !ok || !iam.ValidProject(pid) || s.now().Sub(m.RenameStarted) < renameGrace {
+					continue
+				}
+				p := s.project(pid)
+				var err error
+				if kind == iam.KindUser {
+					err = resume(ctx, s.userRenamer(p), m.Name)
+				} else {
+					err = resume(ctx, s.groupRenamer(p), m.Name)
+				}
+				if err != nil {
+					errs = append(errs, fmt.Errorf("%s %s: %w", kind, e.Key, err))
+					continue
+				}
+				n++
+			}
+		})
 		if err != nil {
 			return n, err
 		}
-		for _, e := range es {
-			var m renameMarks
-			if err := json.Unmarshal(e.Spec, &m); err != nil {
-				errs = append(errs, fmt.Errorf("decode %s %s: %w", kind, e.Key, err))
-				continue
-			}
-			pid, _, ok := strings.Cut(e.Key, "/")
-			if !m.Renaming() || !ok || !iam.ValidProject(pid) || s.now().Sub(m.RenameStarted) < renameGrace {
-				continue
-			}
-			p := s.project(pid)
-			if kind == iam.KindUser {
-				err = resume(ctx, s.userRenamer(p), m.Name)
-			} else {
-				err = resume(ctx, s.groupRenamer(p), m.Name)
-			}
-			if err != nil {
-				errs = append(errs, fmt.Errorf("%s %s: %w", kind, e.Key, err))
-				continue
-			}
-			n++
-		}
 	}
 	return n, errors.Join(errs...)
+}
+
+// listPages calls visit with every entry of kind, a page (gcPage) at a
+// time when the backend pages (store.Pager), else all at once.
+func (s *Server) listPages(ctx context.Context, kind iam.Kind, visit func([]store.Entry)) error {
+	pager, ok := s.b.(store.Pager)
+	if !ok {
+		es, err := s.b.List(ctx, kind)
+		if err != nil {
+			return err
+		}
+		visit(es)
+		return nil
+	}
+	for cont := ""; ; {
+		es, next, err := pager.ListPage(ctx, kind, int64(s.gcPage), cont)
+		if err != nil {
+			return err
+		}
+		visit(es)
+		if cont = next; cont == "" {
+			return nil
+		}
+	}
 }
 
 // resume rolls the rename of name forward from whichever side it is.
