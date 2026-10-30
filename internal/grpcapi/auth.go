@@ -255,20 +255,32 @@ var serverKeys = map[string]bool{
 // Authorize evaluates identity policies after rechecking the principal.
 // No resources means "*". The decision is ALLOW only if every resource is
 // allowed; an explicit deny anywhere wins.
-func (s *Server) Authorize(ctx context.Context, req *iamv1.AuthorizeRequest) (resp *iamv1.AuthorizeResponse, err error) {
+func (s *Server) Authorize(ctx context.Context, req *iamv1.AuthorizeRequest) (*iamv1.AuthorizeResponse, error) {
+	// TODO(#109): set resp.EncodedMessage on a deny once vws-proto
+	// carries AuthorizeResponse.encoded_message (popododo0720/vws-proto#84).
+	resp, _, err := s.authorize(ctx, req, false)
+	return resp, err
+}
+
+// authorize is Authorize; with encode, a deny decided by policy
+// evaluation also returns its encoded authorization message
+// (authorizationMessage) for DecodeAuthorizationMessage.
+func (s *Server) authorize(
+	ctx context.Context, req *iamv1.AuthorizeRequest, encode bool,
+) (resp *iamv1.AuthorizeResponse, encoded string, err error) {
 	defer func() {
 		s.m.add(ctx, s.m.authz, attribute.String("result", result(err)), attribute.String("decision", resp.GetDecision().String()))
 	}()
 	if req.GetAction() == "" || !strings.Contains(req.GetAction(), ":") {
-		return nil, invalidSpec("action must look like service:Action")
+		return nil, "", invalidSpec("action must look like service:Action")
 	}
 	c, err := s.recheck(ctx, req.GetPrincipal())
 	if err != nil {
 		var ae *apiError
 		if errors.As(err, &ae) {
-			return &iamv1.AuthorizeResponse{Decision: iamv1.Decision_DECISION_DENY_IMPLICIT, Reason: ae.msg}, nil
+			return &iamv1.AuthorizeResponse{Decision: iamv1.Decision_DECISION_DENY_IMPLICIT, Reason: ae.msg}, "", nil
 		}
-		return nil, toStatus(ctx, err)
+		return nil, "", toStatus(ctx, err)
 	}
 	rc := map[string][]string{}
 	for k, v := range req.GetContext() {
@@ -286,32 +298,44 @@ func (s *Server) Authorize(ctx context.Context, req *iamv1.AuthorizeRequest) (re
 	if len(resources) == 0 {
 		resources = []string{"*"}
 	}
-	var allow, implicit *iamv1.AuthorizeResponse
+	var allow, denyResp *iamv1.AuthorizeResponse
+	var deny denied
 	for _, res := range resources {
 		d, err := c.project.authz.Authorize(ctx, c.az, req.GetAction(), res, rc)
 		if err != nil {
 			if errors.Is(err, authz.ErrNoSuchEntity) {
-				return &iamv1.AuthorizeResponse{Decision: iamv1.Decision_DECISION_DENY_IMPLICIT, Reason: "principal no longer exists"}, nil
+				gone := &iamv1.AuthorizeResponse{
+					Decision: iamv1.Decision_DECISION_DENY_IMPLICIT, Reason: "principal no longer exists",
+				}
+				return gone, "", nil
 			}
-			return nil, toStatus(ctx, err)
+			return nil, "", toStatus(ctx, err)
 		}
 		out := &iamv1.AuthorizeResponse{MatchedPolicy: d.Policy, MatchedStatement: d.Statement, Reason: d.Reason}
 		switch {
 		case d.Explicit:
 			out.Decision = iamv1.Decision_DECISION_DENY_EXPLICIT
-			return out, nil
-		case !d.Allowed && implicit == nil:
+			denyResp, deny = out, denied{resource: res, d: d, ctx: rc}
+		case !d.Allowed && denyResp == nil:
 			out.Decision = iamv1.Decision_DECISION_DENY_IMPLICIT
-			implicit = out
+			denyResp, deny = out, denied{resource: res, d: d, ctx: rc}
 		case d.Allowed && allow == nil:
 			out.Decision = iamv1.Decision_DECISION_ALLOW
 			allow = out
 		}
+		if d.Explicit {
+			break
+		}
 	}
-	if implicit != nil {
-		return implicit, nil
+	if denyResp == nil {
+		return allow, "", nil
 	}
-	return allow, nil
+	if encode {
+		if encoded, err = authorizationMessage(c, req.GetPrincipal(), req.GetAction(), deny); err != nil {
+			return nil, "", toStatus(ctx, err)
+		}
+	}
+	return denyResp, encoded, nil
 }
 
 func hashToken(tok string) string {

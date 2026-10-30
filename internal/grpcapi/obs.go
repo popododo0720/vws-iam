@@ -21,10 +21,11 @@ func obsOptions() []grpc.ServerOption { return grpcobs.ServerOptions(ServiceName
 // metrics are the IAM-specific OTel instruments; RPC counts and latency
 // come from grpcobs.
 type metrics struct {
-	authn  metric.Int64Counter
-	authz  metric.Int64Counter
-	login  metric.Int64Counter
-	issued metric.Int64Counter
+	authn   metric.Int64Counter
+	authz   metric.Int64Counter
+	login   metric.Int64Counter
+	issued  metric.Int64Counter
+	decoded metric.Int64Counter
 }
 
 func newMetrics() *metrics {
@@ -37,10 +38,11 @@ func newMetrics() *metrics {
 		return ctr
 	}
 	return &metrics{
-		authn:  c("vws.iam.authenticate", "Authenticate results by key kind and result"),
-		authz:  c("vws.iam.authorize", "Authorize decisions"),
-		login:  c("vws.iam.login", "Login results"),
-		issued: c("vws.iam.sts.issued", "Temporary credentials issued"),
+		authn:   c("vws.iam.authenticate", "Authenticate results by key kind and result"),
+		authz:   c("vws.iam.authorize", "Authorize decisions"),
+		login:   c("vws.iam.login", "Login results"),
+		issued:  c("vws.iam.sts.issued", "Temporary credentials issued"),
+		decoded: c("vws.iam.sts.decode_authorization_message", "DecodeAuthorizationMessage results"),
 	}
 }
 
@@ -76,7 +78,7 @@ func isMutating(method string) bool {
 func auditUnary(ctx context.Context, req any, info *grpc.UnaryServerInfo, next grpc.UnaryHandler) (any, error) {
 	method := info.FullMethod[strings.LastIndex(info.FullMethod, "/")+1:]
 	resp, err := next(ctx, req)
-	if isMutating(method) || method == "Authenticate" {
+	if isMutating(method) || method == "Authenticate" || method == "DecodeAuthorizationMessage" {
 		level := slog.LevelInfo
 		if err != nil {
 			level = slog.LevelWarn
