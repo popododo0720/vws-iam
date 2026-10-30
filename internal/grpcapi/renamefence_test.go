@@ -30,8 +30,23 @@ func TestLoginMFARacingRenameMark(t *testing.T) {
 			ran := false
 			h.at("list", iam.KindMfaDevice, "", func() error {
 				ran = true
-				markRename(t, h, "alice", "bob", now)
+				// The rename marks alice, copies her to bob and moves
+				// her device (markRename, with this ctx).
 				pb := store.Scoped(h, proj)
+				u, err := store.Get[iam.User](ctx, pb, "alice")
+				if err != nil {
+					t.Fatal(err)
+				}
+				u.Object.RenameTo, u.Object.RenameStarted = "bob", now
+				u.Object.Generation++
+				if _, err := store.UpdateMarked(ctx, pb, u.Object, u.Version); err != nil {
+					t.Fatal(err)
+				}
+				cp := u.Object
+				cp.Name, cp.RenameTo, cp.RenamedFrom = "bob", "", "alice"
+				if _, err := store.CreateMarked(ctx, pb, cp); err != nil {
+					t.Fatal(err)
+				}
 				d, err := store.Get[iam.MfaDevice](ctx, pb, "alice-phone")
 				if err != nil {
 					t.Fatal(err)
