@@ -111,7 +111,11 @@ func (a *Authorizer) IdentityPolicies(ctx context.Context, p Principal) ([]polic
 		}
 		// While a rename is in flight some groups may still list the
 		// other name; both name this user (#134).
-		groups, err := GroupsOf(ctx, a.b, u.Object.Name, u.Object.RenamePartner())
+		partner, err := RenamePartner(ctx, a.b, u.Object)
+		if err != nil {
+			return nil, "", err
+		}
+		groups, err := GroupsOf(ctx, a.b, u.Object.Name, partner)
 		if err != nil {
 			return nil, "", err
 		}
@@ -172,6 +176,34 @@ func (a *Authorizer) Authorize(ctx context.Context, p Principal, action, resourc
 	}
 	r := policy.Request{Principal: arn, Account: a.account, Action: action, Resource: resource, Context: c}
 	return policy.Evaluate(r, ids, session), nil
+}
+
+// RenamePartner returns the other name of u's in-flight rename while that
+// name still holds u's counterpart: the same UID with the reciprocal
+// marker (RenameTo naming u on the old object, RenamedFrom on the new
+// one). Otherwise it is "": a rename that deleted the old object moved
+// every reference first, and a user created again under the old name is
+// someone else, whose groups u must not inherit (#134).
+func RenamePartner(ctx context.Context, b store.Backend, u iam.User) (string, error) {
+	other := u.RenamePartner()
+	if other == "" {
+		return "", nil
+	}
+	v, err := store.Get[iam.User](ctx, b, other)
+	if errors.Is(err, store.ErrNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	back := v.Object.RenameTo
+	if u.RenameTo != "" {
+		back = v.Object.RenamedFrom
+	}
+	if v.Object.UID != u.UID || store.Fold(back) != store.Fold(u.Name) {
+		return "", nil
+	}
+	return other, nil
 }
 
 // GroupsOf returns the groups whose members include one of names. The

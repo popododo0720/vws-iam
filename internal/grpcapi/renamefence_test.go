@@ -59,3 +59,57 @@ func TestLoginMFARacingRenameMark(t *testing.T) {
 		})
 	}
 }
+
+// TestRenamePartnerMustMatch: a user rename of alice to bob deleted alice
+// and crashed before it cleared bob's RenamedFrom. A new alice joins a
+// privileged group; bob must not inherit its policies.
+func TestRenamePartnerMustMatch(t *testing.T) {
+	for _, bc := range renameBackends {
+		t.Run(bc.name, func(t *testing.T) {
+			b := bc.open()
+			now := time.Now().UTC()
+			e := newEnvOn(t, b, &now)
+			ctx := t.Context()
+			e.createUser(t, ctx, "alice")
+			if _, err := e.api.UpdateUserRename(ctx, renameUserReq("alice", "", ""), "bob"); err != nil {
+				t.Fatal(err)
+			}
+			pb := store.Scoped(b, proj)
+			bob, err := store.Get[iam.User](ctx, pb, "bob")
+			if err != nil {
+				t.Fatal(err)
+			}
+			bob.Object.RenamedFrom, bob.Object.RenameStarted = "alice", now
+			if _, err := store.UpdateMarked(ctx, pb, bob.Object, bob.Version); err != nil {
+				t.Fatal(err)
+			}
+			alice := e.createUser(t, ctx, "alice")
+			doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*"}]}`
+			if _, err := e.groups.CreateGroup(ctx, &iamv1.CreateGroupRequest{
+				Parent: parentName, GroupId: "admins",
+				Group: &iamv1.Group{Spec: &iamv1.GroupSpec{
+					Members: []string{alice.GetName()}, InlinePolicies: map[string]string{"all": doc},
+				}},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			allowed := func(u *iamv1.User) bool {
+				t.Helper()
+				r, err := e.auth.Authorize(ctx, &iamv1.AuthorizeRequest{Principal: &iamv1.Principal{
+					Type: iamv1.PrincipalType_PRINCIPAL_TYPE_USER, Arn: u.GetStatus().GetArn(), Project: proj,
+					UniqueId: u.GetStatus().GetUniqueId(), Resource: u.GetName(),
+				}, Action: "s3:GetObject"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return r.GetDecision() == iamv1.Decision_DECISION_ALLOW
+			}
+			if !allowed(alice) {
+				t.Error("the new alice is not allowed by her group")
+			}
+			if allowed(e.getUser(t, "bob")) {
+				t.Error("bob inherits the groups of the new alice")
+			}
+		})
+	}
+}
