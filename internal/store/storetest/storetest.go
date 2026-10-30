@@ -197,6 +197,9 @@ func Run(t *testing.T, open func(t *testing.T) store.Backend) {
 			t.Fatalf("get bob: %v %+v", err, got.Object)
 		}
 	})
+	t.Run("RenameMarkersFreezeAndRoundTrip", func(t *testing.T) {
+		renameMarkers(t, open(t))
+	})
 	t.Run("InvalidObjectIsNotStored", func(t *testing.T) {
 		b := open(t)
 		ctx := context.Background()
@@ -441,4 +444,68 @@ func mustJSON(t *testing.T, v any) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// renameMarkers: a user with rename markers survives the backend (#134),
+// the typed writes refuse it, and Visible hides the uncommitted copy.
+func renameMarkers(t *testing.T, b store.Backend) {
+	ctx := context.Background()
+	started := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	old := iam.User{Name: "alice", ID: "AIDA1", RenameState: iam.RenameState{
+		RenameTo: "bob", RenameRequestID: "r-1", RenameStarted: started,
+	}}
+	if _, err := store.Create(ctx, b, old); !errors.Is(err, store.ErrRenaming) {
+		t.Fatalf("Create of a marked user: %v", err)
+	}
+	if _, err := store.CreateMarked(ctx, b, old); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Get[iam.User](ctx, b, "alice")
+	if err != nil || got.Object.RenameState != old.RenameState {
+		t.Fatalf("marks after a round trip: %+v %v", got.Object.RenameState, err)
+	}
+	moved := got.Object
+	moved.Path = "/x/"
+	if _, err := store.Update(ctx, b, moved, got.Version); !errors.Is(err, store.ErrRenaming) {
+		t.Fatalf("Update of a marked user: %v", err)
+	}
+	_, err = store.Mutate(ctx, b, "alice", func(u *iam.User) error { u.Path = "/x/"; return nil })
+	if !errors.Is(err, store.ErrRenaming) {
+		t.Fatalf("Mutate of a marked user: %v", err)
+	}
+	cp := iam.User{Name: "bob", ID: "AIDA1", RenameState: iam.RenameState{
+		RenamedFrom: "alice", RenameRequestID: "r-1", RenameStarted: started,
+	}}
+	if _, err := store.CreateMarked(ctx, b, cp); err != nil {
+		t.Fatal(err)
+	}
+	vs, err := store.List[iam.User](ctx, b)
+	if err != nil || len(vs) != 2 {
+		t.Fatalf("list %v %v", vs, err)
+	}
+	if vis := store.Visible(vs); len(vis) != 1 || vis[0].Object.Name != "alice" {
+		t.Fatalf("visible %+v", vis)
+	}
+	// Once the old user is gone the copy is the user.
+	if err := b.Delete(ctx, iam.KindUser, "alice", got.Version); err != nil {
+		t.Fatal(err)
+	}
+	vs, err = store.List[iam.User](ctx, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vis := store.Visible(vs); len(vis) != 1 || vis[0].Object.Name != "bob" {
+		t.Fatalf("visible after commit %+v", vis)
+	}
+	done, err := store.Get[iam.User](ctx, b, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done.Object.RenameState = iam.RenameState{RenameRequestID: "r-1"}
+	if _, err := store.UpdateMarked(ctx, b, done.Object, done.Version); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Mutate(ctx, b, "bob", func(u *iam.User) error { u.Path = "/y/"; return nil }); err != nil {
+		t.Fatalf("Mutate after the rename finished: %v", err)
+	}
 }

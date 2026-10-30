@@ -21,6 +21,11 @@ var (
 	ErrConflict = errors.New("version conflict")
 	// ErrUnavailable is a transient backend failure; the call may be retried.
 	ErrUnavailable = errors.New("store unavailable")
+	// ErrRenaming is a write of a user or group whose rename is in flight
+	// (iam.RenameState). Only the rename coordinator writes it, through
+	// CreateMarked and UpdateMarked; the caller may retry once the rename
+	// finished.
+	ErrRenaming = errors.New("entity is being renamed")
 )
 
 // Entry is one stored spec and its version.
@@ -108,8 +113,20 @@ func decode[T iam.Object](e Entry) (Versioned[T], error) {
 	return v, nil
 }
 
-// Create validates and stores a new object.
+// frozen is ErrRenaming if obj is a user or group with a rename in flight.
+func frozen(obj iam.Object) error {
+	if r, ok := obj.(iam.Renamable); ok && r.Rename().Renaming() {
+		return fmt.Errorf("%s %q: %w", obj.Kind(), obj.Key(), ErrRenaming)
+	}
+	return nil
+}
+
+// Create validates and stores a new object. An object with a rename in
+// flight is refused with ErrRenaming (CreateMarked writes one).
 func Create[T iam.Object](ctx context.Context, b Backend, obj T) (string, error) {
+	if err := frozen(obj); err != nil {
+		return "", err
+	}
 	spec, err := encode(obj)
 	if err != nil {
 		return "", err
@@ -117,8 +134,13 @@ func Create[T iam.Object](ctx context.Context, b Backend, obj T) (string, error)
 	return b.Create(ctx, obj.Kind(), obj.Key(), spec)
 }
 
-// Update validates and replaces an object read at version.
+// Update validates and replaces an object read at version. An object
+// read with a rename in flight is refused with ErrRenaming: a write that
+// read it before the rename began fails its version check instead.
 func Update[T iam.Object](ctx context.Context, b Backend, obj T, version string) (string, error) {
+	if err := frozen(obj); err != nil {
+		return "", err
+	}
 	spec, err := encode(obj)
 	if err != nil {
 		return "", err
@@ -129,11 +151,68 @@ func Update[T iam.Object](ctx context.Context, b Backend, obj T, version string)
 // UpdateIf validates and replaces an object read at version, only while
 // pre holds (Backend.UpdateIf).
 func UpdateIf[T iam.Object](ctx context.Context, b Backend, obj T, version string, pre Pre) (string, error) {
+	if err := frozen(obj); err != nil {
+		return "", err
+	}
 	spec, err := encode(obj)
 	if err != nil {
 		return "", err
 	}
 	return b.UpdateIf(ctx, obj.Kind(), obj.Key(), spec, version, pre)
+}
+
+// CreateMarked is Create without the rename guard. Only the rename
+// coordinator calls it, to write an object that carries rename markers.
+func CreateMarked[T iam.Renamable](ctx context.Context, b Backend, obj T) (string, error) {
+	spec, err := encode(obj)
+	if err != nil {
+		return "", err
+	}
+	return b.Create(ctx, obj.Kind(), obj.Key(), spec)
+}
+
+// UpdateMarked is Update without the rename guard. Only the rename
+// coordinator calls it.
+func UpdateMarked[T iam.Renamable](ctx context.Context, b Backend, obj T, version string) (string, error) {
+	spec, err := encode(obj)
+	if err != nil {
+		return "", err
+	}
+	return b.Update(ctx, obj.Kind(), obj.Key(), spec, version)
+}
+
+// UpdateMarkedIf is UpdateIf without the rename guard. Only the rename
+// coordinator calls it.
+func UpdateMarkedIf[T iam.Renamable](ctx context.Context, b Backend, obj T, version string, pre Pre) (string, error) {
+	spec, err := encode(obj)
+	if err != nil {
+		return "", err
+	}
+	return b.UpdateIf(ctx, obj.Kind(), obj.Key(), spec, version, pre)
+}
+
+// Visible drops the new copy of an uncommitted rename from vs: an object
+// renamed from a name whose object is still listed with RenameTo naming
+// it. Until the old object is deleted it is the one that counts, so a
+// listing shows each user or group once.
+func Visible[T iam.Renamable](vs []Versioned[T]) []Versioned[T] {
+	to := map[string]string{}
+	for _, v := range vs {
+		if r := v.Object.Rename(); r.RenameTo != "" {
+			to[Fold(v.Object.Key())] = Fold(r.RenameTo)
+		}
+	}
+	if len(to) == 0 {
+		return vs
+	}
+	out := make([]Versioned[T], 0, len(vs))
+	for _, v := range vs {
+		if from := v.Object.Rename().RenamedFrom; from != "" && to[Fold(from)] == Fold(v.Object.Key()) {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
 }
 
 // Get reads one object.
