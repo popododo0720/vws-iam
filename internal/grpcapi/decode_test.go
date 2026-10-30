@@ -228,12 +228,72 @@ func TestDecodeAuthorizationMessageSourceIPDeny(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				_, err = e.api.DecodeAuthorizationMessage(ctx, nil, l.GetSessionToken(), enc)
+				_, err = e.api.DecodeAuthorizationMessageFrom(ctx, nil, l.GetSessionToken(), ip, enc)
 				if deny {
 					wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
 				} else if err != nil {
 					t.Fatalf("console from %s: %v", ip, err)
 				}
+			}
+		})
+	}
+}
+
+// TestDecodeAuthorizationMessageConsoleRequestIP: on the console path
+// aws:SourceIp is the address of the current request, not the one stored
+// at Login, so a session token from an allowed address that is reused
+// from a denied address is refused, on both store backends.
+func TestDecodeAuthorizationMessageConsoleRequestIP(t *testing.T) {
+	for _, bk := range renameBackends {
+		t.Run(bk.name, func(t *testing.T) {
+			now := time.Now().UTC()
+			e := newEnvOn(t, bk.open(), &now)
+			ctx := t.Context()
+			bob := e.keyedUser(t, "bob", `{"Version":"2012-10-17","Statement":[
+				{"Sid":"NoDelete","Effect":"Deny","Action":"s3:DeleteObject","Resource":"*"}]}`)
+			auditor := e.keyedUser(t, "auditor", `{"Version":"2012-10-17","Statement":[
+				{"Effect":"Allow","Action":"sts:DecodeAuthorizationMessage","Resource":"*"},
+				{"Effect":"Deny","Action":"sts:DecodeAuthorizationMessage","Resource":"*",
+				 "Condition":{"IpAddress":{"aws:SourceIp":"10.0.0.0/8"}}}]}`)
+			a, err := e.auth.Authenticate(ctx, e.sign(bob.id, bob.secretKey, ""))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := &iamv1.AuthorizeRequest{Principal: a.GetPrincipal(), Action: "s3:DeleteObject"}
+			_, enc, err := e.api.AuthorizeEncoded(ctx, req)
+			if err != nil || enc == "" {
+				t.Fatalf("deny: %q %v", enc, err)
+			}
+			const pw = "correct horse battery"
+			lp := &iamv1.SetLoginProfileRequest{Name: auditor.user.GetName(), Password: pw}
+			if _, err := e.users.SetLoginProfile(ctx, lp); err != nil {
+				t.Fatal(err)
+			}
+			login := func(ip string) string {
+				l, err := e.auth.Login(ctx, &iamv1.LoginRequest{Project: proj, UserName: "auditor", Password: pw, SourceIp: ip})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return l.GetSessionToken()
+			}
+
+			// Logged in from an allowed address, reused from a denied one.
+			allowed := login("192.0.2.7")
+			if _, err := e.api.DecodeAuthorizationMessageFrom(ctx, nil, allowed, "192.0.2.7", enc); err != nil {
+				t.Fatalf("from the login address: %v", err)
+			}
+			_, err = e.api.DecodeAuthorizationMessageFrom(ctx, nil, allowed, "10.9.9.9", enc)
+			wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+
+			// Logged in from a denied address, used from an allowed one.
+			denied := login("10.9.9.9")
+			if _, err := e.api.DecodeAuthorizationMessageFrom(ctx, nil, denied, "192.0.2.7", enc); err != nil {
+				t.Fatalf("from an allowed address: %v", err)
+			}
+			// No request address: aws:SourceIp is absent, never the
+			// stored Login address, so the IpAddress Deny does not match.
+			if _, err := e.api.DecodeAuthorizationMessageFrom(ctx, nil, denied, "", enc); err != nil {
+				t.Fatalf("no request address: %v", err)
 			}
 		})
 	}

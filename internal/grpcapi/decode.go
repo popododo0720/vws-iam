@@ -19,10 +19,19 @@ import (
 // message. Neither the encoded nor the decoded message is logged or
 // stored.
 //
+// The permission is evaluated with the aws:SourceIp of the current
+// request: the address in the SigV4 request, or consoleIP, the address
+// the gateway saw for this console request. The address stored with the
+// console session at Login is never used, so a session token reused from
+// another address meets the Deny for that address. With no consoleIP the
+// key is absent, as AWS evaluates a missing key: IpAddress conditions do
+// not match.
+//
 // TODO(#109): serve this as TokenService.DecodeAuthorizationMessage once
-// vws-proto carries the RPC (popododo0720/vws-proto#84).
+// vws-proto carries the RPC (popododo0720/vws-proto#84); consoleIP then
+// comes from the request's gateway-observed source IP field.
 func (s *Server) decodeAuthorizationMessage(
-	ctx context.Context, sigv4 *iamv1.AuthenticateRequest, console, encoded string,
+	ctx context.Context, sigv4 *iamv1.AuthenticateRequest, console, consoleIP, encoded string,
 ) (decoded string, err error) {
 	defer func() {
 		s.m.add(ctx, s.m.decoded, attribute.String("result", result(err)))
@@ -34,6 +43,9 @@ func (s *Server) decodeAuthorizationMessage(
 	p, c, ip, err := s.authenticatedCallerFrom(ctx, a, "DecodeAuthorizationMessage")
 	if err != nil {
 		return "", toStatus(ctx, err)
+	}
+	if a.sigv4 == nil {
+		ip = consoleIP
 	}
 	decoded, err = p.sts.DecodeAuthorizationMessage(ctx, c, sourceIPContext(ip), encoded)
 	return decoded, toStatus(ctx, err)

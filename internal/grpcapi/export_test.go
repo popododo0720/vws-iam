@@ -64,5 +64,14 @@ func (s *Server) AuthorizeEncoded(
 func (s *Server) DecodeAuthorizationMessage(
 	ctx context.Context, sigv4 *iamv1.AuthenticateRequest, console, encoded string,
 ) (string, error) {
-	return s.decodeAuthorizationMessage(ctx, sigv4, console, encoded)
+	return s.decodeAuthorizationMessage(ctx, sigv4, console, "", encoded)
+}
+
+// DecodeAuthorizationMessageFrom is DecodeAuthorizationMessage with the
+// gateway-observed source IP of a console request, which vws-proto does
+// not carry yet (#109).
+func (s *Server) DecodeAuthorizationMessageFrom(
+	ctx context.Context, sigv4 *iamv1.AuthenticateRequest, console, consoleIP, encoded string,
+) (string, error) {
+	return s.decodeAuthorizationMessage(ctx, sigv4, console, consoleIP, encoded)
 }

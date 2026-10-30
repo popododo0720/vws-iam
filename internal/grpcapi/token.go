@@ -95,9 +95,9 @@ func (s *Server) authenticatedCaller(ctx context.Context, a authn, action string
 }
 
 // authenticatedCallerFrom is authenticatedCaller that also returns the
-// caller's source IP, taken only from how it authenticated: the address
-// the gateway saw for the SigV4 request, or the one stored with the
-// console session at Login. It is empty when neither recorded one.
+// source IP the gateway saw for a SigV4 request. A console session gives
+// none: the address stored with it at Login is not the address of the
+// current request, so the caller must supply that one itself.
 func (s *Server) authenticatedCallerFrom(
 	ctx context.Context, a authn, action string,
 ) (project, sts.Caller, string, error) {
@@ -120,7 +120,7 @@ func (s *Server) authenticatedCallerFrom(
 		}
 		p := s.project(v.Project)
 		c, err := p.sts.ConsoleCaller(ctx, v.UserName, v.MFA, v.AuthTime)
-		return p, c, v.SourceIP, err
+		return p, c, "", err
 	}
 	return project{}, sts.Caller{}, "", missingAuthentication()
 }
