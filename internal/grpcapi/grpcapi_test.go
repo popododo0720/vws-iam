@@ -605,7 +605,7 @@ func TestAssumeRole(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = e.auth.Authenticate(ctx, e.sign(c.GetAccessKeyId(), c.GetSecretAccessKey(), c.GetSessionToken()))
-	wantErr(t, err, codes.Unauthenticated, "INVALID_CREDENTIALS", "InvalidClientTokenId")
+	wantErr(t, err, codes.Unauthenticated, "INVALID_CREDENTIALS", "InvalidToken")
 }
 
 func TestGroupsAndPolicyVersions(t *testing.T) {
