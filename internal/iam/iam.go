@@ -187,6 +187,7 @@ type User struct {
 	// writes it, so a DeleteUser that checked for keys before the
 	// registration fails its versioned delete (#133).
 	FidoRegistrations uint64 `json:"fidoRegistrations,omitempty"`
+	RenameState
 }
 
 // MaxRevokeRequests bounds SessionsRevokeRequests.
@@ -196,6 +197,9 @@ func (User) Kind() Kind    { return KindUser }
 func (u User) Key() string { return u.Name }
 func (u User) Validate() error {
 	if err := checkName("user", u.Name, u.Path); err != nil {
+		return err
+	}
+	if err := u.check("user", u.Name, ValidName); err != nil {
 		return err
 	}
 	if u.PasswordHash != "" && !strings.HasPrefix(u.PasswordHash, "$argon2id$") {
@@ -218,6 +222,7 @@ type Group struct {
 	Members          []string          `json:"members,omitempty"`
 	AttachedPolicies []string          `json:"attachedPolicies,omitempty"`
 	InlinePolicies   map[string]string `json:"inlinePolicies,omitempty"`
+	RenameState
 }
 
 func (Group) Kind() Kind    { return KindGroup }
@@ -227,6 +232,9 @@ func (g Group) Validate() error {
 		return invalid("group name %q", g.Name)
 	}
 	if err := checkPath("group", g.Path); err != nil {
+		return err
+	}
+	if err := g.check("group", g.Name, ValidGroupName); err != nil {
 		return err
 	}
 	seen := map[string]bool{}
