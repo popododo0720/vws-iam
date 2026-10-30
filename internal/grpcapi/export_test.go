@@ -33,3 +33,19 @@ func (s *Server) DeleteAccessKeyUserEtag(
 ) (*longrunningpb.Operation, error) {
 	return s.deleteAccessKey(ctx, req, userEtag)
 }
+
+// UpdateUserRename is UpdateUser with the AWS NewUserName that vws-proto
+// does not carry yet (#134).
+func (s *Server) UpdateUserRename(
+	ctx context.Context, req *iamv1.UpdateUserRequest, newName string,
+) (*longrunningpb.Operation, error) {
+	return s.updateUser(ctx, req, newName)
+}
+
+// UpdateGroupRename is UpdateGroup with the AWS NewGroupName that
+// vws-proto does not carry yet (#134).
+func (s *Server) UpdateGroupRename(
+	ctx context.Context, req *iamv1.UpdateGroupRequest, newName string,
+) (*longrunningpb.Operation, error) {
+	return s.updateGroup(ctx, req, newName)
+}
