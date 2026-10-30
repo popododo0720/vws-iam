@@ -27,12 +27,13 @@ const (
 	KindReplay     Kind = "IamReplayEntry"
 	KindAttempt    Kind = "IamAttemptCounter"
 	KindMemberLock Kind = "IamGroupMembershipLock"
+	KindFidoDevice Kind = "IamFidoDevice"
 )
 
 // Kinds lists every stored kind.
 var Kinds = []Kind{
 	KindUser, KindGroup, KindRole, KindPolicy, KindAccessKey, KindMfaDevice,
-	KindKeyIndex, KindSession, KindOperation, KindReplay, KindAttempt, KindMemberLock,
+	KindKeyIndex, KindSession, KindOperation, KindReplay, KindAttempt, KindMemberLock, KindFidoDevice,
 }
 
 // Meta is the resource envelope every API resource carries.
