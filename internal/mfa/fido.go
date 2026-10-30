@@ -29,7 +29,10 @@ func (s *Service) FidoSerial(d iam.FidoDevice) string { return iam.FidoDeviceARN
 // RegisterFido registers credential c to user under label. The device id
 // is derived from the credential id, so registering one credential twice
 // in an account is ErrEntityInUse, also after a restart and when two
-// registrations race (the store create admits one). A missing user is
+// registrations race (the store create admits one). The device is bound
+// to the user's UID: if the user is deleted while this runs, the device
+// is removed again and the call is ErrNotAssociated, and a device left by
+// a crash in that window belongs to nobody (see owned). A missing user is
 // ErrNotAssociated; invalid input is iam.ErrInvalid and stores nothing.
 func (s *Service) RegisterFido(ctx context.Context, user, label string, c FidoCredential) (iam.FidoDevice, error) {
 	u, err := store.Get[iam.User](ctx, s.b, user)
@@ -39,19 +42,84 @@ func (s *Service) RegisterFido(ctx context.Context, user, label string, c FidoCr
 	if err != nil {
 		return iam.FidoDevice{}, fmt.Errorf("register fido device: %w", err)
 	}
+	if u.Object.UID == "" {
+		return iam.FidoDevice{}, fmt.Errorf("register fido device: user %q has no uid", user)
+	}
 	d := iam.FidoDevice{
-		ID: iam.FidoID(c.ID), UserName: u.Object.Name, Label: label,
+		ID: iam.FidoID(c.ID), UserName: u.Object.Name, UserUID: u.Object.UID, Label: label,
 		CredentialID: c.ID, PublicKey: c.PublicKey, AAGUID: c.AAGUID, SignCount: c.SignCount,
 		EnableTime: s.now().UTC(), Certifications: maps.Clone(c.Certifications),
 	}
 	d.UID, d.Generation = iam.NewUID(), 1
-	if _, err := store.Create(ctx, s.b, d); err != nil {
-		if errors.Is(err, store.ErrExists) {
-			return iam.FidoDevice{}, fmt.Errorf("fido credential already registered: %w", ErrEntityInUse)
+	if err := d.Validate(); err != nil {
+		return iam.FidoDevice{}, err
+	}
+	v, err := s.createFido(ctx, d)
+	if err != nil {
+		return iam.FidoDevice{}, err
+	}
+	// The user may have been deleted after the read above, by a
+	// DeleteUser that listed this user's keys before the create. Check
+	// again and undo; reads skip the device either way.
+	if ok, err := s.owned(ctx, d); err != nil || !ok {
+		if derr := store.Delete[iam.FidoDevice](ctx, s.b, d.ID, v); derr != nil && !errors.Is(derr, store.ErrNotFound) {
+			return iam.FidoDevice{}, fmt.Errorf("register fido device: undo for a deleted user: %w", derr)
 		}
-		return iam.FidoDevice{}, fmt.Errorf("register fido device: %w", err)
+		if err != nil {
+			return iam.FidoDevice{}, fmt.Errorf("register fido device: %w", err)
+		}
+		return iam.FidoDevice{}, fmt.Errorf("user %q: %w", user, ErrNotAssociated)
 	}
 	return d, nil
+}
+
+// createFido stores d. A device already stored under d's id that belongs
+// to nobody (its user is gone or was created again) is replaced; one that
+// is owned is ErrEntityInUse.
+func (s *Service) createFido(ctx context.Context, d iam.FidoDevice) (string, error) {
+	for range 4 {
+		v, err := store.Create(ctx, s.b, d)
+		if err == nil {
+			return v, nil
+		}
+		if !errors.Is(err, store.ErrExists) {
+			return "", fmt.Errorf("register fido device: %w", err)
+		}
+		cur, err := store.Get[iam.FidoDevice](ctx, s.b, d.ID)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("register fido device: %w", err)
+		}
+		ok, err := s.owned(ctx, cur.Object)
+		if err != nil {
+			return "", fmt.Errorf("register fido device: %w", err)
+		}
+		if ok {
+			return "", fmt.Errorf("fido credential already registered: %w", ErrEntityInUse)
+		}
+		if err := store.Delete[iam.FidoDevice](ctx, s.b, d.ID, cur.Version); err != nil &&
+			!errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrConflict) {
+			return "", fmt.Errorf("register fido device: remove orphan: %w", err)
+		}
+	}
+	return "", fmt.Errorf("register fido device %q: %w", d.ID, store.ErrConflict)
+}
+
+// owned reports whether d's user still exists and is the user d was
+// registered to (same UID). A device that is not owned is treated as
+// absent: a user deleted and created again under the same name does not
+// inherit it.
+func (s *Service) owned(ctx context.Context, d iam.FidoDevice) (bool, error) {
+	u, err := store.Get[iam.User](ctx, s.b, d.UserName)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return u.Object.UID == d.UserUID, nil
 }
 
 // GetFido returns the FIDO device named by serial, as AWS GetMFADevice.
@@ -71,19 +139,41 @@ func (s *Service) GetFido(ctx context.Context, serial, user string) (iam.FidoDev
 	if err != nil {
 		return iam.FidoDevice{}, fmt.Errorf("get fido device: %w", err)
 	}
+	if ok, err := s.owned(ctx, v.Object); err != nil {
+		return iam.FidoDevice{}, fmt.Errorf("get fido device: %w", err)
+	} else if !ok {
+		return iam.FidoDevice{}, fmt.Errorf("mfa device %q: %w", serial, ErrNotAssociated)
+	}
 	return v.Object, nil
 }
 
 // ListFido returns user's FIDO devices, or every one when user is "".
+// Devices that belong to nobody (see owned) are skipped.
 func (s *Service) ListFido(ctx context.Context, user string) ([]iam.FidoDevice, error) {
 	all, err := store.List[iam.FidoDevice](ctx, s.b)
 	if err != nil {
 		return nil, fmt.Errorf("list fido devices: %w", err)
 	}
+	owners := map[string]string{} // folded user name -> current UID, "" if none
 	var out []iam.FidoDevice
 	for _, v := range all {
-		if user == "" || store.Fold(v.Object.UserName) == store.Fold(user) {
-			out = append(out, v.Object)
+		d := v.Object
+		if user != "" && store.Fold(d.UserName) != store.Fold(user) {
+			continue
+		}
+		uid, seen := owners[store.Fold(d.UserName)]
+		if !seen {
+			u, err := store.Get[iam.User](ctx, s.b, d.UserName)
+			switch {
+			case err == nil:
+				uid = u.Object.UID
+			case !errors.Is(err, store.ErrNotFound):
+				return nil, fmt.Errorf("list fido devices: %w", err)
+			}
+			owners[store.Fold(d.UserName)] = uid
+		}
+		if uid != "" && uid == d.UserUID {
+			out = append(out, d)
 		}
 	}
 	return out, nil
@@ -104,6 +194,11 @@ func (s *Service) DeactivateFido(ctx context.Context, user, serial string) error
 	}
 	if err != nil {
 		return fmt.Errorf("deactivate fido device: %w", err)
+	}
+	if ok, err := s.owned(ctx, v.Object); err != nil {
+		return fmt.Errorf("deactivate fido device: %w", err)
+	} else if !ok {
+		return fmt.Errorf("mfa device %q: %w", serial, ErrNotAssociated)
 	}
 	if err := store.Delete[iam.FidoDevice](ctx, s.b, id, v.Version); err != nil {
 		if errors.Is(err, store.ErrNotFound) {

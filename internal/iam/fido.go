@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // FIDO security key limits. AWS GetMFADevice bounds a serial number to 256
@@ -44,6 +45,11 @@ type FidoDevice struct {
 	ID string `json:"id"`
 	// UserName is the user the key is registered to.
 	UserName string `json:"userName"`
+	// UserUID is the UID of that user when the key was registered. A key
+	// whose user is gone, or was deleted and created again under the same
+	// name, belongs to nobody: reads skip it and it never blocks
+	// DeleteUser.
+	UserUID string `json:"userUid"`
 	// Label is the friendly name given at registration.
 	Label        string    `json:"label"`
 	CredentialID []byte    `json:"credentialId"`
@@ -68,6 +74,9 @@ func (d FidoDevice) Validate() error {
 	}
 	if !ValidName(d.UserName) {
 		return invalid("fido device %q user name %q", d.ID, d.UserName)
+	}
+	if d.UserUID == "" {
+		return invalid("fido device %q has no user uid", d.ID)
 	}
 	if !ValidName(d.Label) {
 		return invalid("fido device %q label %q", d.ID, d.Label)
@@ -98,10 +107,10 @@ func checkCertifications(c map[string]string) error {
 		return invalid("%d certifications", len(c))
 	}
 	for k, v := range c {
-		if len(k) > MaxFidoCertificationKey || !certTextRE.MatchString(k) {
+		if utf8.RuneCountInString(k) > MaxFidoCertificationKey || !certTextRE.MatchString(k) {
 			return invalid("certification key %q", k)
 		}
-		if len(v) > MaxFidoCertificationVal || !certTextRE.MatchString(v) {
+		if utf8.RuneCountInString(v) > MaxFidoCertificationVal || !certTextRE.MatchString(v) {
 			return invalid("certification %q value %q", k, v)
 		}
 	}

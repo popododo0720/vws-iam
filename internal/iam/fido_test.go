@@ -12,7 +12,8 @@ import (
 func fidoSample() iam.FidoDevice {
 	cred := []byte("credential-id-0001")
 	return iam.FidoDevice{
-		ID: iam.FidoID(cred), UserName: "Bob", Label: "testFidoKey", CredentialID: cred, PublicKey: []byte{0xa5},
+		ID: iam.FidoID(cred), UserName: "Bob", UserUID: "u-1", Label: "testFidoKey",
+		CredentialID: cred, PublicKey: []byte{0xa5},
 		AAGUID: "cb69481e-8ff7-4039-93ec-0a2729a154a8", EnableTime: time.Unix(1_800_000_000, 0).UTC(),
 		Certifications: map[string]string{"FIDO": "L1", "FIDO-FIPS-140-2": "L2"},
 	}
@@ -28,6 +29,7 @@ func TestFidoDeviceValidate(t *testing.T) {
 		"no user":              func(d *iam.FidoDevice) { d.UserName = "" },
 		"user 65":              func(d *iam.FidoDevice) { d.UserName = strings.Repeat("u", 65) },
 		"user slash":           func(d *iam.FidoDevice) { d.UserName = "a/b" },
+		"no user uid":          func(d *iam.FidoDevice) { d.UserUID = "" },
 		"no label":             func(d *iam.FidoDevice) { d.Label = "" },
 		"label 65":             func(d *iam.FidoDevice) { d.Label = strings.Repeat("l", 65) },
 		"label slash":          func(d *iam.FidoDevice) { d.Label = "a/b" },
@@ -75,6 +77,16 @@ func TestFidoDeviceValidate(t *testing.T) {
 	edge.Certifications = map[string]string{strings.Repeat("k", 128): strings.Repeat("v", 32)}
 	if err := edge.Validate(); err != nil {
 		t.Fatalf("boundary values: %v", err)
+	}
+	// The limits count characters, not UTF-8 bytes: Latin-1 letters
+	// above U+007F are two bytes each.
+	edge.Certifications = map[string]string{strings.Repeat("\u00e9", 128): strings.Repeat("\u00e9", 32)}
+	if err := edge.Validate(); err != nil {
+		t.Fatalf("Latin-1 boundary values: %v", err)
+	}
+	edge.Certifications = map[string]string{"FIDO": strings.Repeat("\u00e9", 33)}
+	if err := edge.Validate(); !errors.Is(err, iam.ErrInvalid) {
+		t.Fatalf("33 Latin-1 characters: %v, want ErrInvalid", err)
 	}
 }
 
