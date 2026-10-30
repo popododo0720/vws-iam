@@ -65,7 +65,7 @@ func TestFidoGetNoSuchEntity(t *testing.T) {
 		"user in serial":  {strings.Replace(serial, "/alice/", "/bob/", 1), ""},
 		"case of user":    {strings.Replace(serial, "/alice/", "/ALICE/", 1), ""},
 		"root serial":     {"arn:vws:iam::" + acct + ":u2f/root/yubikey-" + d.ID, ""},
-		"aws example":     {"arn:aws:iam::123456789012:u2f/root/testFidoKey-R1234", "Bob"},
+		"aws example":     {"arn:aws:iam::" + acct + ":u2f/root/testFidoKey-R1234", "Bob"},
 		"empty":           {"", ""},
 		"garbage":         {"not an arn", ""},
 		"longer than 256": {serial + strings.Repeat("x", 256), ""},
