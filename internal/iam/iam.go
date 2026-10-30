@@ -375,8 +375,12 @@ type AccessKey struct {
 	LastUsedService string    `json:"lastUsedService,omitempty"`
 	LastUsedRegion  string    `json:"lastUsedRegion,omitempty"`
 	// Root marks the project's root credential (bootstrap only).
-	Root   bool   `json:"root,omitempty"`
-	Secret Sealed `json:"secret"`
+	Root bool `json:"root,omitempty"`
+	// Reserved marks a pending key whose write was confirmed under the
+	// quota lock hold. It is still pending: CreateAccessKey with a user
+	// etag activates it only while the parent user is at that etag (#139).
+	Reserved bool   `json:"reserved,omitempty"`
+	Secret   Sealed `json:"secret"`
 }
 
 func (AccessKey) Kind() Kind    { return KindAccessKey }
@@ -390,6 +394,9 @@ func (k AccessKey) Validate() error {
 	}
 	if k.Status != KeyActive && k.Status != KeyInactive && k.Status != KeyPending {
 		return invalid("status %q", k.Status)
+	}
+	if k.Reserved && k.Status != KeyPending {
+		return invalid("access key %s is reserved but not pending", k.ID)
 	}
 	if k.Secret.KeyID == "" || len(k.Secret.Ciphertext) == 0 {
 		return invalid("access key %s has no sealed secret", k.ID)

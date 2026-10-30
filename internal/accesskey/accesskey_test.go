@@ -297,3 +297,50 @@ func TestDeleteCheckedKeepsTheKeyUnlessThePreconditionHolds(t *testing.T) {
 		t.Fatalf("key index after the delete: %v", err)
 	}
 }
+
+// TestReservedKeyIsInertUntilActivated is a writer that reserved its key
+// under the quota lock and died before the user-fenced activation (#139):
+// the key authenticates nothing, is not listed or counted, the next sweep
+// removes it, and a sweep that won the race makes the activation fail.
+func TestReservedKeyIsInertUntilActivated(t *testing.T) {
+	b := memstore.New()
+	withUser(t, b, "gina")
+	svc := accesskey.New(b, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t)}), nil)
+	ctx := context.Background()
+	lock := iam.MembershipLock{Name: iam.MembershipLockKey}
+	lv, err := store.Create(ctx, b, lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pre := store.PreOf(store.Versioned[iam.MembershipLock]{Object: lock, Version: lv})
+	cred, version, err := svc.CreatePending(ctx, "gina", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Reserve(ctx, cred.AccessKeyID, "stale", pre); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("reserve at a stale key version: %v, want ErrConflict", err)
+	}
+	reserved, err := svc.Reserve(ctx, cred.AccessKeyID, version, pre)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ks, err := svc.List(ctx, "gina"); err != nil || len(ks) != 0 {
+		t.Fatalf("reserved key listed: %v %v", ks, err)
+	}
+	if _, err := svc.GetSigningCredential(ctx, cred.AccessKeyID); err == nil {
+		t.Fatal("a reserved key authenticates")
+	}
+	if err := svc.SweepPending(ctx, "gina", pre); err != nil {
+		t.Fatal(err)
+	}
+	u, err := store.Get[iam.User](ctx, b, "gina")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Activate(ctx, cred.AccessKeyID, reserved, store.PreOf(u)); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("activate after the sweep: %v, want ErrNotFound", err)
+	}
+	if _, err := accesskey.ProjectOf(ctx, b, cred.AccessKeyID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("swept key index: %v", err)
+	}
+}

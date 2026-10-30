@@ -143,8 +143,25 @@ func (s *Service) Activate(ctx context.Context, id, version string, pre store.Pr
 		return store.ErrConflict
 	}
 	k.Object.Status = iam.KeyActive
+	k.Object.Reserved = false
 	_, err = store.UpdateIf(ctx, s.b, k.Object, k.Version, pre)
 	return err
+}
+
+// Reserve marks the pending key id, still at version, reserved while pre
+// holds (store.UpdateIf) and returns its new version. The key stays
+// pending, so Activate can then commit it under another precondition. If
+// pre moved, the key is unchanged and the error is store.ErrConflict.
+func (s *Service) Reserve(ctx context.Context, id, version string, pre store.Pre) (string, error) {
+	k, err := store.Get[iam.AccessKey](ctx, s.b, id)
+	if err != nil {
+		return "", err
+	}
+	if k.Version != version || k.Object.Status != iam.KeyPending {
+		return "", store.ErrConflict
+	}
+	k.Object.Reserved = true
+	return store.UpdateIf(ctx, s.b, k.Object, k.Version, pre)
 }
 
 // SweepPending removes user's pending keys and their index entries while
