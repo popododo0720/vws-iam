@@ -68,6 +68,27 @@ func ProjectOf(ctx context.Context, index store.Backend, id string) (string, err
 	return x.Object.Project, nil
 }
 
+// AccountOf returns the project that owns the long-term key id, of any
+// project, for STS GetAccessKeyInfo. It reads the key id -> project
+// index, then the key itself, so an index entry left by a crash or a
+// key that is still pending (never handed out) is store.ErrNotFound, as is
+// an unknown or deleted key. Active and inactive keys are both answered:
+// the key's state is not reported (AWS semantics).
+func AccountOf(ctx context.Context, index store.Backend, id string) (string, error) {
+	pid, err := ProjectOf(ctx, index, id)
+	if err != nil {
+		return "", fmt.Errorf("access key index: %w", err)
+	}
+	k, err := store.Get[iam.AccessKey](ctx, store.Scoped(index, pid), id)
+	if err != nil {
+		return "", fmt.Errorf("access key: %w", err)
+	}
+	if k.Object.Status == iam.KeyPending {
+		return "", fmt.Errorf("access key is pending: %w", store.ErrNotFound)
+	}
+	return pid, nil
+}
+
 func aad(id string) string { return string(iam.KindAccessKey) + "/" + id }
 
 var idEnc = base32.StdEncoding.WithPadding(base32.NoPadding)
