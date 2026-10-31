@@ -257,6 +257,36 @@ func Run(t *testing.T, open func(t *testing.T) store.Backend) {
 			t.Fatal(err)
 		}
 	})
+	t.Run("GroupName128RoundTrip", func(t *testing.T) {
+		b := open(t)
+		ctx := context.Background()
+		name := strings.Repeat("G", 128)
+		g := iam.Group{Name: name, ID: "AGPA1"}
+		if _, err := store.Create(ctx, b, g); err != nil {
+			t.Fatalf("create 128-character group: %v", err)
+		}
+		got, err := store.Get[iam.Group](ctx, b, strings.Repeat("g", 128))
+		if err != nil {
+			t.Fatalf("get folded name: %v", err)
+		}
+		if got.Object.Name != name {
+			t.Fatalf("name %q", got.Object.Name)
+		}
+		if _, err := store.Create(ctx, b, g); !errors.Is(err, store.ErrExists) {
+			t.Fatalf("second create: %v", err)
+		}
+		long := g
+		long.Name = strings.Repeat("G", 129)
+		if _, err := store.Create(ctx, b, long); !errors.Is(err, iam.ErrInvalid) {
+			t.Fatalf("create 129-character group: %v", err)
+		}
+		if err := store.Delete[iam.Group](ctx, b, strings.Repeat("g", 128), got.Version); err != nil {
+			t.Fatalf("delete 128-character group: %v", err)
+		}
+		if _, err := store.Get[iam.Group](ctx, b, strings.Repeat("g", 128)); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("get deleted group: %v", err)
+		}
+	})
 	t.Run("PolicyName128RoundTrip", func(t *testing.T) {
 		b := open(t)
 		ctx := context.Background()

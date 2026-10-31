@@ -71,10 +71,10 @@ func policy(name string) iam.Policy {
 	}
 }
 
-func policyObjectNames(t *testing.T, c client.Client, namespace string) map[string]string {
+func objectNames(t *testing.T, c client.Client, namespace string, kind iam.Kind) map[string]string {
 	t.Helper()
 	l := &unstructured.UnstructuredList{}
-	gvk := kubestore.GVK(iam.KindPolicy)
+	gvk := kubestore.GVK(kind)
 	gvk.Kind += "List"
 	l.SetGroupVersionKind(gvk)
 	if err := c.List(context.Background(), l, client.InNamespace(namespace)); err != nil {
@@ -96,7 +96,7 @@ func TestLongPolicyNameFitsDNS1123(t *testing.T) {
 	if _, err := store.Create(ctx, short, policy("p")); err != nil {
 		t.Fatal(err)
 	}
-	names := policyObjectNames(t, c, "vws-iam")
+	names := objectNames(t, c, "vws-iam", iam.KindPolicy)
 	if names["acme/p"] != "kc5hmqp9fe0" {
 		t.Fatalf("short key name %q", names["acme/p"])
 	}
@@ -119,7 +119,7 @@ func TestLongPolicyNameFitsDNS1123(t *testing.T) {
 			t.Fatalf("second create %s: %v", project, err)
 		}
 	}
-	names = policyObjectNames(t, c, "vws-iam")
+	names = objectNames(t, c, "vws-iam", iam.KindPolicy)
 	seen := map[string]string{}
 	for _, project := range []string{fit, overflow, widest} {
 		key := project + "/" + upper
@@ -139,5 +139,29 @@ func TestLongPolicyNameFitsDNS1123(t *testing.T) {
 	}
 	if !strings.HasPrefix(names[fit+"/"+upper], "k") || len(names[fit+"/"+upper]) != 253 {
 		t.Fatalf("fitting name %q", names[fit+"/"+upper])
+	}
+}
+
+func TestLongGroupNameFitsDNS1123(t *testing.T) {
+	ctx := context.Background()
+	c := newFake()
+	project := strings.Repeat("a", 63)
+	b := store.Scoped(kubestore.New(c, "vws-iam"), project)
+	upper := strings.Repeat("G", 128)
+	if _, err := store.Create(ctx, b, iam.Group{Name: upper, ID: "AGPA1"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Get[iam.Group](ctx, b, strings.Repeat("g", 128))
+	if err != nil || got.Object.Name != upper {
+		t.Fatalf("get folded name: %v %q", err, got.Object.Name)
+	}
+	name := objectNames(t, c, "vws-iam", iam.KindGroup)[project+"/"+upper]
+	if name == "" || len(name) > 253 {
+		t.Fatalf("object name %q length %d", name, len(name))
+	}
+	for _, r := range name {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') {
+			t.Fatalf("name %q is not DNS-1123", name)
+		}
 	}
 }
