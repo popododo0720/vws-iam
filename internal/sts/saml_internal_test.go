@@ -21,3 +21,21 @@ func TestSetTimeKeys(t *testing.T) {
 		}
 	}
 }
+
+// TestSetAnonymousPrincipalAccount: the server's aws:PrincipalAccount
+// replaces any copy of it in another letter case.
+func TestSetAnonymousPrincipalAccount(t *testing.T) {
+	m := map[string][]string{
+		"AWS:PrincipalAccount": {"123456789012"}, "aws:principalaccount": {"111122223333"}, "SAML:sub": {"a"},
+	}
+	setAnonymousPrincipalAccount(m)
+	want := map[string]string{"aws:PrincipalAccount": "anonymous", "SAML:sub": "a"}
+	if len(m) != len(want) {
+		t.Fatalf("got %v", m)
+	}
+	for k, v := range want {
+		if got := m[k]; len(got) != 1 || got[0] != v {
+			t.Errorf("%s = %v, want %s", k, got, v)
+		}
+	}
+}

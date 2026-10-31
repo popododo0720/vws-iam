@@ -594,6 +594,43 @@ func TestAssumeRoleWithSAMLTrustTime(t *testing.T) {
 	}
 }
 
+// TestAssumeRoleWithSAMLTrustPrincipalAccount: aws:PrincipalAccount is
+// in every request context, as in AWS, and is "anonymous" for this
+// unsigned request, so a trust-policy Deny conditioned on the key
+// matches instead of failing open.
+func TestAssumeRoleWithSAMLTrustPrincipalAccount(t *testing.T) {
+	e := samlSetup(t)
+	ctx := context.Background()
+	allow := `{"Effect":"Allow","Principal":{"Federated":"` + samlIdpARN +
+		`"},"Action":["sts:AssumeRoleWithSAML","sts:SetSourceIdentity"]}`
+	deny := func(op, key, value string) string {
+		return `,{"Effect":"Deny","Principal":"*","Action":"sts:AssumeRoleWithSAML",` +
+			`"Condition":{"` + op + `":{"` + key + `":"` + value + `"}}}`
+	}
+	for _, tc := range []struct {
+		name, trust string
+		want        error
+	}{
+		{"Null false denies", allow + deny("Null", "aws:PrincipalAccount", "false"), sts.ErrAccessDenied},
+		{"Null true allows", allow + deny("Null", "aws:PrincipalAccount", "true"), nil},
+		{"anonymous denied", allow + deny("StringEquals", "aws:PrincipalAccount", "anonymous"), sts.ErrAccessDenied},
+		{"lower-case key", allow + deny("StringEquals", "aws:principalaccount", "anonymous"), sts.ErrAccessDenied},
+		{"not the account id", allow + deny("StringNotEquals", "aws:PrincipalAccount", acct), sts.ErrAccessDenied},
+		{"account id deny not matched", allow + deny("StringEquals", "aws:PrincipalAccount", acct), nil},
+	} {
+		if _, err := store.Mutate(ctx, e.b, "saml-dev", func(r *iam.Role) error {
+			r.AssumeRolePolicy = `{"Version":"2012-10-17","Statement":[` + tc.trust + `]}`
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		_, err := e.svc.AssumeRoleWithSAML(ctx, samlReq(e.response(t, e.claims(), samltest.SignAssertion)))
+		if (tc.want == nil && err != nil) || (tc.want != nil && !errors.Is(err, tc.want)) {
+			t.Errorf("%s: %v, want %v", tc.name, err, tc.want)
+		}
+	}
+}
+
 // TestAssumeRoleWithSAMLChainedIdentity: as in AWS, saml:sub,
 // saml:sub_type and saml:namequalifier stay in the request context of a
 // SAML role session, so the trust policy of a role it assumes next can

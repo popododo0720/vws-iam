@@ -202,9 +202,11 @@ func (s *Service) AssumeRoleWithSAML(ctx context.Context, req SAMLRequest) (SAML
 	if cl.sourceIdentity != "" {
 		tctx["sts:SourceIdentity"] = []string{cl.sourceIdentity}
 	}
-	// aws:CurrentTime and aws:EpochTime are always present in AWS; the
-	// server sets them last, so no other copy of either key can win.
+	// aws:CurrentTime, aws:EpochTime and aws:PrincipalAccount are always
+	// present in AWS; the server sets them last, so no other copy of any
+	// of them can win.
 	setTimeKeys(tctx, s.now())
+	setAnonymousPrincipalAccount(tctx)
 	trust, err := policy.ParseTrust(r.Object.AssumeRolePolicy)
 	if err != nil {
 		return SAMLRoleSession{}, fmt.Errorf("trust policy of %s: %w", req.RoleARN, err)
@@ -267,6 +269,27 @@ func setTimeKeys(m map[string][]string, now time.Time) {
 	now = now.UTC()
 	m["aws:CurrentTime"] = []string{now.Format(time.RFC3339)}
 	m["aws:EpochTime"] = []string{strconv.FormatInt(now.Unix(), 10)}
+}
+
+// anonymousPrincipalAccount is the aws:PrincipalAccount of a request
+// without credentials. The IAM User Guide (AWS global condition context
+// keys, aws:PrincipalAccount) says the key "is included in the request
+// context for all requests, including anonymous requests" and "for
+// anonymous requests, the request context returns anonymous".
+// AssumeRoleWithSAML is such a request: it is not signed with any AWS
+// credentials.
+const anonymousPrincipalAccount = "anonymous"
+
+// setAnonymousPrincipalAccount sets aws:PrincipalAccount to
+// anonymousPrincipalAccount after removing any copy of the key in another
+// letter case, so no other value can win.
+func setAnonymousPrincipalAccount(m map[string][]string) {
+	for k := range m {
+		if strings.EqualFold(k, "aws:PrincipalAccount") {
+			delete(m, k)
+		}
+	}
+	m["aws:PrincipalAccount"] = []string{anonymousPrincipalAccount}
 }
 
 // ValidateSAMLRequest checks the parameters of an AssumeRoleWithSAML
