@@ -5,6 +5,7 @@ import (
 	"crypto/sha1" //nolint:gosec // NameQualifier is SHA-1 by the AWS definition.
 	"encoding/base64"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -548,6 +549,47 @@ func TestAssumeRoleWithSAMLAudienceAndSignInURL(t *testing.T) {
 		svc := sts.New(e.b, e.keys, e.az, acct, e.clk.now, sts.WithSAML(provs, sp))
 		if _, err := svc.AssumeRoleWithSAML(ctx, good); !errors.Is(err, sts.ErrInvalidIdentityToken) {
 			t.Errorf("%s: %v, want InvalidIdentityToken", name, err)
+		}
+	}
+}
+
+// TestAssumeRoleWithSAMLTrustTime: aws:CurrentTime and aws:EpochTime are
+// always in the request context, as in AWS, so an Allow plus a Deny
+// conditioned on the time denies after the cutoff and allows before it.
+func TestAssumeRoleWithSAMLTrustTime(t *testing.T) {
+	e := samlSetup(t)
+	ctx := context.Background()
+	now := e.clk.now().UTC()
+	allow := `{"Effect":"Allow","Principal":{"Federated":"` + samlIdpARN +
+		`"},"Action":["sts:AssumeRoleWithSAML","sts:SetSourceIdentity"]}`
+	deny := func(op, key, value string) string {
+		return `,{"Effect":"Deny","Principal":"*","Action":"sts:AssumeRoleWithSAML",` +
+			`"Condition":{"` + op + `":{"` + key + `":"` + value + `"}}}`
+	}
+	before := now.Add(-time.Hour).Format(time.RFC3339)
+	after := now.Add(time.Hour).Format(time.RFC3339)
+	epochBefore := strconv.FormatInt(now.Add(-time.Hour).Unix(), 10)
+	epochAfter := strconv.FormatInt(now.Add(time.Hour).Unix(), 10)
+	for _, tc := range []struct {
+		name, trust string
+		want        error
+	}{
+		{"CurrentTime past cutoff", allow + deny("DateGreaterThan", "aws:CurrentTime", before), sts.ErrAccessDenied},
+		{"CurrentTime before cutoff", allow + deny("DateGreaterThan", "aws:CurrentTime", after), nil},
+		{"CurrentTime lower-case key", allow + deny("DateGreaterThan", "aws:currenttime", before), sts.ErrAccessDenied},
+		{"EpochTime past cutoff", allow + deny("NumericGreaterThan", "aws:EpochTime", epochBefore), sts.ErrAccessDenied},
+		{"EpochTime before cutoff", allow + deny("NumericGreaterThan", "aws:EpochTime", epochAfter), nil},
+		{"EpochTime as a date", allow + deny("DateGreaterThan", "aws:EpochTime", before), sts.ErrAccessDenied},
+	} {
+		if _, err := store.Mutate(ctx, e.b, "saml-dev", func(r *iam.Role) error {
+			r.AssumeRolePolicy = `{"Version":"2012-10-17","Statement":[` + tc.trust + `]}`
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		_, err := e.svc.AssumeRoleWithSAML(ctx, samlReq(e.response(t, e.claims(), samltest.SignAssertion)))
+		if (tc.want == nil && err != nil) || (tc.want != nil && !errors.Is(err, tc.want)) {
+			t.Errorf("%s: %v, want %v", tc.name, err, tc.want)
 		}
 	}
 }

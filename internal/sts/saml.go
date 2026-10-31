@@ -202,6 +202,9 @@ func (s *Service) AssumeRoleWithSAML(ctx context.Context, req SAMLRequest) (SAML
 	if cl.sourceIdentity != "" {
 		tctx["sts:SourceIdentity"] = []string{cl.sourceIdentity}
 	}
+	// aws:CurrentTime and aws:EpochTime are always present in AWS; the
+	// server sets them last, so no other copy of either key can win.
+	setTimeKeys(tctx, s.now())
 	trust, err := policy.ParseTrust(r.Object.AssumeRolePolicy)
 	if err != nil {
 		return SAMLRoleSession{}, fmt.Errorf("trust policy of %s: %w", req.RoleARN, err)
@@ -247,6 +250,20 @@ func (s *Service) AssumeRoleWithSAML(ctx context.Context, req SAMLRequest) (SAML
 		SourceIdentity:   cl.sourceIdentity,
 		PackedPolicySize: (packed*100 + MaxPackedPolicyChars - 1) / MaxPackedPolicyChars,
 	}, nil
+}
+
+// setTimeKeys sets aws:CurrentTime (RFC 3339, UTC) and aws:EpochTime
+// (Unix seconds) from now, as authz.Authorize sets aws:CurrentTime, after
+// removing any copy of either key in another letter case.
+func setTimeKeys(m map[string][]string, now time.Time) {
+	for k := range m {
+		if lk := strings.ToLower(k); lk == "aws:currenttime" || lk == "aws:epochtime" {
+			delete(m, k)
+		}
+	}
+	now = now.UTC()
+	m["aws:CurrentTime"] = []string{now.Format(time.RFC3339)}
+	m["aws:EpochTime"] = []string{strconv.FormatInt(now.Unix(), 10)}
 }
 
 // ValidateSAMLRequest checks the parameters of an AssumeRoleWithSAML
