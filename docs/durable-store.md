@@ -70,10 +70,13 @@ Owned by vws-deploy, listed here so the chart can be checked against it:
 
 1. Install `deploy/crds` and `deploy/rbac` (namespaced Role, only the
    verbs the store calls).
-2. Mount the service account token, or set `POD_NAMESPACE` from
-   `metadata.namespace`.
-3. Provide the KEK through the Secret-backed environment or `-kek-dir`.
-4. Raise `replicas` above one only after steps 1 to 3.
+2. Give the store API credentials: mount the service account token, or
+   pass `-kubeconfig`.
+3. Give the store the namespace that holds its objects: set
+   `POD_NAMESPACE` from `metadata.namespace`, or mount the service
+   account namespace file.
+4. Provide the KEK through the Secret-backed environment or `-kek-dir`.
+5. Raise `replicas` above one only after steps 1 to 4.
 
 ## Evidence
 
