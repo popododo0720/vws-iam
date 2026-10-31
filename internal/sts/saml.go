@@ -239,6 +239,9 @@ func (s *Service) AssumeRoleWithSAML(ctx context.Context, req SAMLRequest) (SAML
 	creds, err := s.issue(ctx, session{
 		Kind: int(authz.Role), Name: r.Object.Name, ARN: arn, Policies: inline, PolicyARNs: req.PolicyARNs,
 		PrincipalID: r.Object.ID, RoleID: r.Object.ID, SessionName: cl.sessionName,
+		// AWS keeps these three keys for later requests and AssumeRole
+		// calls of the session (cross-service SAML context keys).
+		SAML: &SAMLIdentity{Subject: cl.subject, SubjectType: cl.subjectType, NameQualifier: nameQualifier},
 	}, d)
 	if err != nil {
 		return SAMLRoleSession{}, fmt.Errorf("assume role with saml: %w", err)

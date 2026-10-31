@@ -593,3 +593,122 @@ func TestAssumeRoleWithSAMLTrustTime(t *testing.T) {
 		}
 	}
 }
+
+// TestAssumeRoleWithSAMLChainedIdentity: as in AWS, saml:sub,
+// saml:sub_type and saml:namequalifier stay in the request context of a
+// SAML role session, so the trust policy of a role it assumes next can
+// deny on them; no other SAML key carries over, a client cannot set
+// them, and a chained session keeps them.
+func TestAssumeRoleWithSAMLChainedIdentity(t *testing.T) {
+	e := samlSetup(t)
+	ctx := context.Background()
+	if _, err := store.Mutate(ctx, e.b, "saml-dev", func(r *iam.Role) error {
+		r.InlinePolicies["sts"] = `{"Version":"2012-10-17","Statement":
+			{"Effect":"Allow","Action":"sts:AssumeRole","Resource":"*"}}`
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Mutate(ctx, e.b, "broker", func(u *iam.User) error {
+		u.InlinePolicies["sts"] = `{"Version":"2012-10-17","Statement":
+			{"Effect":"Allow","Action":"sts:AssumeRole","Resource":"*"}}`
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.svc.AssumeRoleWithSAML(ctx, samlReq(e.response(t, e.claims(), samltest.SignAssertion)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A restarted service reads the identity from the sealed token.
+	restarted := sts.New(e.b, e.keys, e.az, acct, e.clk.now)
+	sess, err := restarted.Validate(ctx, got.Credentials.AccessKeyID, got.Credentials.SessionToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.SAML == nil || sess.SAML.Subject != "alice@corp.test" || sess.SAML.SubjectType != "persistent" ||
+		sess.SAML.NameQualifier != got.NameQualifier {
+		t.Fatalf("session SAML identity %+v", sess.SAML)
+	}
+	samlCaller := sess.Caller()
+	const adminARN = "arn:vws:iam::" + acct + ":role/admin"
+	allow := `{"Effect":"Allow","Principal":{"AWS":"` + acct + `"},"Action":"sts:AssumeRole"`
+	cond := func(op, key, value string) string {
+		return `,"Condition":{"` + op + `":{"` + key + `":"` + value + `"}}`
+	}
+	deny := func(key, value string) string {
+		return `,{"Effect":"Deny","Principal":"*","Action":"sts:AssumeRole"` + cond("StringEquals", key, value) + `}`
+	}
+	trust := func(doc string) {
+		t.Helper()
+		if _, err := store.Mutate(ctx, e.b, "admin", func(r *iam.Role) error {
+			r.AssumeRolePolicy = `{"Version":"2012-10-17","Statement":[` + doc + `]}`
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	broker := e.caller(t, "broker")
+	for _, tc := range []struct {
+		name, trust string
+		caller      sts.Caller
+		reqCtx      map[string][]string
+		want        error
+	}{
+		{"deny saml:sub", allow + "}" + deny("saml:sub", "alice@corp.test"), samlCaller, nil, sts.ErrAccessDenied},
+		{"deny SAML:sub any case", allow + "}" + deny("SAML:Sub", "alice@corp.test"), samlCaller, nil, sts.ErrAccessDenied},
+		{"deny other subject", allow + "}" + deny("saml:sub", "bob@corp.test"), samlCaller, nil, nil},
+		{"deny saml:sub_type", allow + "}" + deny("saml:sub_type", "persistent"), samlCaller, nil, sts.ErrAccessDenied},
+		{"deny saml:namequalifier", allow + "}" + deny("saml:namequalifier", got.NameQualifier), samlCaller, nil, sts.ErrAccessDenied},
+		{
+			"client cannot replace saml:sub", allow + "}" + deny("saml:sub", "alice@corp.test"), samlCaller,
+			map[string][]string{"saml:sub": {"bob@corp.test"}, "SAML:SUB": {"bob@corp.test"}}, sts.ErrAccessDenied,
+		},
+		{"allow on saml:sub", allow + cond("StringEquals", "saml:sub", "alice@corp.test") + "}", samlCaller, nil, nil},
+		{"saml:iss does not carry over", allow + cond("StringEquals", "saml:iss", samlIssuer) + "}", samlCaller, nil, sts.ErrAccessDenied},
+		{"saml:aud does not carry over", allow + cond("StringEquals", "saml:aud", samlAud) + "}", samlCaller, nil, sts.ErrAccessDenied},
+		{
+			"client cannot claim saml:sub", allow + cond("StringEquals", "saml:sub", "alice@corp.test") + "}", broker,
+			map[string][]string{"saml:sub": {"alice@corp.test"}}, sts.ErrAccessDenied,
+		},
+	} {
+		trust(tc.trust)
+		_, err := e.svc.AssumeRole(ctx, tc.caller, tc.reqCtx, adminARN, "chain", 0, "", sts.MFA{})
+		if (tc.want == nil && err != nil) || (tc.want != nil && !errors.Is(err, tc.want)) {
+			t.Errorf("%s: %v, want %v", tc.name, err, tc.want)
+		}
+	}
+	// The chained session keeps the SAML identity for the next hop.
+	trust(allow + "}")
+	chained, err := e.svc.AssumeRole(ctx, samlCaller, nil, adminARN, "chain", 0, "", sts.MFA{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := e.svc.Validate(ctx, chained.AccessKeyID, chained.SessionToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.SAML == nil || *next.SAML != *sess.SAML {
+		t.Fatalf("chained session SAML identity %+v, want %+v", next.SAML, sess.SAML)
+	}
+	if _, err := store.Mutate(ctx, e.b, "admin", func(r *iam.Role) error {
+		r.InlinePolicies["sts"] = `{"Version":"2012-10-17","Statement":
+			{"Effect":"Allow","Action":"sts:AssumeRole","Resource":"*"}}`
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	trust(allow + "}" + deny("saml:sub", "alice@corp.test"))
+	if _, err := e.svc.AssumeRole(ctx, next.Caller(), nil, adminARN, "again", 0, "", sts.MFA{}); !errors.Is(err, sts.ErrAccessDenied) {
+		t.Fatalf("second hop with Deny on saml:sub: %v, want AccessDenied", err)
+	}
+	// A caller without SAML identity does not match the Deny, and its
+	// session has none.
+	plain, err := e.svc.AssumeRole(ctx, broker, nil, adminARN, "plain", 0, "", sts.MFA{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ps, err := e.svc.Validate(ctx, plain.AccessKeyID, plain.SessionToken); err != nil || ps.SAML != nil {
+		t.Fatalf("plain session SAML identity %+v, %v", ps.SAML, err)
+	}
+}
