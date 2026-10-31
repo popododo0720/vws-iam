@@ -34,10 +34,13 @@ var (
 // the IAM User Guide (Configuring SAML assertions for the authentication
 // response).
 const (
-	SAMLAction            = "sts:AssumeRoleWithSAML"
-	MaxSAMLRoleDuration   = 12 * time.Hour
-	MinSAMLAssertionChars = 4
-	MaxSAMLAssertionChars = 100000
+	SAMLAction = "sts:AssumeRoleWithSAML"
+	// SetSourceIdentityAction is what a trust policy must also allow when
+	// the assertion carries the SourceIdentity attribute.
+	SetSourceIdentityAction = "sts:SetSourceIdentity"
+	MaxSAMLRoleDuration     = 12 * time.Hour
+	MinSAMLAssertionChars   = 4
+	MaxSAMLAssertionChars   = 100000
 	// SAMLClockSkew is how far a NotBefore may lie in the future.
 	SAMLClockSkew = 5 * time.Minute
 
@@ -180,10 +183,18 @@ func (s *Service) AssumeRoleWithSAML(ctx context.Context, req SAMLRequest) (SAML
 	if err != nil {
 		return SAMLRoleSession{}, fmt.Errorf("trust policy of %s: %w", req.RoleARN, err)
 	}
-	tr := policy.Request{Federated: req.PrincipalARN, Action: SAMLAction, Resource: req.RoleARN, Context: tctx}
-	if td := policy.Evaluate(tr, []policy.Named{{Name: req.RoleARN + " trust policy", Doc: trust}}, nil); !td.Allowed {
-		return SAMLRoleSession{}, fmt.Errorf("%w: not authorized to perform %s on %s",
-			ErrAccessDenied, SAMLAction, req.RoleARN)
+	// With a SourceIdentity attribute the trust policy must also allow
+	// sts:SetSourceIdentity, as AWS requires.
+	actions := []string{SAMLAction}
+	if cl.sourceIdentity != "" {
+		actions = append(actions, SetSourceIdentityAction)
+	}
+	for _, action := range actions {
+		tr := policy.Request{Federated: req.PrincipalARN, Action: action, Resource: req.RoleARN, Context: tctx}
+		if td := policy.Evaluate(tr, []policy.Named{{Name: req.RoleARN + " trust policy", Doc: trust}}, nil); !td.Allowed {
+			return SAMLRoleSession{}, fmt.Errorf("%w: not authorized to perform %s on %s",
+				ErrAccessDenied, action, req.RoleARN)
+		}
 	}
 	for _, arn := range req.PolicyARNs {
 		ok, err := s.authz.ManagedPolicyExists(ctx, arn)

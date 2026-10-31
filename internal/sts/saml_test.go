@@ -23,8 +23,8 @@ const (
 	samlRoleARN = "arn:vws:iam::" + acct + ":role/saml-dev"
 	samlIssuer  = "https://idp.corp.test/saml"
 	samlTrust   = `{"Version":"2012-10-17","Statement":{"Effect":"Allow",
-		"Principal":{"Federated":"` + samlIdpARN + `"},"Action":"sts:AssumeRoleWithSAML",
-		"Condition":{"StringEquals":{"SAML:aud":"` + samlAud + `"}}}}`
+		"Principal":{"Federated":"` + samlIdpARN + `"},
+		"Action":["sts:AssumeRoleWithSAML","sts:SetSourceIdentity"],"Condition":{"StringEquals":{"SAML:aud":"` + samlAud + `"}}}}`
 )
 
 type samlEnv struct {
@@ -396,6 +396,50 @@ func TestAssumeRoleWithSAMLEveryAudienceRestriction(t *testing.T) {
 		}
 		if !tc.ok && !errors.Is(err, sts.ErrInvalidIdentityToken) {
 			t.Errorf("%s: %v, want InvalidIdentityToken", name, err)
+		}
+	}
+}
+
+// TestAssumeRoleWithSAMLSetSourceIdentity: an assertion with the
+// SourceIdentity attribute also needs sts:SetSourceIdentity in the role's
+// trust policy (IAM User Guide, SourceIdentity SAML attribute); without
+// it, or with it denied, the call is AccessDenied.
+func TestAssumeRoleWithSAMLSetSourceIdentity(t *testing.T) {
+	e := samlSetup(t)
+	ctx := context.Background()
+	stmt := func(effect, actions, cond string) string {
+		return `{"Effect":"` + effect + `","Principal":{"Federated":"` + samlIdpARN + `"},"Action":` + actions + cond + `}`
+	}
+	only := stmt("Allow", `"sts:AssumeRoleWithSAML"`, "")
+	both := stmt("Allow", `["sts:AssumeRoleWithSAML","sts:SetSourceIdentity"]`, "")
+	denyAlice := stmt("Deny", `"sts:SetSourceIdentity"`, `,"Condition":{"StringEquals":{"sts:SourceIdentity":"alice"}}`)
+	withID := e.response(t, e.claims(), samltest.SignAssertion)
+	noIDClaims := e.claims()
+	noIDClaims.SourceIdentity = ""
+	noID := e.response(t, noIDClaims, samltest.SignAssertion)
+	for _, tc := range []struct {
+		name, trust, assertion string
+		ok                     bool
+	}{
+		{"SourceIdentity without SetSourceIdentity", only, withID, false},
+		{"SourceIdentity with SetSourceIdentity", both, withID, true},
+		{"SetSourceIdentity denied", "[" + both + "," + denyAlice + "]", withID, false},
+		{"no SourceIdentity needs no SetSourceIdentity", only, noID, true},
+	} {
+		if _, err := store.Mutate(ctx, e.b, "saml-dev", func(r *iam.Role) error {
+			r.AssumeRolePolicy = `{"Version":"2012-10-17","Statement":` + tc.trust + `}`
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		got, err := e.svc.AssumeRoleWithSAML(ctx, samlReq(tc.assertion))
+		switch {
+		case tc.ok && err != nil:
+			t.Errorf("%s: %v, want credentials", tc.name, err)
+		case !tc.ok && !errors.Is(err, sts.ErrAccessDenied):
+			t.Errorf("%s: %v, want AccessDenied", tc.name, err)
+		case tc.ok && tc.assertion == withID && got.SourceIdentity != "alice":
+			t.Errorf("%s: SourceIdentity %q", tc.name, got.SourceIdentity)
 		}
 	}
 }
