@@ -230,6 +230,9 @@ func TestAssumeRoleWithSAMLClaims(t *testing.T) {
 		{"bad session name", func(a *samltest.Assertion) { a.SessionName = "a b" }, invalid},
 		{"bad SessionDuration", func(a *samltest.Assertion) { a.SessionDuration = "899" }, invalid},
 		{"bad SourceIdentity", func(a *samltest.Assertion) { a.SourceIdentity = "x" }, invalid},
+		{"long SourceIdentity", func(a *samltest.Assertion) { a.SourceIdentity = strings.Repeat("a", 257) }, invalid},
+		{"no SubjectConfirmation", func(a *samltest.Assertion) { a.NoSubjectConfirmation = true }, invalid},
+		{"two SubjectConfirmations", func(a *samltest.Assertion) { a.ExtraSubjectConfirmations = 1 }, invalid},
 		{"IdP failure", func(a *samltest.Assertion) {
 			a.Status = "urn:oasis:names:tc:SAML:2.0:status:Responder"
 		}, sts.ErrIDPRejectedClaim},
@@ -258,6 +261,30 @@ func TestAssumeRoleWithSAMLClaims(t *testing.T) {
 	got, err = e.svc.AssumeRoleWithSAML(ctx, samlReq(e.response(t, a, samltest.SignAssertion)))
 	if err != nil || !got.Credentials.Expiration.Equal(now.Add(20*time.Minute)) {
 		t.Fatalf("SessionNotOnOrAfter: %v, %v", got.Credentials.Expiration, err)
+	}
+}
+
+// TestAssumeRoleWithSAMLSourceIdentityLength: the SourceIdentity attribute
+// takes 2 to 256 characters, as AWS documents it (IAM User Guide,
+// Configure SAML assertions for the authentication response).
+func TestAssumeRoleWithSAMLSourceIdentityLength(t *testing.T) {
+	e := samlSetup(t)
+	ctx := context.Background()
+	for _, n := range []int{2, 256} {
+		a := e.claims()
+		a.SourceIdentity = strings.Repeat("a", n)
+		got, err := e.svc.AssumeRoleWithSAML(ctx, samlReq(e.response(t, a, samltest.SignAssertion)))
+		if err != nil || got.SourceIdentity != a.SourceIdentity {
+			t.Errorf("length %d: %v, SourceIdentity %q", n, err, got.SourceIdentity)
+		}
+	}
+	for _, n := range []int{1, 257} {
+		a := e.claims()
+		a.SourceIdentity = strings.Repeat("a", n)
+		_, err := e.svc.AssumeRoleWithSAML(ctx, samlReq(e.response(t, a, samltest.SignAssertion)))
+		if !errors.Is(err, sts.ErrInvalidIdentityToken) {
+			t.Errorf("length %d: %v, want InvalidIdentityToken", n, err)
+		}
 	}
 }
 

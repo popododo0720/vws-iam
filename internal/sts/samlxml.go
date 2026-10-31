@@ -215,30 +215,34 @@ func hasAudience(cond *etree.Element, audience string) bool {
 	return len(rs) > 0
 }
 
-// bearerRecipient returns the Recipient of a current bearer
-// SubjectConfirmation addressed to signInURL.
+// bearerRecipient returns the Recipient of the one bearer
+// SubjectConfirmation addressed to signInURL. AWS requires exactly one
+// SubjectConfirmation element (IAM User Guide, Configure SAML assertions
+// for the authentication response).
 func bearerRecipient(subj *etree.Element, signInURL string, now time.Time) (string, error) {
-	for _, sc := range children(subj, nsSAMLAssertion, "SubjectConfirmation") {
-		if sc.SelectAttrValue("Method", "") != samlBearer {
+	scs := children(subj, nsSAMLAssertion, "SubjectConfirmation")
+	if len(scs) != 1 {
+		return "", invalidSAML("want exactly one SubjectConfirmation element, got %d", len(scs))
+	}
+	if scs[0].SelectAttrValue("Method", "") != samlBearer {
+		return "", invalidSAML("SubjectConfirmation is not bearer")
+	}
+	for _, d := range children(scs[0], nsSAMLAssertion, "SubjectConfirmationData") {
+		if d.SelectAttrValue("Recipient", "") != signInURL {
 			continue
 		}
-		for _, d := range children(sc, nsSAMLAssertion, "SubjectConfirmationData") {
-			if d.SelectAttrValue("Recipient", "") != signInURL {
-				continue
-			}
-			v := d.SelectAttrValue("NotOnOrAfter", "")
-			if v == "" {
-				return "", invalidSAML("SubjectConfirmationData has no NotOnOrAfter")
-			}
-			t, err := time.Parse(time.RFC3339Nano, v)
-			if err != nil {
-				return "", invalidSAML("SubjectConfirmationData NotOnOrAfter is not a time")
-			}
-			if !now.Before(t) {
-				return "", fmt.Errorf("%w: the SAML assertion has expired", ErrExpired)
-			}
-			return signInURL, nil
+		v := d.SelectAttrValue("NotOnOrAfter", "")
+		if v == "" {
+			return "", invalidSAML("SubjectConfirmationData has no NotOnOrAfter")
 		}
+		t, err := time.Parse(time.RFC3339Nano, v)
+		if err != nil {
+			return "", invalidSAML("SubjectConfirmationData NotOnOrAfter is not a time")
+		}
+		if !now.Before(t) {
+			return "", fmt.Errorf("%w: the SAML assertion has expired", ErrExpired)
+		}
+		return signInURL, nil
 	}
 	return "", invalidSAML("no bearer SubjectConfirmation with this service as Recipient")
 }
@@ -289,7 +293,7 @@ func (c *samlClaims) readAttributes(a *etree.Element) error {
 	}
 	if s := vals[samlSourceIDAttr]; len(s) > 0 {
 		if len(s) != 1 || !sourceIdentityRE.MatchString(s[0]) {
-			return invalidSAML("SourceIdentity attribute must be one value of 2-64 characters of [\\w+=,.@-]")
+			return invalidSAML("SourceIdentity attribute must be one value of 2-256 characters of [\\w+=,.@-]")
 		}
 		c.sourceIdentity = s[0]
 	}
