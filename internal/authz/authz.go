@@ -37,7 +37,8 @@ type Principal struct {
 	SessionPolicies []string
 	// SessionPolicyARNs are managed session policies, read from the store
 	// at each evaluation like attached policies; one that no longer
-	// exists grants nothing.
+	// exists fails the evaluation closed (ErrNoSuchEntity), since
+	// skipping it could drop a Deny and widen the session.
 	SessionPolicyARNs []string
 	// Federated marks a GetFederationToken session. Session policies
 	// always narrow it, so one without any has no permissions; it cannot
@@ -237,9 +238,6 @@ func (a *Authorizer) sessionPolicies(ctx context.Context, p Principal) ([]policy
 	}
 	for _, arn := range p.SessionPolicyARNs {
 		n, err := a.managed(ctx, arn)
-		if errors.Is(err, ErrNoSuchEntity) {
-			continue // a deleted managed session policy grants nothing
-		}
 		if err != nil {
 			return nil, fmt.Errorf("managed session policy: %w", err)
 		}

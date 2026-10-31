@@ -2,6 +2,7 @@ package authz_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -9,12 +10,15 @@ import (
 	"github.com/popododo0720/vws-iam/internal/iam"
 )
 
-const allowAllDoc = `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*"}}`
+const (
+	allowAllDoc   = `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*"}}`
+	denyDeleteDoc = `{"Version":"2012-10-17","Statement":{"Effect":"Deny","Action":"s3:DeleteObject","Resource":"*"}}`
+)
 
 // TestAuthorizeFederatedSession: a GetFederationToken session has only
 // the intersection of its user's policies and its session policies
-// (none means nothing), inline or managed, a managed session policy is
-// read at each evaluation, and IAM and STS (except GetCallerIdentity)
+// (none means nothing), inline or managed, a deleted managed session
+// policy fails closed, and IAM and STS (except GetCallerIdentity)
 // are refused whatever the policies allow, for a root caller too.
 func TestAuthorizeFederatedSession(t *testing.T) {
 	b := setup(t)
@@ -63,8 +67,8 @@ func TestAuthorizeFederatedSession(t *testing.T) {
 		}
 	}
 
-	// A managed session policy is read at evaluation: once deleted it
-	// grants nothing, and the evaluation does not fail.
+	// A managed session policy is read at evaluation: once deleted, the
+	// evaluation fails closed (NoSuchEntity), as for an attached policy.
 	p := fed(authz.User, "admin", nil, gone)
 	if d, err := a.Authorize(ctx, p, "s3:GetObject", "*", nil); err != nil || !d.Allowed {
 		t.Fatalf("before delete: %+v, %v", d, err)
@@ -72,20 +76,73 @@ func TestAuthorizeFederatedSession(t *testing.T) {
 	if err := b.Delete(ctx, iam.KindPolicy, "Gone", ""); err != nil {
 		t.Fatal(err)
 	}
-	if d, err := a.Authorize(ctx, p, "s3:GetObject", "*", nil); err != nil || d.Allowed {
-		t.Fatalf("after delete: %+v, %v", d, err)
+	if d, err := a.Authorize(ctx, p, "s3:GetObject", "*", nil); !errors.Is(err, authz.ErrNoSuchEntity) || d.Allowed {
+		t.Fatalf("after delete: %+v, %v; want NoSuchEntity", d, err)
+	}
+}
+
+// TestAuthorizeFederatedDeletedManagedDenyFailsClosed: deleting a managed
+// session policy that denies an action must not widen a federated
+// session whose inline session policy still allows it.
+func TestAuthorizeFederatedDeletedManagedDenyFailsClosed(t *testing.T) {
+	b := setup(t)
+	put(t, b, iam.User{Name: "admin", ID: "6", InlinePolicies: map[string]string{"all": allowAllDoc}})
+	put(t, b, iam.Policy{
+		Name: "NoDelete", ID: "8", DefaultVersion: "v1",
+		Versions: []iam.PolicyVersion{{ID: "v1", Document: denyDeleteDoc}},
+	})
+	a := authz.New(b, acct, nil)
+	ctx := context.Background()
+	p := authz.Principal{
+		Kind: authz.User, Name: "admin", ARN: "arn:vws:sts::" + acct + ":federated-user/bob",
+		SessionPolicies:   []string{allowAllDoc},
+		SessionPolicyARNs: []string{"arn:vws:iam::" + acct + ":policy/NoDelete"},
+		Federated:         true,
+	}
+	if d, err := a.Authorize(ctx, p, "s3:DeleteObject", "*", nil); err != nil || d.Allowed || !d.Explicit {
+		t.Fatalf("before delete: %+v, %v; want explicit deny", d, err)
+	}
+	if d, err := a.Authorize(ctx, p, "s3:GetObject", "*", nil); err != nil || !d.Allowed {
+		t.Fatalf("before delete, other action: %+v, %v; want allow", d, err)
+	}
+	if err := b.Delete(ctx, iam.KindPolicy, "NoDelete", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"s3:DeleteObject", "s3:GetObject"} {
+		d, err := a.Authorize(ctx, p, action, "*", nil)
+		if !errors.Is(err, authz.ErrNoSuchEntity) || d.Allowed {
+			t.Errorf("after delete: %s = %+v, %v; want NoSuchEntity, not allowed", action, d, err)
+		}
+	}
+}
+
+// TestAuthorizeFederatedPrincipal: the federated session acts as the
+// federated user, not the IAM user, and ManagedPolicyExists answers for
+// this project's policies only.
+func TestAuthorizeFederatedPrincipal(t *testing.T) {
+	b := setup(t)
+	put(t, b, iam.User{Name: "admin", ID: "6", InlinePolicies: map[string]string{"all": allowAllDoc}})
+	a := authz.New(b, acct, nil)
+	ctx := context.Background()
+	s3Read := "arn:vws:iam::" + acct + ":policy/S3Read"
+	gone := "arn:vws:iam::" + acct + ":policy/Gone"
+	fed := func(inline string) authz.Principal {
+		return authz.Principal{
+			Kind: authz.User, Name: "admin", ARN: "arn:vws:sts::" + acct + ":federated-user/bob",
+			SessionPolicies: []string{inline}, Federated: true,
+		}
 	}
 
 	// The federated session acts as the federated user, not the IAM user.
 	cond := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*",
 		"Condition":{"StringEquals":{"aws:PrincipalArn":"arn:vws:sts::` + acct + `:federated-user/bob"}}}}`
-	d, err := a.Authorize(ctx, fed(authz.User, "admin", []string{cond}), "s3:GetObject", "*", nil)
+	d, err := a.Authorize(ctx, fed(cond), "s3:GetObject", "*", nil)
 	if err != nil || !d.Allowed {
 		t.Fatalf("principal arn: %+v, %v", d, err)
 	}
 	user := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*",
 		"Condition":{"StringEquals":{"aws:username":"admin"}}}}`
-	d, err = a.Authorize(ctx, fed(authz.User, "admin", []string{user}), "s3:GetObject", "*", nil)
+	d, err = a.Authorize(ctx, fed(user), "s3:GetObject", "*", nil)
 	if err != nil || d.Allowed {
 		t.Fatalf("aws:username is not the IAM user's: %+v, %v", d, err)
 	}
