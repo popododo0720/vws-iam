@@ -125,6 +125,13 @@ func (s *Server) sessionPrincipal(ctx context.Context, sess sts.Session) (*iamv1
 	pid := sess.Project
 	pr := &iamv1.Principal{Project: pid, MfaAuthenticated: sess.MFA, AuthTime: ts(sess.AuthTime)}
 	p := s.project(pid)
+	if sess.Federated {
+		// TODO(#107): describe a federated user session once vws-proto
+		// has a federated principal type and Authorize carries session
+		// policies. Until then the gateway would authorize it as its IAM
+		// user, with the user's full permissions, so it fails closed.
+		return nil, badCredentials()
+	}
 	switch sess.Principal.Kind {
 	case authz.Root:
 		pr.Type, pr.Arn, pr.UniqueId = iamv1.PrincipalType_PRINCIPAL_TYPE_ROOT, rootARN(pid), pid

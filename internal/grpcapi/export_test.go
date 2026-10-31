@@ -6,6 +6,8 @@ import (
 	"cloud.google.com/go/longrunning/autogen/longrunningpb"
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
+
+	"github.com/popododo0720/vws-iam/internal/sts"
 )
 
 // AttemptCounterHash is the store key of the attempt counter of scope
@@ -82,4 +84,12 @@ func (s *Server) DecodeAuthorizationMessageFrom(
 	ctx context.Context, sigv4 *iamv1.AuthenticateRequest, console, consoleIP, encoded string,
 ) (string, error) {
 	return s.decodeAuthorizationMessage(ctx, sigv4, console, consoleIP, encoded)
+}
+
+// GetFederationToken is STS GetFederationToken, which vws-proto does not
+// carry yet (#107).
+func (s *Server) GetFederationToken(
+	ctx context.Context, sigv4 *iamv1.AuthenticateRequest, console string, req sts.FederationRequest,
+) (sts.FederationToken, error) {
+	return s.getFederationToken(ctx, sigv4, console, req)
 }
