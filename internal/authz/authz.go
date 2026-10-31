@@ -94,6 +94,9 @@ func (a *Authorizer) managed(ctx context.Context, arn string) (policy.Named, err
 	if err != nil {
 		return policy.Named{}, err
 	}
+	if iam.PolicyARN(a.account, p.Object) != arn {
+		return policy.Named{}, fmt.Errorf("policy %q: %w", arn, ErrNoSuchEntity)
+	}
 	d, err := policy.ParseIdentity(p.Object.Default())
 	if err != nil {
 		return policy.Named{}, fmt.Errorf("stored policy %q: %w", arn, err)
