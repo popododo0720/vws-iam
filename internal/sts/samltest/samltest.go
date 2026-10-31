@@ -104,6 +104,9 @@ type Assertion struct {
 	SessionNotOnOrAfter time.Time
 	// Status zero means Success.
 	Status string
+	// MoreAudienceRestrictions are AudienceRestriction elements after the
+	// one naming Audience, each with the listed Audience values.
+	MoreAudienceRestrictions [][]string
 }
 
 // Response returns the base64 SAML response for a, signed as sign asks.
@@ -176,6 +179,12 @@ func assertion(a Assertion) *etree.Element {
 	setTime(cond, "NotBefore", a.NotBefore)
 	setTime(cond, "NotOnOrAfter", a.NotOnOrAfter)
 	cond.CreateElement("saml:AudienceRestriction").CreateElement("saml:Audience").SetText(a.Audience)
+	for _, r := range a.MoreAudienceRestrictions {
+		ar := cond.CreateElement("saml:AudienceRestriction")
+		for _, au := range r {
+			ar.CreateElement("saml:Audience").SetText(au)
+		}
+	}
 	authn := as.CreateElement("saml:AuthnStatement")
 	setTime(authn, "SessionNotOnOrAfter", a.SessionNotOnOrAfter)
 	st := as.CreateElement("saml:AttributeStatement")

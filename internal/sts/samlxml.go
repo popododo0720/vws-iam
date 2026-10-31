@@ -3,6 +3,7 @@ package sts
 import (
 	"encoding/base64"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -136,7 +137,7 @@ func assertionClaims(a *etree.Element, entityID, audience string, now time.Time)
 		return samlClaims{}, err
 	}
 	if !hasAudience(cond, audience) {
-		return samlClaims{}, invalidSAML("no AudienceRestriction names this service")
+		return samlClaims{}, invalidSAML("an AudienceRestriction does not name this service")
 	}
 	subj, err := one(a, nsSAMLAssertion, "Subject")
 	if err != nil {
@@ -195,15 +196,20 @@ func checkWindow(el *etree.Element, now time.Time) error {
 	return nil
 }
 
+// hasAudience reports whether every AudienceRestriction of cond names
+// audience, and there is at least one. SAML 2.0 core 2.5.1.4: the
+// Audience values of one restriction combine with OR, the restrictions
+// with AND.
 func hasAudience(cond *etree.Element, audience string) bool {
-	for _, r := range children(cond, nsSAMLAssertion, "AudienceRestriction") {
-		for _, au := range children(r, nsSAMLAssertion, "Audience") {
-			if strings.TrimSpace(au.Text()) == audience {
-				return true
-			}
+	rs := children(cond, nsSAMLAssertion, "AudienceRestriction")
+	for _, r := range rs {
+		if !slices.ContainsFunc(children(r, nsSAMLAssertion, "Audience"), func(au *etree.Element) bool {
+			return strings.TrimSpace(au.Text()) == audience
+		}) {
+			return false
 		}
 	}
-	return false
+	return len(rs) > 0
 }
 
 // bearerRecipient returns the Recipient of a current bearer

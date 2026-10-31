@@ -371,3 +371,31 @@ func TestAssumeRoleWithSAMLValidation(t *testing.T) {
 		t.Fatalf("role max duration with managed session policy: %v, %v", got, err)
 	}
 }
+
+// TestAssumeRoleWithSAMLEveryAudienceRestriction: each AudienceRestriction
+// must name this service (SAML 2.0 core 2.5.1.4: OR within one
+// restriction, AND across restrictions), so an assertion that a second
+// restriction limits to another service is InvalidIdentityToken.
+func TestAssumeRoleWithSAMLEveryAudienceRestriction(t *testing.T) {
+	e := samlSetup(t)
+	ctx := context.Background()
+	evil := "https://evil.test/saml"
+	for name, tc := range map[string]struct {
+		more [][]string
+		ok   bool
+	}{
+		"second restriction names another": {[][]string{{evil}}, false},
+		"second restriction is empty":      {[][]string{{}}, false},
+		"second restriction names us too":  {[][]string{{evil, samlAud}}, true},
+	} {
+		a := e.claims()
+		a.MoreAudienceRestrictions = tc.more
+		_, err := e.svc.AssumeRoleWithSAML(ctx, samlReq(e.response(t, a, samltest.SignAssertion)))
+		if tc.ok && err != nil {
+			t.Errorf("%s: %v, want credentials", name, err)
+		}
+		if !tc.ok && !errors.Is(err, sts.ErrInvalidIdentityToken) {
+			t.Errorf("%s: %v, want InvalidIdentityToken", name, err)
+		}
+	}
+}
