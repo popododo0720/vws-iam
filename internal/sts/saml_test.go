@@ -443,3 +443,61 @@ func TestAssumeRoleWithSAMLSetSourceIdentity(t *testing.T) {
 		}
 	}
 }
+
+// TestAssumeRoleWithSAMLAttributeContext: the signed eduPerson, eduOrg,
+// Active Directory and X.500 attributes AWS maps to trust-policy keys
+// ("Mapping SAML attributes to AWS trust policy context keys") reach the
+// trust policy as SAML:<key>, so an Allow or a Deny on one decides; a
+// string-typed key with conflicting values fails closed.
+func TestAssumeRoleWithSAMLAttributeContext(t *testing.T) {
+	e := samlSetup(t)
+	ctx := context.Background()
+	const (
+		eppn        = "urn:oid:1.3.6.1.4.1.5923.1.1.1.6"
+		affiliation = "urn:oid:1.3.6.1.4.1.5923.1.1.1.1"
+		adMail      = "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress"
+		x500Mail    = "0.9.2342.19200300.100.1.3"
+	)
+	allow := `{"Effect":"Allow","Principal":{"Federated":"` + samlIdpARN +
+		`"},"Action":["sts:AssumeRoleWithSAML","sts:SetSourceIdentity"]`
+	deny := func(key, value string) string {
+		return `,{"Effect":"Deny","Principal":"*","Action":"sts:AssumeRoleWithSAML",` +
+			`"Condition":{"StringEquals":{"` + key + `":"` + value + `"}}}`
+	}
+	allowIf := allow + `,"Condition":{"StringEquals":{"SAML:eduPersonPrincipalName":"alice@corp.test"}}}`
+	denyMail := allow + "}" + deny("saml:mail", "mallory@corp.test")
+	denyStudent := allow + "}" + deny("SAML:eduPersonAffiliation", "student")
+	for _, tc := range []struct {
+		name, trust string
+		attrs       map[string][]string
+		want        error
+	}{
+		{"allow condition met", allowIf, map[string][]string{eppn: {"alice@corp.test"}}, nil},
+		{"allow condition other value", allowIf, map[string][]string{eppn: {"bob@corp.test"}}, sts.ErrAccessDenied},
+		{"allow condition key absent", allowIf, nil, sts.ErrAccessDenied},
+		{"deny AD mail", denyMail, map[string][]string{adMail: {"mallory@corp.test"}}, sts.ErrAccessDenied},
+		{"deny X.500 mail", denyMail, map[string][]string{x500Mail: {"mallory@corp.test"}}, sts.ErrAccessDenied},
+		{"deny not matched", denyMail, map[string][]string{adMail: {"alice@corp.test"}}, nil},
+		{"deny one of a list", denyStudent, map[string][]string{affiliation: {"staff", "student"}}, sts.ErrAccessDenied},
+		{"list without the denied value", denyStudent, map[string][]string{affiliation: {"staff"}}, nil},
+		{"string key with two values", denyMail, map[string][]string{
+			adMail: {"alice@corp.test", "mallory@corp.test"},
+		}, sts.ErrInvalidIdentityToken},
+		{"two claims of one string key disagree", denyMail, map[string][]string{
+			adMail: {"alice@corp.test"}, x500Mail: {"mallory@corp.test"},
+		}, sts.ErrInvalidIdentityToken},
+	} {
+		if _, err := store.Mutate(ctx, e.b, "saml-dev", func(r *iam.Role) error {
+			r.AssumeRolePolicy = `{"Version":"2012-10-17","Statement":[` + tc.trust + `]}`
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		a := e.claims()
+		a.Attributes = tc.attrs
+		_, err := e.svc.AssumeRoleWithSAML(ctx, samlReq(e.response(t, a, samltest.SignAssertion)))
+		if (tc.want == nil && err != nil) || (tc.want != nil && !errors.Is(err, tc.want)) {
+			t.Errorf("%s: %v, want %v", tc.name, err, tc.want)
+		}
+	}
+}

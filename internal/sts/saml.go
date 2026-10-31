@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"strconv"
 	"strings"
@@ -129,8 +130,9 @@ func (r SAMLRoleSession) String() string {
 // by a certificate of the SAML provider PrincipalARN, be addressed to this
 // service's audience, be current, and grant the (RoleARN, PrincipalARN)
 // pair in its Role attribute; the role's trust policy must allow
-// sts:AssumeRoleWithSAML for the provider with the SAML:* keys of the
-// assertion. Session policies narrow the session. Nothing is stored.
+// sts:AssumeRoleWithSAML (and sts:SetSourceIdentity with a SourceIdentity
+// attribute) for the provider with the SAML:* keys of the assertion,
+// including its mapped attributes (samlContextAttrs). Session policies narrow the session. Nothing is stored.
 func (s *Service) AssumeRoleWithSAML(ctx context.Context, req SAMLRequest) (SAMLRoleSession, error) {
 	packed, err := validateSAMLRequest(req)
 	if err != nil {
@@ -170,12 +172,18 @@ func (s *Service) AssumeRoleWithSAML(ctx context.Context, req SAMLRequest) (SAML
 		return SAMLRoleSession{}, err
 	}
 	nameQualifier := samlNameQualifier(cl.issuer, s.account, providerName)
-	tctx := map[string][]string{
+	// Mapped attributes go in first, so the keys below always win; their
+	// names never collide (samlContextAttrs).
+	tctx := maps.Clone(cl.context)
+	if tctx == nil {
+		tctx = map[string][]string{}
+	}
+	maps.Copy(tctx, map[string][]string{
 		"SAML:aud": {cl.recipient}, "SAML:iss": {cl.issuer}, "SAML:sub": {cl.subject},
 		"SAML:sub_type": {cl.subjectType}, "SAML:namequalifier": {nameQualifier},
 		"SAML:doc":              {s.account + "/" + providerName},
 		"aws:FederatedProvider": {req.PrincipalARN},
-	}
+	})
 	if cl.sourceIdentity != "" {
 		tctx["sts:SourceIdentity"] = []string{cl.sourceIdentity}
 	}

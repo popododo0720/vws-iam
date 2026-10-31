@@ -31,6 +31,8 @@ type samlClaims struct {
 	sessionDuration     time.Duration
 	sourceIdentity      string
 	sessionNotOnOrAfter time.Time
+	// context are the SAML:<key> trust-policy keys of mapped attributes.
+	context map[string][]string
 }
 
 // grants reports whether the Role attribute names roleARN with
@@ -241,7 +243,8 @@ func bearerRecipient(subj *etree.Element, audience string, now time.Time) (strin
 }
 
 // readAttributes reads the Role, RoleSessionName, SessionDuration and
-// SourceIdentity attributes.
+// SourceIdentity attributes and the attributes mapped to trust-policy
+// context keys.
 func (c *samlClaims) readAttributes(a *etree.Element) error {
 	vals := map[string][]string{}
 	for _, st := range children(a, nsSAMLAssertion, "AttributeStatement") {
@@ -266,6 +269,10 @@ func (c *samlClaims) readAttributes(a *etree.Element) error {
 	if len(c.roles) == 0 {
 		return invalidSAML("the Role attribute is missing")
 	}
+	var err error
+	if c.context, err = samlAttributeContext(vals); err != nil {
+		return err
+	}
 	names := vals[samlSessionNameAttr]
 	if len(names) != 1 || !sessionNameRE.MatchString(names[0]) {
 		return invalidSAML("RoleSessionName attribute must be one value of 2-64 characters of [\\w+=,.@-]")
@@ -275,7 +282,6 @@ func (c *samlClaims) readAttributes(a *etree.Element) error {
 		if len(d) != 1 {
 			return invalidSAML("SessionDuration attribute has several values")
 		}
-		var err error
 		if c.sessionDuration, err = parseSessionDuration(d[0]); err != nil {
 			return err
 		}

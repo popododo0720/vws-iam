@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"math/big"
+	"slices"
 	"strings"
 	"time"
 
@@ -107,6 +108,8 @@ type Assertion struct {
 	// MoreAudienceRestrictions are AudienceRestriction elements after the
 	// one naming Audience, each with the listed Audience values.
 	MoreAudienceRestrictions [][]string
+	// Attributes are more Attribute elements, by Name.
+	Attributes map[string][]string
 }
 
 // Response returns the base64 SAML response for a, signed as sign asks.
@@ -207,6 +210,14 @@ func assertion(a Assertion) *etree.Element {
 	}
 	if a.SourceIdentity != "" {
 		attr(base+"SourceIdentity", a.SourceIdentity)
+	}
+	names := make([]string, 0, len(a.Attributes))
+	for n := range a.Attributes {
+		names = append(names, n)
+	}
+	slices.Sort(names)
+	for _, n := range names {
+		attr(n, a.Attributes[n]...)
 	}
 	return as
 }
