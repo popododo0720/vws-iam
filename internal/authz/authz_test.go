@@ -120,3 +120,33 @@ func TestAuthorizeInlineOverMaxSize(t *testing.T) {
 		}
 	}
 }
+
+// TestManagedPolicyARNIncludesPath checks that a managed policy is
+// identified by its full ARN, path included, as in AWS (#191).
+func TestManagedPolicyARNIncludesPath(t *testing.T) {
+	b := setup(t)
+	put(t, b, iam.Policy{Name: "TeamRead", ID: "30", Path: "/other/", DefaultVersion: "v1", Versions: []iam.PolicyVersion{
+		{ID: "v1", Document: `{"Version":"2012-10-17","Statement":{"Effect":"Allow",` +
+			`"Action":"s3:GetObject","Resource":"*"}}`},
+	}})
+	a := authz.New(b, acct, nil)
+	ctx := context.Background()
+	for _, c := range []struct {
+		arn  string
+		want bool
+	}{
+		{"arn:vws:iam::" + acct + ":policy/S3Read", true},
+		{"arn:vws:iam::" + acct + ":policy/other/S3Read", false},
+		{"arn:vws:iam::" + acct + ":policy/other/TeamRead", true},
+		{"arn:vws:iam::" + acct + ":policy/TeamRead", false},
+	} {
+		if got, err := a.ManagedPolicyExists(ctx, c.arn); err != nil || got != c.want {
+			t.Errorf("ManagedPolicyExists(%s) = %v, %v; want %v", c.arn, got, err, c.want)
+		}
+	}
+	put(t, b, iam.User{Name: "pat", ID: "31", AttachedPolicies: []string{"arn:vws:iam::" + acct + ":policy/other/S3Read"}})
+	if _, err := a.Authorize(ctx, authz.Principal{Kind: authz.User, Name: "pat"},
+		"s3:GetObject", "*", nil); !errors.Is(err, authz.ErrNoSuchEntity) {
+		t.Errorf("attached policy with the wrong path: %v", err)
+	}
+}
