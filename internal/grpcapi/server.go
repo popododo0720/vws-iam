@@ -74,7 +74,7 @@ func WithClock(now func() time.Time) Option { return func(s *Server) { s.now = n
 
 // WithSAML sets the SAML providers and sign-in audience of
 // AssumeRoleWithSAML. Without it (there is no SAML provider store yet,
-// #106) every AssumeRoleWithSAML call is InvalidIdentityToken.
+// #196) every AssumeRoleWithSAML call is InvalidIdentityToken.
 func WithSAML(p sts.SAMLProviders, audience string) Option {
 	return func(s *Server) { s.saml, s.samlAudience = p, audience }
 }
