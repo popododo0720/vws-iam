@@ -1,5 +1,5 @@
-// Package sts issues temporary credentials: AssumeRole, GetSessionToken
-// and GetFederationToken.
+// Package sts issues temporary credentials: AssumeRole, GetSessionToken,
+// GetFederationToken and AssumeRoleWithSAML.
 //
 // A session token is the session itself (principal, temporary secret,
 // expiry, MFA flag, session policies) sealed with AES-256-GCM under the KEK
@@ -214,6 +214,9 @@ type Service struct {
 	index   store.Backend
 	account string
 	now     func() time.Time
+	// saml and samlAudience serve AssumeRoleWithSAML (WithSAML).
+	saml         SAMLProviders
+	samlAudience string
 }
 
 // Option configures a Service.
