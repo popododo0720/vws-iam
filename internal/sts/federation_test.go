@@ -49,8 +49,10 @@ func fedSetup(t *testing.T) fedEnv {
 		t.Fatal(err)
 	}
 	b := memstore.New()
-	put(t, b, iam.Policy{Name: "S3Read", ID: "p1", DefaultVersion: "v1", Versions: []iam.PolicyVersion{{ID: "v1",
-		Document: `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}}`}}})
+	put(t, b, iam.Policy{Name: "S3Read", ID: "p1", DefaultVersion: "v1", Versions: []iam.PolicyVersion{{
+		ID:       "v1",
+		Document: `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}}`,
+	}}})
 	put(t, b, iam.User{Name: "broker", ID: "AIDABROKER", InlinePolicies: map[string]string{"fed": fedAllowed}})
 	put(t, b, iam.User{Name: "nobody", ID: "AIDANOBODY"})
 	put(t, b, iam.Role{
@@ -161,7 +163,8 @@ func TestGetFederationToken(t *testing.T) {
 // allowed everything.
 func TestGetFederationTokenWithoutPolicyHasNoPermissions(t *testing.T) {
 	e := fedSetup(t)
-	tok, err := e.svc.GetFederationToken(context.Background(), e.caller(t, "broker"), nil, sts.FederationRequest{Name: "bob"})
+	ctx := context.Background()
+	tok, err := e.svc.GetFederationToken(ctx, e.caller(t, "broker"), nil, sts.FederationRequest{Name: "bob"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +231,8 @@ func TestGetFederationTokenCallers(t *testing.T) {
 
 	root := sts.RootCaller(false, time.Time{})
 	for _, d := range []time.Duration{0, 2 * time.Hour, sts.MaxFederationDuration} {
-		tok, err := e.svc.GetFederationToken(ctx, root, nil, sts.FederationRequest{Name: "ops", Duration: d, Policy: s3PutOnly})
+		r := sts.FederationRequest{Name: "ops", Duration: d, Policy: s3PutOnly}
+		tok, err := e.svc.GetFederationToken(ctx, root, nil, r)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -251,8 +255,9 @@ func TestGetFederationTokenCallers(t *testing.T) {
 func TestGetFederationTokenRevokedWithUser(t *testing.T) {
 	e := fedSetup(t)
 	ctx := context.Background()
+	broker := e.caller(t, "broker")
 	issue := func() sts.Credentials {
-		tok, err := e.svc.GetFederationToken(ctx, e.caller(t, "broker"), nil, sts.FederationRequest{Name: "bob"})
+		tok, err := e.svc.GetFederationToken(ctx, broker, nil, sts.FederationRequest{Name: "bob"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -318,13 +323,24 @@ func TestGetFederationTokenValidation(t *testing.T) {
 			{"Effect":"Allow","Principal":"*","Action":"s3:*","Resource":"*"}}`}, policy.ErrMalformed},
 		{"ten policy arns", sts.FederationRequest{Name: "bob", PolicyARNs: arns(10)}, nil},
 		{"eleven policy arns", sts.FederationRequest{Name: "bob", PolicyARNs: arns(11)}, sts.ErrInvalidRequest},
-		{"short policy arn", sts.FederationRequest{Name: "bob", PolicyARNs: []string{"arn:vws:iam::x"}}, sts.ErrInvalidRequest},
-		{"unknown policy arn", sts.FederationRequest{Name: "bob",
-			PolicyARNs: []string{"arn:vws:iam::" + acct + ":policy/Missing"}}, policy.ErrMalformed},
-		{"other project policy arn", sts.FederationRequest{Name: "bob",
-			PolicyARNs: []string{"arn:vws:iam::111111111111:policy/S3Read"}}, policy.ErrMalformed},
-		{"packed too large", sts.FederationRequest{Name: "bob", Policy: pad(2000), PolicyARNs: arns(2)},
-			sts.ErrPackedPolicyTooLarge},
+		{
+			"short policy arn",
+			sts.FederationRequest{Name: "bob", PolicyARNs: []string{"arn:vws:iam::x"}},
+			sts.ErrInvalidRequest,
+		},
+		{"unknown policy arn", sts.FederationRequest{
+			Name:       "bob",
+			PolicyARNs: []string{"arn:vws:iam::" + acct + ":policy/Missing"},
+		}, policy.ErrMalformed},
+		{"other project policy arn", sts.FederationRequest{
+			Name:       "bob",
+			PolicyARNs: []string{"arn:vws:iam::111111111111:policy/S3Read"},
+		}, policy.ErrMalformed},
+		{
+			"packed too large",
+			sts.FederationRequest{Name: "bob", Policy: pad(2000), PolicyARNs: arns(2)},
+			sts.ErrPackedPolicyTooLarge,
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			tok, err := e.svc.GetFederationToken(ctx, broker, nil, c.req)

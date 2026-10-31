@@ -19,7 +19,10 @@ const allowAllDoc = `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Acti
 func TestAuthorizeFederatedSession(t *testing.T) {
 	b := setup(t)
 	put(t, b, iam.User{Name: "admin", ID: "6", InlinePolicies: map[string]string{"all": allowAllDoc}})
-	put(t, b, iam.Policy{Name: "Gone", ID: "7", DefaultVersion: "v1", Versions: []iam.PolicyVersion{{ID: "v1", Document: allowAllDoc}}})
+	put(t, b, iam.Policy{
+		Name: "Gone", ID: "7", DefaultVersion: "v1",
+		Versions: []iam.PolicyVersion{{ID: "v1", Document: allowAllDoc}},
+	})
 	a := authz.New(b, acct, func() time.Time { return time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC) })
 	ctx := context.Background()
 	s3Read := "arn:vws:iam::" + acct + ":policy/S3Read"
@@ -76,12 +79,14 @@ func TestAuthorizeFederatedSession(t *testing.T) {
 	// The federated session acts as the federated user, not the IAM user.
 	cond := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*",
 		"Condition":{"StringEquals":{"aws:PrincipalArn":"arn:vws:sts::` + acct + `:federated-user/bob"}}}}`
-	if d, err := a.Authorize(ctx, fed(authz.User, "admin", []string{cond}), "s3:GetObject", "*", nil); err != nil || !d.Allowed {
+	d, err := a.Authorize(ctx, fed(authz.User, "admin", []string{cond}), "s3:GetObject", "*", nil)
+	if err != nil || !d.Allowed {
 		t.Fatalf("principal arn: %+v, %v", d, err)
 	}
 	user := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*",
 		"Condition":{"StringEquals":{"aws:username":"admin"}}}}`
-	if d, err := a.Authorize(ctx, fed(authz.User, "admin", []string{user}), "s3:GetObject", "*", nil); err != nil || d.Allowed {
+	d, err = a.Authorize(ctx, fed(authz.User, "admin", []string{user}), "s3:GetObject", "*", nil)
+	if err != nil || d.Allowed {
 		t.Fatalf("aws:username is not the IAM user's: %+v, %v", d, err)
 	}
 

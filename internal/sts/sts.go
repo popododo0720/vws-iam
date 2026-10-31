@@ -595,7 +595,11 @@ func (s *Service) Validate(ctx context.Context, accessKeyID, token string) (Sess
 	if p.Kind != authz.Role && !p.Federated {
 		p.ARN = "" // a GetSessionToken session acts as the user (or root) itself
 	}
-	return Session{AccessKeyID: sess.AccessKeyID, Secret: sess.Secret, Project: sess.Project, AuthTime: sess.AuthTime, RoleID: sess.RoleID, SessionName: sess.SessionName, Federated: sess.Federated, Principal: p, PrincipalID: sess.PrincipalID, MFA: sess.MFA, IssuedAt: sess.IssuedAt, Expires: sess.Expires}, nil
+	return Session{
+		AccessKeyID: sess.AccessKeyID, Secret: sess.Secret, Project: sess.Project, AuthTime: sess.AuthTime,
+		RoleID: sess.RoleID, SessionName: sess.SessionName, Federated: sess.Federated, Principal: p,
+		PrincipalID: sess.PrincipalID, MFA: sess.MFA, IssuedAt: sess.IssuedAt, Expires: sess.Expires,
+	}, nil
 }
 
 // sessionRevoked compares generations, which come from the store's write
