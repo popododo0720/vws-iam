@@ -194,10 +194,12 @@ func (s Session) Context() map[string][]string {
 
 // Service issues and validates temporary credentials.
 type Service struct {
-	b       store.Backend
-	keys    *secret.Keyring
-	authz   *authz.Authorizer
-	mfa     MFAVerifier
+	b     store.Backend
+	keys  *secret.Keyring
+	authz *authz.Authorizer
+	mfa   MFAVerifier
+	// index is the unscoped backend with the key id -> project index.
+	index   store.Backend
 	account string
 	now     func() time.Time
 }

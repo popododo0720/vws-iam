@@ -26,6 +26,7 @@ type metrics struct {
 	login   metric.Int64Counter
 	issued  metric.Int64Counter
 	decoded metric.Int64Counter
+	keyInfo metric.Int64Counter
 }
 
 func newMetrics() *metrics {
@@ -43,6 +44,7 @@ func newMetrics() *metrics {
 		login:   c("vws.iam.login", "Login results"),
 		issued:  c("vws.iam.sts.issued", "Temporary credentials issued"),
 		decoded: c("vws.iam.sts.decode_authorization_message", "DecodeAuthorizationMessage results"),
+		keyInfo: c("vws.iam.sts.get_access_key_info", "GetAccessKeyInfo results"),
 	}
 }
 

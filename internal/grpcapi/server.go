@@ -113,7 +113,7 @@ func (s *Server) project(id string) project {
 		authz: az,
 		keys:  accesskey.New(b, s.b, id, s.keys, s.now),
 		mfa:   m,
-		sts:   sts.New(b, s.keys, az, id, s.now, sts.WithMFA(mfaVerifier{m: m, s: s, project: id})),
+		sts:   sts.New(b, s.keys, az, id, s.now, sts.WithMFA(mfaVerifier{m: m, s: s, project: id}), sts.WithKeyIndex(s.b)),
 	}
 }
 

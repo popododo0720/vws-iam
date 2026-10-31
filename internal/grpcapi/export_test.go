@@ -67,6 +67,14 @@ func (s *Server) DecodeAuthorizationMessage(
 	return s.decodeAuthorizationMessage(ctx, sigv4, console, "", encoded)
 }
 
+// GetAccessKeyInfo is STS GetAccessKeyInfo, which vws-proto does not
+// carry yet (#108).
+func (s *Server) GetAccessKeyInfo(
+	ctx context.Context, sigv4 *iamv1.AuthenticateRequest, console, consoleIP, accessKeyID string,
+) (string, error) {
+	return s.getAccessKeyInfo(ctx, sigv4, console, consoleIP, accessKeyID)
+}
+
 // DecodeAuthorizationMessageFrom is DecodeAuthorizationMessage with the
 // gateway-observed source IP of a console request, which vws-proto does
 // not carry yet (#109).
