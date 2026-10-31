@@ -712,3 +712,33 @@ func TestAssumeRoleWithSAMLChainedIdentity(t *testing.T) {
 		t.Fatalf("plain session SAML identity %+v, %v", ps.SAML, err)
 	}
 }
+
+// TestAssumeRoleWithSAMLSessionNotOnOrAfterAbsolute: SessionNotOnOrAfter
+// caps the expiry as an absolute time, so time spent between reading the
+// assertion and sealing the session does not push the expiry past it.
+func TestAssumeRoleWithSAMLSessionNotOnOrAfterAbsolute(t *testing.T) {
+	e := samlSetup(t)
+	ctx := context.Background()
+	start := e.clk.now()
+	// Every clock read moves 10 seconds on, as a slow request would.
+	tick := start
+	slow := func() time.Time {
+		now := tick
+		tick = tick.Add(10 * time.Second)
+		return now
+	}
+	provs := samltest.Providers{samlIdpARN: e.idp.Provider(samlIdpARN)}
+	svc := sts.New(e.b, e.keys, e.az, acct, slow, sts.WithSAML(provs, samlSP))
+	a := e.claims()
+	a.SessionNotOnOrAfter = start.Add(20 * time.Minute)
+	got, err := svc.AssumeRoleWithSAML(ctx, samlReq(e.response(t, a, samltest.SignAssertion)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exp := got.Credentials.Expiration; exp.After(a.SessionNotOnOrAfter) {
+		t.Fatalf("expires %v, after SessionNotOnOrAfter %v", exp, a.SessionNotOnOrAfter)
+	}
+	if !got.Credentials.Expiration.Equal(a.SessionNotOnOrAfter) {
+		t.Fatalf("expires %v, want SessionNotOnOrAfter %v", got.Credentials.Expiration, a.SessionNotOnOrAfter)
+	}
+}

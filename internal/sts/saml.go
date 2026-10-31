@@ -236,13 +236,13 @@ func (s *Service) AssumeRoleWithSAML(ctx context.Context, req SAMLRequest) (SAML
 		inline = []string{req.Policy}
 	}
 	arn := iam.ARN("sts", "", s.account, "assumed-role/"+r.Object.Name+"/"+cl.sessionName)
-	creds, err := s.issue(ctx, session{
+	creds, err := s.issueBy(ctx, session{
 		Kind: int(authz.Role), Name: r.Object.Name, ARN: arn, Policies: inline, PolicyARNs: req.PolicyARNs,
 		PrincipalID: r.Object.ID, RoleID: r.Object.ID, SessionName: cl.sessionName,
 		// AWS keeps these three keys for later requests and AssumeRole
 		// calls of the session (cross-service SAML context keys).
 		SAML: &SAMLIdentity{Subject: cl.subject, SubjectType: cl.subjectType, NameQualifier: nameQualifier},
-	}, d)
+	}, d, cl.sessionNotOnOrAfter) // SessionNotOnOrAfter stays an absolute cap
 	if err != nil {
 		return SAMLRoleSession{}, fmt.Errorf("assume role with saml: %w", err)
 	}
@@ -329,7 +329,8 @@ func (s *Service) samlRole(ctx context.Context, roleARN string) (store.Versioned
 
 // samlDuration is the session length: DurationSeconds (default one
 // hour), which must not exceed the role's maximum, shortened to the
-// assertion's SessionDuration attribute and SessionNotOnOrAfter.
+// assertion's SessionDuration attribute and SessionNotOnOrAfter. Issuance
+// applies SessionNotOnOrAfter again as an absolute time (issueBy).
 func samlDuration(req, roleMax time.Duration, cl samlClaims, now time.Time) (time.Duration, error) {
 	if roleMax == 0 {
 		roleMax = time.Hour

@@ -560,6 +560,13 @@ func (s *Service) GetSessionToken(ctx context.Context, c Caller, duration time.D
 }
 
 func (s *Service) issue(ctx context.Context, sess session, d time.Duration) (Credentials, error) {
+	return s.issueBy(ctx, sess, d, time.Time{})
+}
+
+// issueBy is issue with an absolute latest expiry (zero means none): the
+// session ends at notAfter if that comes before now plus d, and a
+// notAfter already passed is ErrExpired.
+func (s *Service) issueBy(ctx context.Context, sess session, d time.Duration, notAfter time.Time) (Credentials, error) {
 	// Read the generation before the token exists: a revocation that
 	// commits after this read bumps it and rejects the token.
 	gen, err := s.revokeGen(ctx, authz.PrincipalKind(sess.Kind), sess.Name)
@@ -575,11 +582,19 @@ func (s *Service) issue(ctx context.Context, sess session, d time.Duration) (Cre
 	if err != nil {
 		return Credentials{}, err
 	}
-	sess.AccessKeyID, sess.Secret, sess.IssuedAt, sess.Project = id, sec, s.now().UTC(), s.account
+	now := s.now().UTC()
+	sess.AccessKeyID, sess.Secret, sess.IssuedAt, sess.Project = id, sec, now, s.account
 	if sess.AuthTime.IsZero() {
-		sess.AuthTime = s.now().UTC().Truncate(time.Second)
+		sess.AuthTime = now.Truncate(time.Second)
 	}
-	sess.Expires = s.now().UTC().Add(d).Truncate(time.Second)
+	exp := now.Add(d)
+	if !notAfter.IsZero() && notAfter.Before(exp) {
+		exp = notAfter
+	}
+	sess.Expires = exp.Truncate(time.Second)
+	if !sess.Expires.After(now) {
+		return Credentials{}, fmt.Errorf("%w: the session would end before it starts", ErrExpired)
+	}
 	b, err := json.Marshal(sess)
 	if err != nil {
 		return Credentials{}, fmt.Errorf("session: %w", err)
