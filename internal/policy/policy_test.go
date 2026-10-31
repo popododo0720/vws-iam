@@ -131,6 +131,38 @@ func TestTrustPolicy(t *testing.T) {
 	}
 }
 
+// TestTrustPolicyFederatedPrincipal: a "Federated" principal matches
+// only the identity provider ARN of a federated request, never an IAM
+// principal or the account, and its SAML conditions apply.
+func TestTrustPolicyFederatedPrincipal(t *testing.T) {
+	idp := "arn:vws:iam::" + acct + ":saml-provider/corp"
+	trust, err := policy.ParseTrust(`{"Version":"2012-10-17","Statement":{"Effect":"Allow",
+		"Principal":{"Federated":"` + idp + `"},"Action":"sts:AssumeRoleWithSAML",
+		"Condition":{"StringEquals":{"SAML:aud":"https://signin.example/saml"}}}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := []policy.Named{{Name: "trust", Doc: trust}}
+	aud := map[string][]string{"saml:aud": {"https://signin.example/saml"}}
+	ok := policy.Request{Federated: idp, Action: "sts:AssumeRoleWithSAML", Context: aud}
+	if d := policy.Evaluate(ok, set, nil); !d.Allowed {
+		t.Fatal(d)
+	}
+	for name, r := range map[string]policy.Request{
+		"other provider": {Federated: idp + "x", Action: "sts:AssumeRoleWithSAML", Context: aud},
+		"IAM principal":  {Principal: idp, Account: acct, Action: "sts:AssumeRoleWithSAML", Context: aud},
+		"wrong audience": {
+			Federated: idp, Action: "sts:AssumeRoleWithSAML",
+			Context: map[string][]string{"saml:aud": {"https://evil.example/saml"}},
+		},
+		"other action": {Federated: idp, Action: "sts:AssumeRole", Context: aud},
+	} {
+		if d := policy.Evaluate(r, set, nil); d.Allowed {
+			t.Errorf("%s: allowed", name)
+		}
+	}
+}
+
 func TestMalformedPolicies(t *testing.T) {
 	bad := []string{
 		``, `null`, `[]`, `{}`,

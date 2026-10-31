@@ -103,7 +103,7 @@ func (s *Server) authenticatedCallerFrom(
 ) (project, sts.Caller, string, error) {
 	switch {
 	case a.sigv4 != nil:
-		resp, err := s.authenticate(ctx, a.sigv4)
+		resp, err := s.authenticate(ctx, a.sigv4, false)
 		if err != nil {
 			return project{}, sts.Caller{}, "", err
 		}

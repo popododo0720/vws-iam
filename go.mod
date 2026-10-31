@@ -6,8 +6,10 @@ toolchain go1.26.10
 
 require (
 	cloud.google.com/go/longrunning v1.3.0
+	github.com/beevik/etree v1.7.0
 	github.com/popododo0720/vws-lib v0.1.1
 	github.com/popododo0720/vws-proto v0.7.0
+	github.com/russellhaering/goxmldsig v1.6.1
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/metric v1.47.0
 	go.opentelemetry.io/otel/trace v1.47.0
@@ -51,6 +53,7 @@ require (
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
+	github.com/jonboulle/clockwork v0.5.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect

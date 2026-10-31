@@ -1,5 +1,5 @@
-// Package sts issues temporary credentials: AssumeRole, GetSessionToken
-// and GetFederationToken.
+// Package sts issues temporary credentials: AssumeRole, GetSessionToken,
+// GetFederationToken and AssumeRoleWithSAML.
 //
 // A session token is the session itself (principal, temporary secret,
 // expiry, MFA flag, session policies) sealed with AES-256-GCM under the KEK
@@ -67,6 +67,9 @@ type Caller struct {
 	// federated marks a GetFederationToken session: aws:userid is then
 	// "<account>:<name>".
 	federated bool
+	// saml is the SAML identity of a SAML role session (or one chained
+	// from it); callerContext restores it as trusted saml:* keys.
+	saml *SAMLIdentity
 }
 
 // Principal is the caller's principal.
@@ -168,6 +171,9 @@ type session struct {
 	// Federated marks a GetFederationToken session; SessionName is then
 	// the federated user name and ARN its federated-user ARN.
 	Federated bool `json:"f,omitempty"`
+	// SAML is the cross-service SAML identity (AssumeRoleWithSAML, and
+	// role sessions chained from it).
+	SAML *SAMLIdentity `json:"saml,omitempty"`
 }
 
 // Session is a validated temporary session.
@@ -186,6 +192,19 @@ type Session struct {
 	MFA         bool
 	IssuedAt    time.Time
 	Expires     time.Time
+	// SAML is the SAML identity of a session that AssumeRoleWithSAML
+	// issued, or one chained from it; nil otherwise.
+	SAML *SAMLIdentity
+}
+
+// SAMLIdentity is what AWS keeps of a SAML assertion for later requests:
+// the cross-service SAML context keys saml:sub, saml:sub_type and
+// saml:namequalifier. No other SAML key carries over (IAM User Guide,
+// Cross-service SAML-based AWS STS federation context keys).
+type SAMLIdentity struct {
+	Subject       string `json:"sub"`
+	SubjectType   string `json:"st"`
+	NameQualifier string `json:"nq"`
 }
 
 // String hides the secret.
@@ -195,14 +214,39 @@ func (s Session) String() string { return "Session{" + s.AccessKeyID + " " + s.P
 func (s Session) Caller() Caller {
 	return Caller{
 		principal: s.Principal, principalID: s.PrincipalID, mfa: s.MFA, temporary: true, authTime: s.AuthTime,
-		sessionName: s.SessionName, federated: s.Federated,
+		sessionName: s.SessionName, federated: s.Federated, saml: s.SAML.clone(),
 	}
 }
 
 // Context returns the request context keys a session carries.
 func (s Session) Context() map[string][]string {
-	return map[string][]string{"aws:MultiFactorAuthPresent": {fmt.Sprint(s.MFA)}}
+	m := map[string][]string{"aws:MultiFactorAuthPresent": {fmt.Sprint(s.MFA)}}
+	s.SAML.addTo(m)
+	return m
 }
+
+// clone returns a copy of id, so a Caller or Session never shares it.
+func (id *SAMLIdentity) clone() *SAMLIdentity {
+	if id == nil {
+		return nil
+	}
+	c := *id
+	return &c
+}
+
+// addTo sets the cross-service SAML keys of id in m; a nil id adds none.
+func (id *SAMLIdentity) addTo(m map[string][]string) {
+	if id == nil {
+		return
+	}
+	m["saml:sub"] = []string{id.Subject}
+	m["saml:sub_type"] = []string{id.SubjectType}
+	m["saml:namequalifier"] = []string{id.NameQualifier}
+}
+
+// samlKeyPrefix starts every SAML condition key; only the server sets
+// them, from a verified assertion or a sealed session.
+const samlKeyPrefix = "saml:"
 
 // Service issues and validates temporary credentials.
 type Service struct {
@@ -214,6 +258,9 @@ type Service struct {
 	index   store.Backend
 	account string
 	now     func() time.Time
+	// saml and samlSP serve AssumeRoleWithSAML (WithSAML).
+	saml   SAMLProviders
+	samlSP SAMLServiceProvider
 }
 
 // Option configures a Service.
@@ -243,16 +290,18 @@ var serverKeys = map[string]bool{
 }
 
 // callerContext copies request keys (aws:SourceIp, sts:ExternalId, ...),
-// drops any server key a client tried to set, and adds the server's own:
-// the same trusted keys grpcapi Authorize builds, so a policy conditioned
-// on them is evaluated alike on every path.
+// drops any server key or saml:* key a client tried to set, and adds the
+// server's own: the same trusted keys grpcapi Authorize builds, so a
+// policy conditioned on them is evaluated alike on every path, and the
+// caller's sealed SAML identity.
 func (s *Service) callerContext(c Caller, reqCtx map[string][]string) map[string][]string {
 	m := map[string][]string{}
 	for k, v := range reqCtx {
-		if !serverKeys[strings.ToLower(k)] {
+		if lk := strings.ToLower(k); !serverKeys[lk] && !strings.HasPrefix(lk, samlKeyPrefix) {
 			m[k] = v
 		}
 	}
+	c.saml.addTo(m)
 	m["aws:MultiFactorAuthPresent"] = []string{strconv.FormatBool(c.mfa)}
 	if c.mfa {
 		var age time.Duration // a zero authTime means now
@@ -479,7 +528,11 @@ func (s *Service) AssumeRole(ctx context.Context, c Caller, reqCtx map[string][]
 		return Credentials{}, fmt.Errorf("%w: %s does not trust %s", ErrAccessDenied, roleARN, callerARN)
 	}
 	arn := iam.ARN("sts", "", s.account, "assumed-role/"+r.Object.Name+"/"+sessionName)
-	creds, err := s.issue(ctx, session{Kind: int(authz.Role), Name: r.Object.Name, ARN: arn, MFA: c.mfa, Policies: policies, Chained: chained, PrincipalID: r.Object.ID, AuthTime: c.authTime, RoleID: r.Object.ID, SessionName: sessionName}, duration)
+	creds, err := s.issue(ctx, session{
+		Kind: int(authz.Role), Name: r.Object.Name, ARN: arn, MFA: c.mfa, Policies: policies, Chained: chained,
+		PrincipalID: r.Object.ID, AuthTime: c.authTime, RoleID: r.Object.ID, SessionName: sessionName,
+		SAML: c.saml.clone(), // a chained session keeps the SAML identity
+	}, duration)
 	creds.AssumedRoleARN = arn
 	return creds, err
 }
@@ -511,6 +564,13 @@ func (s *Service) GetSessionToken(ctx context.Context, c Caller, duration time.D
 }
 
 func (s *Service) issue(ctx context.Context, sess session, d time.Duration) (Credentials, error) {
+	return s.issueBy(ctx, sess, d, time.Time{})
+}
+
+// issueBy is issue with an absolute latest expiry (zero means none): the
+// session ends at notAfter if that comes before now plus d, and a
+// notAfter already passed is ErrExpired.
+func (s *Service) issueBy(ctx context.Context, sess session, d time.Duration, notAfter time.Time) (Credentials, error) {
 	// Read the generation before the token exists: a revocation that
 	// commits after this read bumps it and rejects the token.
 	gen, err := s.revokeGen(ctx, authz.PrincipalKind(sess.Kind), sess.Name)
@@ -526,11 +586,19 @@ func (s *Service) issue(ctx context.Context, sess session, d time.Duration) (Cre
 	if err != nil {
 		return Credentials{}, err
 	}
-	sess.AccessKeyID, sess.Secret, sess.IssuedAt, sess.Project = id, sec, s.now().UTC(), s.account
+	now := s.now().UTC()
+	sess.AccessKeyID, sess.Secret, sess.IssuedAt, sess.Project = id, sec, now, s.account
 	if sess.AuthTime.IsZero() {
-		sess.AuthTime = s.now().UTC().Truncate(time.Second)
+		sess.AuthTime = now.Truncate(time.Second)
 	}
-	sess.Expires = s.now().UTC().Add(d).Truncate(time.Second)
+	exp := now.Add(d)
+	if !notAfter.IsZero() && notAfter.Before(exp) {
+		exp = notAfter
+	}
+	sess.Expires = exp.Truncate(time.Second)
+	if !sess.Expires.After(now) {
+		return Credentials{}, fmt.Errorf("%w: the session would end before it starts", ErrExpired)
+	}
 	b, err := json.Marshal(sess)
 	if err != nil {
 		return Credentials{}, fmt.Errorf("session: %w", err)
@@ -599,6 +667,7 @@ func (s *Service) Validate(ctx context.Context, accessKeyID, token string) (Sess
 		AccessKeyID: sess.AccessKeyID, Secret: sess.Secret, Project: sess.Project, AuthTime: sess.AuthTime,
 		RoleID: sess.RoleID, SessionName: sess.SessionName, Federated: sess.Federated, Principal: p,
 		PrincipalID: sess.PrincipalID, MFA: sess.MFA, IssuedAt: sess.IssuedAt, Expires: sess.Expires,
+		SAML: sess.SAML.clone(),
 	}, nil
 }
 

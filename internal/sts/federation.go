@@ -147,33 +147,45 @@ func validateFederation(req FederationRequest) (time.Duration, int, error) {
 		return 0, 0, fmt.Errorf("%w: DurationSeconds %d outside [%d, %d]", ErrInvalidRequest,
 			int(d.Seconds()), int(MinDuration.Seconds()), int(MaxFederationDuration.Seconds()))
 	}
+	packed, err := validateSessionPolicies(req.Policy, req.PolicyARNs)
+	if err != nil {
+		return 0, 0, err
+	}
+	return d, packed, nil
+}
+
+// validateSessionPolicies checks an inline session policy and managed
+// session policy ARNs as AWS does for GetFederationToken and the
+// AssumeRole* operations, before anything is read: it returns their
+// packed size in characters.
+func validateSessionPolicies(inline string, arns []string) (int, error) {
 	packed := 0
-	if req.Policy != "" {
-		n := utf8.RuneCountInString(req.Policy)
+	if inline != "" {
+		n := utf8.RuneCountInString(inline)
 		if n > MaxPackedPolicyChars {
-			return 0, 0, fmt.Errorf("%w: Policy is %d characters, limit %d", ErrInvalidRequest, n, MaxPackedPolicyChars)
+			return 0, fmt.Errorf("%w: Policy is %d characters, limit %d", ErrInvalidRequest, n, MaxPackedPolicyChars)
 		}
-		if !sessionPolicyRE.MatchString(req.Policy) {
-			return 0, 0, fmt.Errorf("%w: Policy has a character outside \\u0009, \\u000A, \\u000D, \\u0020-\\u00FF",
+		if !sessionPolicyRE.MatchString(inline) {
+			return 0, fmt.Errorf("%w: Policy has a character outside \\u0009, \\u000A, \\u000D, \\u0020-\\u00FF",
 				ErrInvalidRequest)
 		}
-		if _, err := policy.ParseIdentity(req.Policy); err != nil {
-			return 0, 0, fmt.Errorf("session policy: %w", err)
+		if _, err := policy.ParseIdentity(inline); err != nil {
+			return 0, fmt.Errorf("session policy: %w", err)
 		}
 		packed = n
 	}
-	if n := len(req.PolicyARNs); n > MaxSessionPolicyARNs {
-		return 0, 0, fmt.Errorf("%w: %d PolicyArns, limit %d", ErrInvalidRequest, n, MaxSessionPolicyARNs)
+	if n := len(arns); n > MaxSessionPolicyARNs {
+		return 0, fmt.Errorf("%w: %d PolicyArns, limit %d", ErrInvalidRequest, n, MaxSessionPolicyARNs)
 	}
-	for _, arn := range req.PolicyARNs {
+	for _, arn := range arns {
 		if len(arn) < 20 || len(arn) > 2048 || strings.ContainsAny(arn, " \t\r\n") {
-			return 0, 0, fmt.Errorf("%w: PolicyArns arn must be 20-2048 characters", ErrInvalidRequest)
+			return 0, fmt.Errorf("%w: PolicyArns arn must be 20-2048 characters", ErrInvalidRequest)
 		}
 		packed += len(arn)
 	}
 	if packed > MaxPackedPolicyChars {
-		return 0, 0, fmt.Errorf("%w: session policies are %d characters, limit %d",
+		return 0, fmt.Errorf("%w: session policies are %d characters, limit %d",
 			ErrPackedPolicyTooLarge, packed, MaxPackedPolicyChars)
 	}
-	return d, packed, nil
+	return packed, nil
 }

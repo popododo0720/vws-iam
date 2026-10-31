@@ -144,6 +144,9 @@ type Request struct {
 	Principal string // ARN of the caller
 	Account   string // the caller's account
 	Service   string // a service principal, for trust policies
+	// Federated is the identity provider ARN (saml-provider) of a
+	// federated caller, matched by a trust policy's "Federated" principal.
+	Federated string
 	Action    string // e.g. ec2:RunInstances
 	Resource  string // ARN
 	Context   map[string][]string
@@ -230,6 +233,8 @@ func (s Statement) matchPrincipal(r Request) bool {
 				m = true
 			case typ == "Service":
 				m = m || (r.Service != "" && v == r.Service)
+			case typ == "Federated":
+				m = m || (r.Federated != "" && v == r.Federated)
 			case typ == "AWS":
 				root := "arn:" + Partition + ":iam::" + r.Account + ":root"
 				m = m || (r.Principal != "" && v == r.Principal) || (r.Account != "" && (v == r.Account || v == root))

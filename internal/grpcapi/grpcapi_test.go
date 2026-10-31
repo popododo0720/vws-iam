@@ -60,7 +60,7 @@ func newEnv(t *testing.T) *env {
 
 // newEnvOn starts one server (one replica) on b. Envs built on the same
 // b and clock act as replicas of one deployment.
-func newEnvOn(t *testing.T, b store.Backend, now *time.Time) *env {
+func newEnvOn(t *testing.T, b store.Backend, now *time.Time, opts ...grpcapi.Option) *env {
 	t.Helper()
 	keys, err := secret.NewKeyring("k1", map[string][]byte{"k1": make([]byte, 32)})
 	if err != nil {
@@ -68,7 +68,7 @@ func newEnvOn(t *testing.T, b store.Backend, now *time.Time) *env {
 	}
 	lis := bufconn.Listen(1 << 20)
 	srv := grpc.NewServer(grpcapi.ServerOptions()...)
-	api := grpcapi.New(b, keys, grpcapi.WithClock(func() time.Time { return *now }))
+	api := grpcapi.New(b, keys, append([]grpcapi.Option{grpcapi.WithClock(func() time.Time { return *now })}, opts...)...)
 	grpcapi.Register(srv, api)
 	go func() {
 		if err := srv.Serve(lis); err != nil {
