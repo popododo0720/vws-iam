@@ -48,15 +48,20 @@ func badCredentials() error {
 // temporary ones (ASIA) are opened from the session token.
 func (s *Server) Authenticate(ctx context.Context, req *iamv1.AuthenticateRequest) (resp *iamv1.AuthenticateResponse, err error) {
 	defer func() { s.m.add(ctx, s.m.authn, attribute.String("result", result(err))) }()
-	return s.authenticate(ctx, req)
+	return s.authenticate(ctx, req, true)
 }
 
-func (s *Server) authenticate(ctx context.Context, req *iamv1.AuthenticateRequest) (*iamv1.AuthenticateResponse, error) {
+// authenticate verifies req. gateway is set for the gateway's
+// Authenticate, whose Principal then goes to Authorize; it is false for an
+// STS call that vws-iam serves itself with the session it opened.
+func (s *Server) authenticate(
+	ctx context.Context, req *iamv1.AuthenticateRequest, gateway bool,
+) (*iamv1.AuthenticateResponse, error) {
 	sr := sigv4.Request{Date: req.GetDate(), Region: req.GetRegion(), Service: req.GetService(), CanonicalRequest: req.GetCanonicalRequest(), StringToSign: req.GetStringToSign(), Signature: req.GetSignature()}
 	id := req.GetAccessKeyId()
 	switch {
 	case strings.HasPrefix(id, "ASIA"):
-		return s.authTemporary(ctx, req, sr)
+		return s.authTemporary(ctx, req, sr, gateway)
 	case !accessKeyID.MatchString(id) || req.GetSessionToken() != "":
 		return nil, badCredentials()
 	}
@@ -98,7 +103,9 @@ func (s *Server) authenticate(ctx context.Context, req *iamv1.AuthenticateReques
 	}}, nil
 }
 
-func (s *Server) authTemporary(ctx context.Context, req *iamv1.AuthenticateRequest, sr sigv4.Request) (*iamv1.AuthenticateResponse, error) {
+func (s *Server) authTemporary(
+	ctx context.Context, req *iamv1.AuthenticateRequest, sr sigv4.Request, gateway bool,
+) (*iamv1.AuthenticateResponse, error) {
 	if req.GetSessionToken() == "" {
 		return nil, invalidCredentials("MissingAuthenticationToken", "a session token is required for temporary credentials")
 	}
@@ -112,6 +119,15 @@ func (s *Server) authTemporary(ctx context.Context, req *iamv1.AuthenticateReque
 	}
 	if err := sigv4.Check([]byte(sess.Secret), sr, s.now()); err != nil {
 		return nil, toStatus(ctx, err)
+	}
+	if gateway && sess.SAML != nil {
+		// TODO(#202): describe a SAML session to the gateway once
+		// vws-proto lets Authorize carry its saml:sub, saml:sub_type and
+		// saml:namequalifier. Until then a policy conditioned on them
+		// could not see them (a Deny on saml:sub would fail open), so the
+		// session fails closed here; STS calls vws-iam serves itself
+		// restore them from the session token (sts callerContext).
+		return nil, badCredentials()
 	}
 	pr, err := s.sessionPrincipal(ctx, sess)
 	if err != nil {
@@ -289,9 +305,12 @@ func (s *Server) authorize(
 		}
 		return nil, "", toStatus(ctx, err)
 	}
+	// saml:* keys come only from a verified assertion or a sealed SAML
+	// session, never from the request; Authenticate refuses SAML sessions
+	// (#202), so no principal here has them.
 	rc := map[string][]string{}
 	for k, v := range req.GetContext() {
-		if !serverKeys[strings.ToLower(k)] {
+		if lk := strings.ToLower(k); !serverKeys[lk] && !strings.HasPrefix(lk, "saml:") {
 			rc[k] = v.GetValues()
 		}
 	}
