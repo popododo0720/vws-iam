@@ -108,6 +108,12 @@ type Assertion struct {
 	// MoreAudienceRestrictions are AudienceRestriction elements after the
 	// one naming Audience, each with the listed Audience values.
 	MoreAudienceRestrictions [][]string
+	// NoSubjectConfirmation leaves the Subject without a
+	// SubjectConfirmation element.
+	NoSubjectConfirmation bool
+	// ExtraSubjectConfirmations adds that many more bearer
+	// SubjectConfirmation elements to the Subject.
+	ExtraSubjectConfirmations int
 	// Attributes are more Attribute elements, by Name.
 	Attributes map[string][]string
 }
@@ -173,11 +179,12 @@ func assertion(a Assertion) *etree.Element {
 		nid.CreateAttr("Format", a.NameIDFormat)
 	}
 	nid.SetText(a.NameID)
-	sc := subj.CreateElement("saml:SubjectConfirmation")
-	sc.CreateAttr("Method", "urn:oasis:names:tc:SAML:2.0:cm:bearer")
-	scd := sc.CreateElement("saml:SubjectConfirmationData")
-	scd.CreateAttr("Recipient", a.Recipient)
-	setTime(scd, "NotOnOrAfter", a.ConfirmNotOnOrAfter)
+	if !a.NoSubjectConfirmation {
+		addSubjectConfirmation(subj, a)
+		for i := 0; i < a.ExtraSubjectConfirmations; i++ {
+			addSubjectConfirmation(subj, a)
+		}
+	}
 	cond := as.CreateElement("saml:Conditions")
 	setTime(cond, "NotBefore", a.NotBefore)
 	setTime(cond, "NotOnOrAfter", a.NotOnOrAfter)
@@ -220,6 +227,14 @@ func assertion(a Assertion) *etree.Element {
 		attr(n, a.Attributes[n]...)
 	}
 	return as
+}
+
+func addSubjectConfirmation(subj *etree.Element, a Assertion) {
+	sc := subj.CreateElement("saml:SubjectConfirmation")
+	sc.CreateAttr("Method", "urn:oasis:names:tc:SAML:2.0:cm:bearer")
+	scd := sc.CreateElement("saml:SubjectConfirmationData")
+	scd.CreateAttr("Recipient", a.Recipient)
+	setTime(scd, "NotOnOrAfter", a.ConfirmNotOnOrAfter)
 }
 
 func setTime(el *etree.Element, name string, t time.Time) {

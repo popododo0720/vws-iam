@@ -58,7 +58,10 @@ var (
 	samlARNRE = regexp.MustCompile(`^[\t\n\r\x{20}-\x{7E}\x{85}\x{A0}-\x{D7FF}\x{E000}-\x{FFFD}\x{10000}-\x{10FFFF}]+$`)
 	// samlProviderNameRE is the IAM SAML provider name.
 	samlProviderNameRE = regexp.MustCompile(`^[\w._-]{1,128}$`)
-	sourceIdentityRE   = regexp.MustCompile(`^[\w+=,.@-]{2,64}$`)
+	// sourceIdentityRE is the SourceIdentity SAML attribute: 2 to 256
+	// characters of [\w+=,.@-] (IAM User Guide, Configure SAML assertions
+	// for the authentication response).
+	sourceIdentityRE = regexp.MustCompile(`^[\w+=,.@-]{2,256}$`)
 )
 
 // SAMLProvider is an IAM SAML provider: the IdP's entity id and the
