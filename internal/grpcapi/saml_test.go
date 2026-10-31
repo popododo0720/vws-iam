@@ -183,7 +183,9 @@ func TestAssumeRoleWithSAMLSessionIdentity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			out, err := e.api.AssumeRoleWithSAML(ctx, sts.SAMLRequest{RoleARN: samlRoleARN, PrincipalARN: samlIdpARN, Assertion: r})
+			out, err := e.api.AssumeRoleWithSAML(ctx, sts.SAMLRequest{
+				RoleARN: samlRoleARN, PrincipalARN: samlIdpARN, Assertion: r,
+			})
 			if err != nil {
 				t.Fatal(err)
 			}

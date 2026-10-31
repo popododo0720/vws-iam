@@ -528,7 +528,11 @@ func (s *Service) AssumeRole(ctx context.Context, c Caller, reqCtx map[string][]
 		return Credentials{}, fmt.Errorf("%w: %s does not trust %s", ErrAccessDenied, roleARN, callerARN)
 	}
 	arn := iam.ARN("sts", "", s.account, "assumed-role/"+r.Object.Name+"/"+sessionName)
-	creds, err := s.issue(ctx, session{Kind: int(authz.Role), Name: r.Object.Name, ARN: arn, MFA: c.mfa, Policies: policies, Chained: chained, PrincipalID: r.Object.ID, AuthTime: c.authTime, RoleID: r.Object.ID, SessionName: sessionName, SAML: c.saml.clone()}, duration)
+	creds, err := s.issue(ctx, session{
+		Kind: int(authz.Role), Name: r.Object.Name, ARN: arn, MFA: c.mfa, Policies: policies, Chained: chained,
+		PrincipalID: r.Object.ID, AuthTime: c.authTime, RoleID: r.Object.ID, SessionName: sessionName,
+		SAML: c.saml.clone(), // a chained session keeps the SAML identity
+	}, duration)
 	creds.AssumedRoleARN = arn
 	return creds, err
 }

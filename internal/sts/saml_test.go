@@ -659,17 +659,28 @@ func TestAssumeRoleWithSAMLChainedIdentity(t *testing.T) {
 		{"deny SAML:sub any case", allow + "}" + deny("SAML:Sub", "alice@corp.test"), samlCaller, nil, sts.ErrAccessDenied},
 		{"deny other subject", allow + "}" + deny("saml:sub", "bob@corp.test"), samlCaller, nil, nil},
 		{"deny saml:sub_type", allow + "}" + deny("saml:sub_type", "persistent"), samlCaller, nil, sts.ErrAccessDenied},
-		{"deny saml:namequalifier", allow + "}" + deny("saml:namequalifier", got.NameQualifier), samlCaller, nil, sts.ErrAccessDenied},
+		{
+			"deny saml:namequalifier", allow + "}" + deny("saml:namequalifier", got.NameQualifier), samlCaller, nil,
+			sts.ErrAccessDenied,
+		},
 		{
 			"client cannot replace saml:sub", allow + "}" + deny("saml:sub", "alice@corp.test"), samlCaller,
-			map[string][]string{"saml:sub": {"bob@corp.test"}, "SAML:SUB": {"bob@corp.test"}}, sts.ErrAccessDenied,
+			map[string][]string{"saml:sub": {"bob@corp.test"}, "SAML:SUB": {"bob@corp.test"}},
+			sts.ErrAccessDenied,
 		},
 		{"allow on saml:sub", allow + cond("StringEquals", "saml:sub", "alice@corp.test") + "}", samlCaller, nil, nil},
-		{"saml:iss does not carry over", allow + cond("StringEquals", "saml:iss", samlIssuer) + "}", samlCaller, nil, sts.ErrAccessDenied},
-		{"saml:aud does not carry over", allow + cond("StringEquals", "saml:aud", samlAud) + "}", samlCaller, nil, sts.ErrAccessDenied},
+		{
+			"saml:iss does not carry over", allow + cond("StringEquals", "saml:iss", samlIssuer) + "}", samlCaller, nil,
+			sts.ErrAccessDenied,
+		},
+		{
+			"saml:aud does not carry over", allow + cond("StringEquals", "saml:aud", samlAud) + "}", samlCaller, nil,
+			sts.ErrAccessDenied,
+		},
 		{
 			"client cannot claim saml:sub", allow + cond("StringEquals", "saml:sub", "alice@corp.test") + "}", broker,
-			map[string][]string{"saml:sub": {"alice@corp.test"}}, sts.ErrAccessDenied,
+			map[string][]string{"saml:sub": {"alice@corp.test"}},
+			sts.ErrAccessDenied,
 		},
 	} {
 		trust(tc.trust)
@@ -699,7 +710,8 @@ func TestAssumeRoleWithSAMLChainedIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	trust(allow + "}" + deny("saml:sub", "alice@corp.test"))
-	if _, err := e.svc.AssumeRole(ctx, next.Caller(), nil, adminARN, "again", 0, "", sts.MFA{}); !errors.Is(err, sts.ErrAccessDenied) {
+	_, err = e.svc.AssumeRole(ctx, next.Caller(), nil, adminARN, "again", 0, "", sts.MFA{})
+	if !errors.Is(err, sts.ErrAccessDenied) {
 		t.Fatalf("second hop with Deny on saml:sub: %v, want AccessDenied", err)
 	}
 	// A caller without SAML identity does not match the Deny, and its
