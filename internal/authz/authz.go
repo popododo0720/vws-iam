@@ -22,7 +22,8 @@ type PrincipalKind int
 const (
 	User PrincipalKind = iota
 	Role
-	// Root is the project's root user: not subject to identity policies.
+	// Root is the project's root user: not subject to identity policies
+	// (a root federated session is still narrowed by its session policies).
 	Root
 )
 
@@ -34,7 +35,34 @@ type Principal struct {
 	ARN string
 	// SessionPolicies narrow an STS session; nil means none.
 	SessionPolicies []string
+	// SessionPolicyARNs are managed session policies, read from the store
+	// at each evaluation like attached policies; one that no longer
+	// exists fails the evaluation closed (ErrNoSuchEntity), since
+	// skipping it could drop a Deny and widen the session.
+	SessionPolicyARNs []string
+	// Federated marks a GetFederationToken session. Session policies
+	// always narrow it, so one without any has no permissions; it cannot
+	// call IAM or any STS action except sts:GetCallerIdentity; a root
+	// caller's federated session is bounded by its session policies too.
+	Federated bool
 }
+
+// federatedDenied reports whether a federated user session is refused
+// action whatever its policies say, as in AWS.
+func federatedDenied(action string) bool {
+	a := strings.ToLower(action)
+	return strings.HasPrefix(a, "iam:") || (strings.HasPrefix(a, "sts:") && a != "sts:getcalleridentity")
+}
+
+// allowAll is the identity side of a root user's federated session,
+// which its session policies alone narrow.
+var allowAll = func() []policy.Named {
+	d, err := policy.ParseIdentity(`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*"}}`)
+	if err != nil {
+		panic(err) // a constant document
+	}
+	return []policy.Named{{Name: "root user", Doc: d}}
+}()
 
 // Authorizer evaluates requests against stored policies.
 type Authorizer struct {
@@ -157,26 +185,28 @@ func (a *Authorizer) IdentityPolicies(ctx context.Context, p Principal) ([]polic
 // carries request keys such as aws:SourceIp and aws:MultiFactorAuthPresent;
 // aws:username, aws:PrincipalArn, aws:userid and aws:CurrentTime are set here.
 func (a *Authorizer) Authorize(ctx context.Context, p Principal, action, resource string, reqCtx map[string][]string) (policy.Decision, error) {
-	if p.Kind == Root {
+	if p.Federated && federatedDenied(action) {
+		return policy.Decision{Reason: "a federated user session cannot call " + action}, nil
+	}
+	if p.Kind == Root && !p.Federated {
 		return policy.Decision{Allowed: true, Reason: "root user"}, nil
 	}
-	ids, arn, err := a.IdentityPolicies(ctx, p)
-	if err != nil {
-		return policy.Decision{}, err
+	var ids []policy.Named
+	var arn string
+	if p.Kind == Root {
+		ids = allowAll
+	} else {
+		var err error
+		if ids, arn, err = a.IdentityPolicies(ctx, p); err != nil {
+			return policy.Decision{}, err
+		}
 	}
 	if p.ARN != "" {
 		arn = p.ARN
 	}
-	var session []policy.Named
-	if p.SessionPolicies != nil {
-		session = []policy.Named{}
-		for i, doc := range p.SessionPolicies {
-			d, err := policy.ParseIdentity(doc)
-			if err != nil {
-				return policy.Decision{}, fmt.Errorf("session policy %d: %w", i, err)
-			}
-			session = append(session, policy.Named{Name: fmt.Sprintf("session-%d", i), Doc: d})
-		}
+	session, err := a.sessionPolicies(ctx, p)
+	if err != nil {
+		return policy.Decision{}, err
 	}
 	c := make(map[string][]string, len(reqCtx)+4)
 	for k, v := range reqCtx {
@@ -184,11 +214,49 @@ func (a *Authorizer) Authorize(ctx context.Context, p Principal, action, resourc
 	}
 	c["aws:principalarn"] = []string{arn}
 	c["aws:currenttime"] = []string{a.now().UTC().Format(time.RFC3339)}
-	if p.Kind == User {
+	if p.Kind == User && !p.Federated {
 		c["aws:username"] = []string{p.Name}
 	}
 	r := policy.Request{Principal: arn, Account: a.account, Action: action, Resource: resource, Context: c}
 	return policy.Evaluate(r, ids, session), nil
+}
+
+// sessionPolicies returns p's session policies: nil when p has none, so
+// they do not narrow it, and non-nil (perhaps empty, which allows
+// nothing) for a federated session.
+func (a *Authorizer) sessionPolicies(ctx context.Context, p Principal) ([]policy.Named, error) {
+	if p.SessionPolicies == nil && p.SessionPolicyARNs == nil && !p.Federated {
+		return nil, nil
+	}
+	out := []policy.Named{}
+	for i, doc := range p.SessionPolicies {
+		d, err := policy.ParseIdentity(doc)
+		if err != nil {
+			return nil, fmt.Errorf("session policy %d: %w", i, err)
+		}
+		out = append(out, policy.Named{Name: fmt.Sprintf("session-%d", i), Doc: d})
+	}
+	for _, arn := range p.SessionPolicyARNs {
+		n, err := a.managed(ctx, arn)
+		if err != nil {
+			return nil, fmt.Errorf("managed session policy: %w", err)
+		}
+		out = append(out, n)
+	}
+	return out, nil
+}
+
+// ManagedPolicyExists reports whether arn is a managed policy of this
+// project that can be used as a managed session policy.
+func (a *Authorizer) ManagedPolicyExists(ctx context.Context, arn string) (bool, error) {
+	_, err := a.managed(ctx, arn)
+	if errors.Is(err, ErrNoSuchEntity) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // RenamePartner returns the other name of u's in-flight rename while that

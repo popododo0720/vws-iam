@@ -1,4 +1,5 @@
-// Package sts issues temporary credentials: AssumeRole and GetSessionToken.
+// Package sts issues temporary credentials: AssumeRole, GetSessionToken
+// and GetFederationToken.
 //
 // A session token is the session itself (principal, temporary secret,
 // expiry, MFA flag, session policies) sealed with AES-256-GCM under the KEK
@@ -60,8 +61,12 @@ type Caller struct {
 	temporary   bool
 	authTime    time.Time
 	// sessionName is set for an assumed-role session; aws:userid is then
-	// "<role id>:<session name>", as AWS reports it.
+	// "<role id>:<session name>", as AWS reports it. For a federated
+	// session it is the federated user name.
 	sessionName string
+	// federated marks a GetFederationToken session: aws:userid is then
+	// "<account>:<name>".
+	federated bool
 }
 
 // Principal is the caller's principal.
@@ -158,15 +163,22 @@ type session struct {
 	AuthTime    time.Time `json:"at"`
 	RoleID      string    `json:"ri,omitempty"`
 	SessionName string    `json:"sn,omitempty"`
+	// PolicyARNs are managed session policies (GetFederationToken).
+	PolicyARNs []string `json:"pa,omitempty"`
+	// Federated marks a GetFederationToken session; SessionName is then
+	// the federated user name and ARN its federated-user ARN.
+	Federated bool `json:"f,omitempty"`
 }
 
 // Session is a validated temporary session.
 type Session struct {
 	Project  string
 	AuthTime time.Time
-	// RoleID and SessionName are set for an assumed role.
+	// RoleID and SessionName are set for an assumed role; SessionName is
+	// the federated user name of a federated session.
 	RoleID      string
 	SessionName string
+	Federated   bool
 	AccessKeyID string
 	Secret      string
 	Principal   authz.Principal
@@ -183,7 +195,7 @@ func (s Session) String() string { return "Session{" + s.AccessKeyID + " " + s.P
 func (s Session) Caller() Caller {
 	return Caller{
 		principal: s.Principal, principalID: s.PrincipalID, mfa: s.MFA, temporary: true, authTime: s.AuthTime,
-		sessionName: s.SessionName,
+		sessionName: s.SessionName, federated: s.Federated,
 	}
 }
 
@@ -260,6 +272,8 @@ func (s *Service) callerContext(c Caller, reqCtx map[string][]string) map[string
 // and session name for an assumed role, else the principal's unique id.
 func (s *Service) userID(c Caller) string {
 	switch {
+	case c.federated:
+		return s.account + ":" + c.sessionName
 	case c.principal.Kind == authz.Root:
 		return s.account
 	case c.sessionName != "":
@@ -574,11 +588,18 @@ func (s *Service) Validate(ctx context.Context, accessKeyID, token string) (Sess
 	if sessionRevoked(sess, revoked, gen) {
 		return Session{}, fmt.Errorf("%w: session revoked", ErrInvalidToken)
 	}
-	p := authz.Principal{Kind: authz.PrincipalKind(sess.Kind), Name: sess.Name, ARN: sess.ARN, SessionPolicies: sess.Policies}
-	if p.Kind != authz.Role {
+	p := authz.Principal{
+		Kind: authz.PrincipalKind(sess.Kind), Name: sess.Name, ARN: sess.ARN, SessionPolicies: sess.Policies,
+		SessionPolicyARNs: sess.PolicyARNs, Federated: sess.Federated,
+	}
+	if p.Kind != authz.Role && !p.Federated {
 		p.ARN = "" // a GetSessionToken session acts as the user (or root) itself
 	}
-	return Session{AccessKeyID: sess.AccessKeyID, Secret: sess.Secret, Project: sess.Project, AuthTime: sess.AuthTime, RoleID: sess.RoleID, SessionName: sess.SessionName, Principal: p, PrincipalID: sess.PrincipalID, MFA: sess.MFA, IssuedAt: sess.IssuedAt, Expires: sess.Expires}, nil
+	return Session{
+		AccessKeyID: sess.AccessKeyID, Secret: sess.Secret, Project: sess.Project, AuthTime: sess.AuthTime,
+		RoleID: sess.RoleID, SessionName: sess.SessionName, Federated: sess.Federated, Principal: p,
+		PrincipalID: sess.PrincipalID, MFA: sess.MFA, IssuedAt: sess.IssuedAt, Expires: sess.Expires,
+	}, nil
 }
 
 // sessionRevoked compares generations, which come from the store's write
