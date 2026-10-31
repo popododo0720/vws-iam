@@ -78,11 +78,26 @@ type SAMLProviders interface {
 	SAMLProvider(ctx context.Context, arn string) (SAMLProvider, error)
 }
 
-// WithSAML sets the SAML providers and the audience (the sign-in
-// endpoint URL) a SAML response must be addressed to. Without it,
+// SAMLServiceProvider is this service as a SAML service provider. As in
+// AWS, the audience of an assertion and the sign-in endpoint it is posted
+// to are separate values.
+type SAMLServiceProvider struct {
+	// Audience is the service provider entity id every
+	// AudienceRestriction of an assertion must name (AWS:
+	// urn:amazon:webservices).
+	Audience string
+	// SignInURL is the sign-in endpoint (assertion consumer service): the
+	// Recipient of the bearer SubjectConfirmationData, the response
+	// Destination when present, and the SAML:aud trust-policy key (AWS:
+	// https://signin.aws.amazon.com/saml).
+	SignInURL string
+}
+
+// WithSAML sets the SAML providers and this service provider's audience
+// and sign-in URL. Without it, or with either value empty,
 // AssumeRoleWithSAML refuses every call with InvalidIdentityToken.
-func WithSAML(p SAMLProviders, audience string) Option {
-	return func(s *Service) { s.saml, s.samlAudience = p, audience }
+func WithSAML(p SAMLProviders, sp SAMLServiceProvider) Option {
+	return func(s *Service) { s.saml, s.samlSP = p, sp }
 }
 
 // SAMLRequest is the input of AssumeRoleWithSAML. Never log it: the
@@ -139,7 +154,7 @@ func (s *Service) AssumeRoleWithSAML(ctx context.Context, req SAMLRequest) (SAML
 		return SAMLRoleSession{}, err
 	}
 	providerName, ok := s.samlProviderName(req.PrincipalARN)
-	if !ok || s.saml == nil || s.samlAudience == "" {
+	if !ok || s.saml == nil || s.samlSP.Audience == "" || s.samlSP.SignInURL == "" {
 		return SAMLRoleSession{}, fmt.Errorf("%w: SAML provider %s does not exist", ErrInvalidIdentityToken, req.PrincipalARN)
 	}
 	r, err := s.samlRole(ctx, req.RoleARN)
@@ -159,7 +174,7 @@ func (s *Service) AssumeRoleWithSAML(ctx context.Context, req SAMLRequest) (SAML
 		return SAMLRoleSession{}, fmt.Errorf("%w: SAML provider %s has no valid metadata",
 			ErrInvalidIdentityToken, req.PrincipalARN)
 	}
-	cl, err := verifySAMLResponse(req.Assertion, prov, s.samlAudience, now)
+	cl, err := verifySAMLResponse(req.Assertion, prov, s.samlSP, now)
 	if err != nil {
 		return SAMLRoleSession{}, err
 	}

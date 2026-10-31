@@ -55,7 +55,7 @@ func invalidSAML(format string, a ...any) error {
 // of its one assertion. Claims are read only from the element whose
 // signature was verified (the response or the assertion), so content
 // outside the signed element cannot change them (signature wrapping).
-func verifySAMLResponse(b64 string, prov SAMLProvider, audience string, now time.Time) (samlClaims, error) {
+func verifySAMLResponse(b64 string, prov SAMLProvider, sp SAMLServiceProvider, now time.Time) (samlClaims, error) {
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(b64))
 	if err != nil {
 		return samlClaims{}, invalidSAML("SAMLAssertion is not base64")
@@ -83,7 +83,7 @@ func verifySAMLResponse(b64 string, prov SAMLProvider, audience string, now time
 		}
 		signed = true
 	}
-	if d := resp.SelectAttrValue("Destination", ""); d != "" && d != audience {
+	if d := resp.SelectAttrValue("Destination", ""); d != "" && d != sp.SignInURL {
 		return samlClaims{}, invalidSAML("response Destination is not this service")
 	}
 	if status, err := one(resp, nsSAMLProtocol, "Status"); err != nil {
@@ -117,12 +117,13 @@ func verifySAMLResponse(b64 string, prov SAMLProvider, audience string, now time
 	if !signed {
 		return samlClaims{}, invalidSAML("neither the response nor the assertion is signed")
 	}
-	return assertionClaims(a, prov.EntityID, audience, now)
+	return assertionClaims(a, prov.EntityID, sp, now)
 }
 
 // assertionClaims checks a verified assertion's issuer, validity window,
-// audience and bearer confirmation, and reads its attributes.
-func assertionClaims(a *etree.Element, entityID, audience string, now time.Time) (samlClaims, error) {
+// audience (sp.Audience) and bearer confirmation (Recipient sp.SignInURL),
+// and reads its attributes.
+func assertionClaims(a *etree.Element, entityID string, sp SAMLServiceProvider, now time.Time) (samlClaims, error) {
 	var cl samlClaims
 	iss, err := one(a, nsSAMLAssertion, "Issuer")
 	if err != nil {
@@ -138,7 +139,7 @@ func assertionClaims(a *etree.Element, entityID, audience string, now time.Time)
 	if err := checkWindow(cond, now); err != nil {
 		return samlClaims{}, err
 	}
-	if !hasAudience(cond, audience) {
+	if !hasAudience(cond, sp.Audience) {
 		return samlClaims{}, invalidSAML("an AudienceRestriction does not name this service")
 	}
 	subj, err := one(a, nsSAMLAssertion, "Subject")
@@ -154,7 +155,7 @@ func assertionClaims(a *etree.Element, entityID, audience string, now time.Time)
 	if cl.subject == "" {
 		return samlClaims{}, invalidSAML("NameID is empty")
 	}
-	if cl.recipient, err = bearerRecipient(subj, audience, now); err != nil {
+	if cl.recipient, err = bearerRecipient(subj, sp.SignInURL, now); err != nil {
 		return samlClaims{}, err
 	}
 	for _, as := range children(a, nsSAMLAssertion, "AuthnStatement") {
@@ -215,14 +216,14 @@ func hasAudience(cond *etree.Element, audience string) bool {
 }
 
 // bearerRecipient returns the Recipient of a current bearer
-// SubjectConfirmation addressed to audience.
-func bearerRecipient(subj *etree.Element, audience string, now time.Time) (string, error) {
+// SubjectConfirmation addressed to signInURL.
+func bearerRecipient(subj *etree.Element, signInURL string, now time.Time) (string, error) {
 	for _, sc := range children(subj, nsSAMLAssertion, "SubjectConfirmation") {
 		if sc.SelectAttrValue("Method", "") != samlBearer {
 			continue
 		}
 		for _, d := range children(sc, nsSAMLAssertion, "SubjectConfirmationData") {
-			if d.SelectAttrValue("Recipient", "") != audience {
+			if d.SelectAttrValue("Recipient", "") != signInURL {
 				continue
 			}
 			v := d.SelectAttrValue("NotOnOrAfter", "")
@@ -236,7 +237,7 @@ func bearerRecipient(subj *etree.Element, audience string, now time.Time) (strin
 			if !now.Before(t) {
 				return "", fmt.Errorf("%w: the SAML assertion has expired", ErrExpired)
 			}
-			return audience, nil
+			return signInURL, nil
 		}
 	}
 	return "", invalidSAML("no bearer SubjectConfirmation with this service as Recipient")

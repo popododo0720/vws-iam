@@ -61,9 +61,9 @@ type Server struct {
 	stsSeen sync.Map
 	// gcPage is the GC list page size (gcPageSize; tests lower it).
 	gcPage int
-	// saml and samlAudience serve AssumeRoleWithSAML (WithSAML).
-	saml         sts.SAMLProviders
-	samlAudience string
+	// saml and samlSP serve AssumeRoleWithSAML (WithSAML).
+	saml   sts.SAMLProviders
+	samlSP sts.SAMLServiceProvider
 }
 
 // Option configures a Server.
@@ -72,11 +72,12 @@ type Option func(*Server)
 // WithClock replaces time.Now (tests).
 func WithClock(now func() time.Time) Option { return func(s *Server) { s.now = now } }
 
-// WithSAML sets the SAML providers and sign-in audience of
-// AssumeRoleWithSAML. Without it (there is no SAML provider store yet,
-// #196) every AssumeRoleWithSAML call is InvalidIdentityToken.
-func WithSAML(p sts.SAMLProviders, audience string) Option {
-	return func(s *Server) { s.saml, s.samlAudience = p, audience }
+// WithSAML sets the SAML providers and the service provider audience and
+// sign-in URL of AssumeRoleWithSAML. Without it (there is no SAML
+// provider store yet, #196) every AssumeRoleWithSAML call is
+// InvalidIdentityToken.
+func WithSAML(p sts.SAMLProviders, sp sts.SAMLServiceProvider) Option {
+	return func(s *Server) { s.saml, s.samlSP = p, sp }
 }
 
 // New returns a Server. b is the unscoped backend; keys seals secrets.
@@ -105,7 +106,7 @@ func Register(g *grpc.Server, s *Server) {
 func (s *Server) stsOptions(m *mfa.Service, id string) []sts.Option {
 	opts := []sts.Option{sts.WithMFA(mfaVerifier{m: m, s: s, project: id}), sts.WithKeyIndex(s.b)}
 	if s.saml != nil {
-		opts = append(opts, sts.WithSAML(s.saml, s.samlAudience))
+		opts = append(opts, sts.WithSAML(s.saml, s.samlSP))
 	}
 	return opts
 }

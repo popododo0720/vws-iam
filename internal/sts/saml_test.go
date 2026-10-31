@@ -18,7 +18,10 @@ import (
 )
 
 const (
+	// samlAud is the sign-in URL (Recipient, Destination, SAML:aud) and
+	// samlSPID the service provider entity id (Audience), as in AWS.
 	samlAud     = "https://signin.vws.test/saml"
+	samlSPID    = "urn:amazon:webservices"
 	samlIdpARN  = "arn:vws:iam::" + acct + ":saml-provider/corp"
 	samlRoleARN = "arn:vws:iam::" + acct + ":role/saml-dev"
 	samlIssuer  = "https://idp.corp.test/saml"
@@ -26,6 +29,8 @@ const (
 		"Principal":{"Federated":"` + samlIdpARN + `"},
 		"Action":["sts:AssumeRoleWithSAML","sts:SetSourceIdentity"],"Condition":{"StringEquals":{"SAML:aud":"` + samlAud + `"}}}}`
 )
+
+var samlSP = sts.SAMLServiceProvider{Audience: samlSPID, SignInURL: samlAud}
 
 type samlEnv struct {
 	fedEnv
@@ -46,14 +51,14 @@ func samlSetup(t *testing.T) samlEnv {
 			{"Effect":"Allow","Action":"s3:*","Resource":"*"}}`},
 	})
 	provs := samltest.Providers{samlIdpARN: idp.Provider(samlIdpARN)}
-	return samlEnv{fedEnv: e, idp: idp, svc: sts.New(e.b, e.keys, e.az, acct, e.clk.now, sts.WithSAML(provs, samlAud))}
+	return samlEnv{fedEnv: e, idp: idp, svc: sts.New(e.b, e.keys, e.az, acct, e.clk.now, sts.WithSAML(provs, samlSP))}
 }
 
 // claims is a valid assertion for saml-dev, as an IdP issues it now.
 func (e samlEnv) claims() samltest.Assertion {
 	now := e.clk.now()
 	return samltest.Assertion{
-		Issuer: samlIssuer, Audience: samlAud, Recipient: samlAud, Destination: samlAud,
+		Issuer: samlIssuer, Audience: samlSPID, Recipient: samlAud, Destination: samlAud,
 		NameID: "alice@corp.test", NameIDFormat: "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
 		Roles:       []string{samlIdpARN + "," + samlRoleARN},
 		SessionName: "alice@corp.test", SourceIdentity: "alice",
@@ -306,7 +311,7 @@ func TestAssumeRoleWithSAMLTrust(t *testing.T) {
 	// Expired metadata, or an expired signing certificate, fails closed.
 	p := e.idp.Provider(samlIdpARN)
 	p.ValidUntil = e.clk.now()
-	svc := sts.New(e.b, e.keys, e.az, acct, e.clk.now, sts.WithSAML(samltest.Providers{samlIdpARN: p}, samlAud))
+	svc := sts.New(e.b, e.keys, e.az, acct, e.clk.now, sts.WithSAML(samltest.Providers{samlIdpARN: p}, samlSP))
 	if _, err := svc.AssumeRoleWithSAML(ctx, samlReq(assertion)); !errors.Is(err, sts.ErrInvalidIdentityToken) {
 		t.Fatalf("expired metadata: %v", err)
 	}
@@ -386,7 +391,7 @@ func TestAssumeRoleWithSAMLEveryAudienceRestriction(t *testing.T) {
 	}{
 		"second restriction names another": {[][]string{{evil}}, false},
 		"second restriction is empty":      {[][]string{{}}, false},
-		"second restriction names us too":  {[][]string{{evil, samlAud}}, true},
+		"second restriction names us too":  {[][]string{{evil, samlSPID}}, true},
 	} {
 		a := e.claims()
 		a.MoreAudienceRestrictions = tc.more
@@ -498,6 +503,49 @@ func TestAssumeRoleWithSAMLAttributeContext(t *testing.T) {
 		_, err := e.svc.AssumeRoleWithSAML(ctx, samlReq(e.response(t, a, samltest.SignAssertion)))
 		if (tc.want == nil && err != nil) || (tc.want != nil && !errors.Is(err, tc.want)) {
 			t.Errorf("%s: %v, want %v", tc.name, err, tc.want)
+		}
+	}
+}
+
+// TestAssumeRoleWithSAMLAudienceAndSignInURL: as in AWS, the assertion's
+// Audience is the service provider entity id (urn:amazon:webservices)
+// while its bearer Recipient and the response Destination are the
+// sign-in URL, which is also SAML:aud. Each is checked against its own
+// configured value, and a service missing either fails closed.
+func TestAssumeRoleWithSAMLAudienceAndSignInURL(t *testing.T) {
+	e := samlSetup(t)
+	ctx := context.Background()
+	const entityID = samlSPID
+	provs := samltest.Providers{samlIdpARN: e.idp.Provider(samlIdpARN)}
+	svc := e.svc
+	awsStyle := e.claims()
+	if awsStyle.Audience != entityID || awsStyle.Recipient != samlAud || awsStyle.Destination != samlAud {
+		t.Fatalf("fixture %+v is not AWS-style", awsStyle)
+	}
+	got, err := svc.AssumeRoleWithSAML(ctx, samlReq(e.response(t, awsStyle, samltest.SignAssertion)))
+	if err != nil || got.Audience != samlAud {
+		t.Fatalf("AWS-style assertion: %+v, %v; want credentials with Audience %s", got, err, samlAud)
+	}
+	for name, edit := range map[string]func(*samltest.Assertion){
+		"audience is the sign-in URL":    func(a *samltest.Assertion) { a.Audience = samlAud },
+		"recipient is the entity id":     func(a *samltest.Assertion) { a.Recipient = entityID },
+		"destination is the entity id":   func(a *samltest.Assertion) { a.Destination = entityID },
+		"audience names another service": func(a *samltest.Assertion) { a.Audience = "urn:other" },
+	} {
+		a := awsStyle
+		edit(&a)
+		if _, err := svc.AssumeRoleWithSAML(ctx, samlReq(e.response(t, a, samltest.SignAssertion))); !errors.Is(err, sts.ErrInvalidIdentityToken) {
+			t.Errorf("%s: %v, want InvalidIdentityToken", name, err)
+		}
+	}
+	good := samlReq(e.response(t, awsStyle, samltest.SignAssertion))
+	for name, sp := range map[string]sts.SAMLServiceProvider{
+		"no audience":    {SignInURL: samlAud},
+		"no sign-in URL": {Audience: entityID},
+	} {
+		svc := sts.New(e.b, e.keys, e.az, acct, e.clk.now, sts.WithSAML(provs, sp))
+		if _, err := svc.AssumeRoleWithSAML(ctx, good); !errors.Is(err, sts.ErrInvalidIdentityToken) {
+			t.Errorf("%s: %v, want InvalidIdentityToken", name, err)
 		}
 	}
 }

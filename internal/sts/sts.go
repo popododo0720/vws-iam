@@ -214,9 +214,9 @@ type Service struct {
 	index   store.Backend
 	account string
 	now     func() time.Time
-	// saml and samlAudience serve AssumeRoleWithSAML (WithSAML).
-	saml         SAMLProviders
-	samlAudience string
+	// saml and samlSP serve AssumeRoleWithSAML (WithSAML).
+	saml   SAMLProviders
+	samlSP SAMLServiceProvider
 }
 
 // Option configures a Service.

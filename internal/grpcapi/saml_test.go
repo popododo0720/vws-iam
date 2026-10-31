@@ -16,6 +16,7 @@ import (
 
 const (
 	samlAud     = "https://signin.vws.test/saml"
+	samlSPID    = "urn:amazon:webservices"
 	samlIssuer  = "https://idp.corp.test/"
 	samlIdpARN  = "arn:vws:iam::" + proj + ":saml-provider/corp"
 	samlRoleARN = "arn:vws:iam::" + proj + ":role/saml-dev"
@@ -35,7 +36,9 @@ func TestAssumeRoleWithSAML(t *testing.T) {
 				t.Fatal(err)
 			}
 			b := bk.open()
-			e := newEnvOn(t, b, &now, grpcapi.WithSAML(samltest.Providers{samlIdpARN: idp.Provider(samlIdpARN)}, samlAud))
+			e := newEnvOn(t, b, &now, grpcapi.WithSAML(samltest.Providers{samlIdpARN: idp.Provider(samlIdpARN)}, sts.SAMLServiceProvider{
+				Audience: samlSPID, SignInURL: samlAud,
+			}))
 			ctx := t.Context()
 			trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Federated":"` + samlIdpARN + `"},
 				"Action":"sts:AssumeRoleWithSAML","Condition":{"StringEquals":{"SAML:aud":"` + samlAud + `"}}}]}`
@@ -45,7 +48,7 @@ func TestAssumeRoleWithSAML(t *testing.T) {
 				t.Fatal(err)
 			}
 			good := samltest.Assertion{
-				Issuer: samlIssuer, Audience: samlAud, Recipient: samlAud, Destination: samlAud,
+				Issuer: samlIssuer, Audience: samlSPID, Recipient: samlAud, Destination: samlAud,
 				NameID: "alice@corp.test", NameIDFormat: "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
 				Roles: []string{samlRoleARN + "," + samlIdpARN}, SessionName: "alice",
 				NotBefore: now.Add(-time.Minute), NotOnOrAfter: now.Add(5 * time.Minute),
