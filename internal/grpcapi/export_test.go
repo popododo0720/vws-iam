@@ -93,3 +93,9 @@ func (s *Server) GetFederationToken(
 ) (sts.FederationToken, error) {
 	return s.getFederationToken(ctx, sigv4, console, req)
 }
+
+// AssumeRoleWithSAML is STS AssumeRoleWithSAML, which vws-proto does not
+// carry yet (#106).
+func (s *Server) AssumeRoleWithSAML(ctx context.Context, req sts.SAMLRequest) (sts.SAMLRoleSession, error) {
+	return s.assumeRoleWithSAML(ctx, req)
+}

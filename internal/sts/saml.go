@@ -215,6 +215,14 @@ func (s *Service) AssumeRoleWithSAML(ctx context.Context, req SAMLRequest) (SAML
 	}, nil
 }
 
+// ValidateSAMLRequest checks the parameters of an AssumeRoleWithSAML
+// request as AWS documents them (ValidationError, MalformedPolicyDocument,
+// PackedPolicyTooLarge) without reading anything.
+func ValidateSAMLRequest(req SAMLRequest) error {
+	_, err := validateSAMLRequest(req)
+	return err
+}
+
 // validateSAMLRequest checks req as AWS does before anything is read and
 // returns the packed size of its session policies.
 func validateSAMLRequest(req SAMLRequest) (int, error) {

@@ -61,6 +61,9 @@ type Server struct {
 	stsSeen sync.Map
 	// gcPage is the GC list page size (gcPageSize; tests lower it).
 	gcPage int
+	// saml and samlAudience serve AssumeRoleWithSAML (WithSAML).
+	saml         sts.SAMLProviders
+	samlAudience string
 }
 
 // Option configures a Server.
@@ -68,6 +71,13 @@ type Option func(*Server)
 
 // WithClock replaces time.Now (tests).
 func WithClock(now func() time.Time) Option { return func(s *Server) { s.now = now } }
+
+// WithSAML sets the SAML providers and sign-in audience of
+// AssumeRoleWithSAML. Without it (there is no SAML provider store yet,
+// #106) every AssumeRoleWithSAML call is InvalidIdentityToken.
+func WithSAML(p sts.SAMLProviders, audience string) Option {
+	return func(s *Server) { s.saml, s.samlAudience = p, audience }
+}
 
 // New returns a Server. b is the unscoped backend; keys seals secrets.
 func New(b store.Backend, keys *secret.Keyring, opts ...Option) *Server {
@@ -89,6 +99,15 @@ func Register(g *grpc.Server, s *Server) {
 	iamv1.RegisterAuthServiceServer(g, s)
 	iamv1.RegisterTokenServiceServer(g, s)
 	longrunningpb.RegisterOperationsServer(g, s)
+}
+
+// stsOptions are the sts.Service options of project id.
+func (s *Server) stsOptions(m *mfa.Service, id string) []sts.Option {
+	opts := []sts.Option{sts.WithMFA(mfaVerifier{m: m, s: s, project: id}), sts.WithKeyIndex(s.b)}
+	if s.saml != nil {
+		opts = append(opts, sts.WithSAML(s.saml, s.samlAudience))
+	}
+	return opts
 }
 
 // project is one project's view of every domain service.
@@ -113,7 +132,7 @@ func (s *Server) project(id string) project {
 		authz: az,
 		keys:  accesskey.New(b, s.b, id, s.keys, s.now),
 		mfa:   m,
-		sts:   sts.New(b, s.keys, az, id, s.now, sts.WithMFA(mfaVerifier{m: m, s: s, project: id}), sts.WithKeyIndex(s.b)),
+		sts:   sts.New(b, s.keys, az, id, s.now, s.stsOptions(m, id)...),
 	}
 }
 
