@@ -27,7 +27,8 @@ const (
 	samlIssuer  = "https://idp.corp.test/saml"
 	samlTrust   = `{"Version":"2012-10-17","Statement":{"Effect":"Allow",
 		"Principal":{"Federated":"` + samlIdpARN + `"},
-		"Action":["sts:AssumeRoleWithSAML","sts:SetSourceIdentity"],"Condition":{"StringEquals":{"SAML:aud":"` + samlAud + `"}}}}`
+		"Action":["sts:AssumeRoleWithSAML","sts:SetSourceIdentity"],
+		"Condition":{"StringEquals":{"SAML:aud":"` + samlAud + `"}}}}`
 )
 
 var samlSP = sts.SAMLServiceProvider{Audience: samlSPID, SignInURL: samlAud}
@@ -534,7 +535,8 @@ func TestAssumeRoleWithSAMLAudienceAndSignInURL(t *testing.T) {
 	} {
 		a := awsStyle
 		edit(&a)
-		if _, err := svc.AssumeRoleWithSAML(ctx, samlReq(e.response(t, a, samltest.SignAssertion))); !errors.Is(err, sts.ErrInvalidIdentityToken) {
+		_, err := svc.AssumeRoleWithSAML(ctx, samlReq(e.response(t, a, samltest.SignAssertion)))
+		if !errors.Is(err, sts.ErrInvalidIdentityToken) {
 			t.Errorf("%s: %v, want InvalidIdentityToken", name, err)
 		}
 	}

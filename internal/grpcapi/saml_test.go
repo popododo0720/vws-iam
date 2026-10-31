@@ -36,9 +36,8 @@ func TestAssumeRoleWithSAML(t *testing.T) {
 				t.Fatal(err)
 			}
 			b := bk.open()
-			e := newEnvOn(t, b, &now, grpcapi.WithSAML(samltest.Providers{samlIdpARN: idp.Provider(samlIdpARN)}, sts.SAMLServiceProvider{
-				Audience: samlSPID, SignInURL: samlAud,
-			}))
+			sp := sts.SAMLServiceProvider{Audience: samlSPID, SignInURL: samlAud}
+			e := newEnvOn(t, b, &now, grpcapi.WithSAML(samltest.Providers{samlIdpARN: idp.Provider(samlIdpARN)}, sp))
 			ctx := t.Context()
 			trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Federated":"` + samlIdpARN + `"},
 				"Action":"sts:AssumeRoleWithSAML","Condition":{"StringEquals":{"SAML:aud":"` + samlAud + `"}}}]}`
