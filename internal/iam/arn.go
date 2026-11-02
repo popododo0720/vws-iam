@@ -37,6 +37,11 @@ func PolicyARN(account string, p Policy) string {
 	return ARN("iam", "", account, "policy"+pathOf(p.Path)+p.Name)
 }
 
+// InstanceProfileARN is the ARN of an instance profile in account.
+func InstanceProfileARN(account string, p InstanceProfile) string {
+	return ARN("iam", "", account, "instance-profile"+pathOf(p.Path)+p.Name)
+}
+
 // MfaDeviceARN is the ARN of a virtual MFA device in account. Its path is
 // part of the serial number, as in AWS.
 func MfaDeviceARN(account string, d MfaDevice) string {
