@@ -28,7 +28,7 @@ func seedRole(t *testing.T, e *env, name string) {
 }
 
 // seedInstanceProfile stores instance profile name with roles in proj, as
-// CreateInstanceProfile (#91) and AddRoleToInstanceProfile (#96) will.
+// CreateInstanceProfile (#91) will.
 func seedInstanceProfile(t *testing.T, b store.Backend, name string, roles ...string) iam.InstanceProfile {
 	t.Helper()
 	p := iam.InstanceProfile{
