@@ -155,3 +155,14 @@ func (s *Server) RemoveRoleFromInstanceProfile(ctx context.Context, project, pro
 func (s *Server) AddRoleToInstanceProfile(ctx context.Context, project, profileName, roleName string) error {
 	return s.addRoleToInstanceProfile(ctx, project, profileName, roleName)
 }
+
+// InstanceProfilePage is one page of ListInstanceProfilesForRole.
+type InstanceProfilePage = instanceProfilePage
+
+// ListInstanceProfilesForRole is IAM ListInstanceProfilesForRole, which
+// vws-proto does not carry yet (#95).
+func (s *Server) ListInstanceProfilesForRole(
+	ctx context.Context, project, roleName, marker string, maxItems int,
+) (InstanceProfilePage, error) {
+	return s.listInstanceProfilesForRole(ctx, project, roleName, marker, maxItems)
+}

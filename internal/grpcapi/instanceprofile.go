@@ -2,9 +2,11 @@ package grpcapi
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/store"
@@ -172,4 +174,119 @@ func (s *Server) addRoleToInstanceProfile(ctx context.Context, pid, profileName,
 			return toStatus(ctx, err)
 		}
 	}
+}
+
+// Instance profile page sizes: the AWS default and maximum MaxItems of
+// ListInstanceProfilesForRole.
+const (
+	DefaultInstanceProfilePageSize = 100
+	MaxInstanceProfilePageSize     = 1000
+)
+
+// instanceProfilePage is one page of ListInstanceProfilesForRole: the
+// profiles that hold Role, ordered by case-folded name. Role is the role
+// as stored, which every listed profile holds (an instance profile holds
+// at most one role), so a caller can render each profile's Roles. When
+// IsTruncated is set, Marker continues the listing.
+type instanceProfilePage struct {
+	Profiles    []iam.InstanceProfile
+	Role        iam.Role
+	IsTruncated bool
+	Marker      string
+}
+
+// listInstanceProfilesForRole is IAM ListInstanceProfilesForRole: the
+// instance profiles of project pid that hold role roleName, in pages.
+//
+// A bad project id or a RoleName outside 1 to 64 characters of
+// [\w+=,.@-] is ValidationError, as is a maxItems outside 1 to 1000 (0
+// means not set: the AWS default of 100) or a marker with a character
+// outside [\u0020-\u00FF]; all before any store access. A marker this
+// call did not return is InvalidInput, as for ListPolicyTags. An unknown
+// role is NoSuchEntity; a role in no profile is an empty page. Role
+// names compare case-insensitively, like every IAM name.
+//
+// Profiles are ordered by case-folded name, so pages are deterministic
+// and a marker (the last name of the previous page) continues after that
+// name even when profiles are created or deleted in between: every
+// profile that exists for the whole listing is returned once. The call
+// only reads; PathPrefix does not apply, as AWS has none here.
+// Authorization (iam:ListInstanceProfilesForRole) is console-api's, as
+// for the other IAM reads.
+//
+// TODO(#95): serve this as an RPC once vws-proto carries it
+// (popododo0720/vws-proto#120).
+func (s *Server) listInstanceProfilesForRole(
+	ctx context.Context, pid, roleName, marker string, maxItems int,
+) (instanceProfilePage, error) {
+	if !iam.ValidProject(pid) {
+		return instanceProfilePage{}, invalidID("project " + quote(pid) + " is not a project id")
+	}
+	if !iam.ValidName(roleName) {
+		return instanceProfilePage{}, invalidSpec("roleName must be 1 to 64 characters of [\\w+=,.@-]")
+	}
+	switch {
+	case maxItems == 0:
+		maxItems = DefaultInstanceProfilePageSize
+	case maxItems < 1 || maxItems > MaxInstanceProfilePageSize:
+		return instanceProfilePage{}, invalidSpec("maxItems must be 1 to " +
+			strconv.Itoa(MaxInstanceProfilePageSize))
+	}
+	after, err := decodeMarker(marker)
+	if err != nil {
+		return instanceProfilePage{}, err
+	}
+	p := s.project(pid)
+	r, err := store.Get[iam.Role](ctx, p.b, roleName)
+	if errors.Is(err, store.ErrNotFound) {
+		return instanceProfilePage{}, notFound("The role with name " + roleName + " cannot be found.")
+	}
+	if err != nil {
+		return instanceProfilePage{}, toStatus(ctx, err)
+	}
+	all, err := store.List[iam.InstanceProfile](ctx, p.b)
+	if err != nil {
+		return instanceProfilePage{}, toStatus(ctx, err)
+	}
+	role := store.Fold(r.Object.Name)
+	var held []iam.InstanceProfile
+	for _, v := range all {
+		if after != "" && store.Fold(v.Object.Name) <= after {
+			continue
+		}
+		if slices.ContainsFunc(v.Object.Roles, func(n string) bool { return store.Fold(n) == role }) {
+			held = append(held, v.Object)
+		}
+	}
+	slices.SortFunc(held, func(a, b iam.InstanceProfile) int {
+		return strings.Compare(store.Fold(a.Name), store.Fold(b.Name))
+	})
+	out := instanceProfilePage{Role: r.Object}
+	if len(held) > maxItems {
+		held = held[:maxItems]
+		out.IsTruncated = true
+		out.Marker = base64.RawURLEncoding.EncodeToString([]byte(store.Fold(held[maxItems-1].Name)))
+	}
+	out.Profiles = held
+	return out, nil
+}
+
+// decodeMarker returns the case-folded profile name a
+// ListInstanceProfilesForRole marker continues after; "" for no marker.
+// A marker outside the AWS pattern [\u0020-\u00FF]+ is ValidationError;
+// one this service did not issue is InvalidInput.
+func decodeMarker(marker string) (string, error) {
+	if marker == "" {
+		return "", nil
+	}
+	for _, c := range marker {
+		if c < 0x20 || c > 0xFF {
+			return "", invalidSpec("marker must be characters of [\\u0020-\\u00FF]")
+		}
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(marker)
+	if err != nil || !iam.ValidInstanceProfileName(string(raw)) || store.Fold(string(raw)) != string(raw) {
+		return "", invalidInput("marker is not valid")
+	}
+	return string(raw), nil
 }
