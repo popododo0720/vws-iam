@@ -73,3 +73,16 @@ func TestParseJWKS(t *testing.T) {
 		}
 	}
 }
+
+// TestJSONObject: a JWS header or claims set is one JSON object with
+// nothing after it, not even malformed bytes.
+func TestJSONObject(t *testing.T) {
+	for in, ok := range map[string]bool{
+		`{"a":1}`: true, ` {"a":1} `: true,
+		`{"a":1}{}`: false, `{"a":1}!`: false, `{"a":1}}`: false, `{"a":1},`: false, `{"a":1}"`: false,
+	} {
+		if _, err := jsonObject([]byte(in)); (err == nil) != ok {
+			t.Errorf("jsonObject(%s): %v, want ok=%v", in, err, ok)
+		}
+	}
+}
