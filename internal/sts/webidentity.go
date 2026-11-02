@@ -34,12 +34,10 @@ const (
 	webTagsClaim           = "https://aws.amazon.com/tags"
 )
 
-var (
-	// oidcProviderNameRE is the host and path of an issuer URL after
-	// https://, as the oidc-provider ARN and the condition key prefix use
-	// it. A colon (port) is refused: it would make "<name>:sub" ambiguous.
-	oidcProviderNameRE = regexp.MustCompile(`^[A-Za-z0-9.-]+(/[A-Za-z0-9._~%-]+)*$`)
-)
+// oidcProviderNameRE is the host and path of an issuer URL after
+// https://, as the oidc-provider ARN and the condition key prefix use
+// it. A colon (port) is refused: it would make "<name>:sub" ambiguous.
+var oidcProviderNameRE = regexp.MustCompile(`^[A-Za-z0-9.-]+(/[A-Za-z0-9._~%-]+)*$`)
 
 // OIDCProvider is an IAM OpenID Connect provider: its issuer URL, the
 // client ids (audiences) it accepts, and the signing keys of its JWKS.
@@ -331,7 +329,7 @@ func readWebClaims(tok jwt, now time.Time) (webClaims, error) {
 	}
 	if cl.sourceIdentity, err = jsonString(tok.claims, webSourceIdentityClaim); err != nil ||
 		(cl.sourceIdentity != "" && !sourceIdentityRE.MatchString(cl.sourceIdentity)) {
-		return webClaims{}, bad("the source identity claim must be 2 to 64 characters of [\\w+=,.@-]")
+		return webClaims{}, bad("the source identity claim must be 2 to 256 characters of [\\w+=,.@-]")
 	}
 	if _, ok := tok.claims[webTagsClaim]; ok {
 		return webClaims{}, bad("session tags in the token are not supported yet")
