@@ -1,8 +1,10 @@
 // Package mfa manages virtual TOTP MFA devices. The seed is shown once at
 // creation and stored only sealed. Enabling needs two consecutive codes.
 // Each accepted code advances the device's last step, so a code is never
-// accepted twice. MaxFailedAttempts wrong codes in a row lock the device
-// for LockoutDuration; the counter is stored, so a restart does not reset it.
+// accepted twice. Resync stores the drift of the device clock, around
+// which codes are then checked. MaxFailedAttempts wrong codes in a row
+// lock the device for LockoutDuration; the counter is stored, so a
+// restart does not reset it.
 package mfa
 
 import (
@@ -32,6 +34,10 @@ var (
 
 // Skew is the accepted clock drift in steps, for Verify and for Enable.
 const Skew = 1
+
+// ResyncSkew is how far, in steps either side of now, Resync searches
+// for two consecutive codes: 10 minutes. It also bounds the stored drift.
+const ResyncSkew = 20
 
 // Brute-force limits: a 6-digit code space of 10^6 with ±1 step allows
 // about 3 hits per million guesses, so 5 tries per 15 minutes bounds an
@@ -233,7 +239,7 @@ func (s *Service) enable(ctx context.Context, user, name, code1, code2 string, p
 		if !ok || first+1 > cur+Skew || first+1 <= d.LastStep || !totp.Equal(totp.Code(seed, first+1, totp.Digits), code2) {
 			return false, nil
 		}
-		d.UserName, d.Enabled, d.LastStep, d.EnableTime = user, true, first+1, s.now().UTC()
+		d.UserName, d.Enabled, d.LastStep, d.EnableTime, d.Drift = user, true, first+1, s.now().UTC(), 0
 		return true, nil
 	})
 }
@@ -310,7 +316,7 @@ func (s *Service) verifyCode(user, code string, d *iam.MfaDevice) (bool, error) 
 	if err != nil {
 		return false, err
 	}
-	step, ok := totp.Match(seed, code, s.now(), Skew)
+	step, ok := totp.Match(seed, code, s.now().Add(time.Duration(d.Drift)*totp.Period), Skew)
 	// Mutate rereads on a conflict, so two racing uses of one code
 	// see each other's LastStep and only one wins.
 	if !ok || step <= d.LastStep {
@@ -318,6 +324,38 @@ func (s *Service) verifyCode(user, code string, d *iam.MfaDevice) (bool, error) 
 	}
 	d.LastStep = step
 	return true, nil
+}
+
+// Resync is IAM ResyncMFADevice: it finds code1 and code2 as two
+// consecutive codes within ±ResyncSkew steps of now and stores the
+// device's drift, so Verify then checks codes around the device's clock.
+// serial must be exactly the ARN of a device enabled for user, else
+// ErrNotAssociated. The steps must be newer than the last accepted one,
+// and the second becomes it, so a code is never accepted twice: a repeat
+// of a request that succeeded is ErrInvalidCode, and of racing requests
+// with the same codes only one succeeds. A wrong pair counts towards the
+// lockout like a wrong Verify code. Never log the codes.
+func (s *Service) Resync(ctx context.Context, user, serial, code1, code2 string) error {
+	name, _, ok := iam.SplitMfaDeviceARN(s.account, serial)
+	if !ok {
+		return ErrNotAssociated
+	}
+	return s.attempt(ctx, name, func(d *iam.MfaDevice) (bool, error) {
+		if s.Serial(*d) != serial || !d.Enabled || store.Fold(d.UserName) != store.Fold(user) {
+			return false, ErrNotAssociated
+		}
+		seed, err := s.seed(*d)
+		if err != nil {
+			return false, err
+		}
+		cur := totp.Step(s.now())
+		first, ok := totp.MatchPair(seed, code1, code2, max(cur-ResyncSkew, d.LastStep+1), cur+ResyncSkew-1)
+		if !ok {
+			return false, nil
+		}
+		d.LastStep, d.Drift = first+1, first+1-cur
+		return true, nil
+	})
 }
 
 // Required reports whether user has an enabled device (login needs a code).
