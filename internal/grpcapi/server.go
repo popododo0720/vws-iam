@@ -64,6 +64,9 @@ type Server struct {
 	// saml and samlSP serve AssumeRoleWithSAML (WithSAML).
 	saml   sts.SAMLProviders
 	samlSP sts.SAMLServiceProvider
+	// linked is the catalog of services that can own service-linked
+	// roles, by service principal (WithLinkedServices).
+	linked map[string]iam.LinkedService
 }
 
 // Option configures a Server.
@@ -78,6 +81,19 @@ func WithClock(now func() time.Time) Option { return func(s *Server) { s.now = n
 // InvalidIdentityToken.
 func WithSAML(p sts.SAMLProviders, sp sts.SAMLServiceProvider) Option {
 	return func(s *Server) { s.saml, s.samlSP = p, sp }
+}
+
+// WithLinkedServices sets the services CreateServiceLinkedRole accepts,
+// by service principal (case-sensitive, as in AWS). Without it (no
+// VWS service publishes a service-linked role yet, #220) every
+// CreateServiceLinkedRole call is InvalidInput.
+func WithLinkedServices(ls ...iam.LinkedService) Option {
+	return func(s *Server) {
+		s.linked = make(map[string]iam.LinkedService, len(ls))
+		for _, l := range ls {
+			s.linked[l.Principal] = l
+		}
+	}
 }
 
 // New returns a Server. b is the unscoped backend; keys seals secrets.

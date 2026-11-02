@@ -69,3 +69,55 @@ func TestServiceLinkedRoleValidate(t *testing.T) {
 		}
 	}
 }
+
+// TestServiceLinkedRoleName: AWSServiceRoleFor<RoleName>, with
+// _<suffix> only when a suffix is given.
+func TestServiceLinkedRoleName(t *testing.T) {
+	l := iam.LinkedService{Principal: "autoscaling.vws.internal", RoleName: "AutoScaling", CustomSuffix: true}
+	if got := l.ServiceLinkedRoleName(""); got != "AWSServiceRoleForAutoScaling" {
+		t.Fatalf("no suffix: %q", got)
+	}
+	if got := l.ServiceLinkedRoleName("debug-1"); got != "AWSServiceRoleForAutoScaling_debug-1" {
+		t.Fatalf("suffix: %q", got)
+	}
+}
+
+// TestLinkedServiceValidate: a linked service names a valid service
+// principal of at most 128 characters and a role name that fits 64.
+func TestLinkedServiceValidate(t *testing.T) {
+	ok := iam.LinkedService{Principal: "autoscaling.vws.internal", RoleName: "AutoScaling"}
+	if err := ok.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	longest := ok
+	longest.RoleName = strings.Repeat("r", 64-len(iam.ServiceRoleNamePrefix))
+	if err := longest.Validate(); err != nil {
+		t.Fatalf("64-character role name: %v", err)
+	}
+	over128 := strings.Repeat("a", 60) + "." + strings.Repeat("b", 68)
+	over64 := strings.Repeat("r", 65-len(iam.ServiceRoleNamePrefix))
+	bad := map[string]func(*iam.LinkedService){
+		"no principal":        func(l *iam.LinkedService) { l.Principal = "" },
+		"uppercase principal": func(l *iam.LinkedService) { l.Principal = "AutoScaling.vws.internal" },
+		"principal over 128":  func(l *iam.LinkedService) { l.Principal = over128 },
+		"no role name":        func(l *iam.LinkedService) { l.RoleName = "" },
+		"role name over 64":   func(l *iam.LinkedService) { l.RoleName = over64 },
+		"role name slash":     func(l *iam.LinkedService) { l.RoleName = "a/b" },
+	}
+	for name, mut := range bad {
+		l := ok
+		mut(&l)
+		if err := l.Validate(); !errors.Is(err, iam.ErrInvalid) {
+			t.Errorf("%s: Validate = %v, want ErrInvalid", name, err)
+		}
+	}
+}
+
+// TestServiceTrustPolicy: the trust policy names only the service.
+func TestServiceTrustPolicy(t *testing.T) {
+	want := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow",` +
+		`"Principal":{"Service":"ec2.vws.internal"},"Action":"sts:AssumeRole"}]}`
+	if got := iam.ServiceTrustPolicy("ec2.vws.internal"); got != want {
+		t.Fatalf("ServiceTrustPolicy = %s", got)
+	}
+}
