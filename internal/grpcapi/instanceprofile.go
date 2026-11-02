@@ -555,7 +555,9 @@ func (s *Server) deleteInstanceProfile(ctx context.Context, pid, profileName str
 //
 // TODO(#91): serve this as an RPC once vws-proto carries it
 // (popododo0720/vws-proto#126).
-func (s *Server) createInstanceProfile(ctx context.Context, pid, profileName, path string) (instanceProfileView, error) {
+func (s *Server) createInstanceProfile(
+	ctx context.Context, pid, profileName, path string,
+) (instanceProfileView, error) {
 	if !iam.ValidProject(pid) {
 		return instanceProfileView{}, invalidID("project " + quote(pid) + " is not a project id")
 	}

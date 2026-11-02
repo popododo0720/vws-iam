@@ -290,7 +290,8 @@ func TestValidPath(t *testing.T) {
 			t.Errorf("ValidPath(%q) = false, want true", s)
 		}
 	}
-	for _, s := range []string{"", "app/", "/app", "//", "//x", "/a b/", "/a\x7f/", "/é/", "/" + strings.Repeat("p", 511) + "/"} {
+	invalid := []string{"", "app/", "/app", "//", "//x", "/a b/", "/a\x7f/", "/é/", "/" + strings.Repeat("p", 511) + "/"}
+	for _, s := range invalid {
 		if iam.ValidPath(s) {
 			t.Errorf("ValidPath(%q) = true, want false", s)
 		}
