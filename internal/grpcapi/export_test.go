@@ -137,3 +137,9 @@ func (s *Server) PutRolePermissionsBoundary(ctx context.Context, project, roleNa
 func (s *Server) DeleteUserPermissionsBoundary(ctx context.Context, project, userName string) error {
 	return s.deleteUserPermissionsBoundary(ctx, project, userName)
 }
+
+// PutUserPermissionsBoundary is IAM PutUserPermissionsBoundary, which
+// vws-proto does not carry yet (#98).
+func (s *Server) PutUserPermissionsBoundary(ctx context.Context, project, userName, boundaryARN string) error {
+	return s.putUserPermissionsBoundary(ctx, project, userName, boundaryARN)
+}
