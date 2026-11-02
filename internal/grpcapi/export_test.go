@@ -105,3 +105,11 @@ func (s *Server) AssumeRoleWithSAML(ctx context.Context, req sts.SAMLRequest) (s
 func (s *Server) DeleteServiceLinkedRole(ctx context.Context, project, roleName string) (string, error) {
 	return s.deleteServiceLinkedRole(ctx, project, roleName)
 }
+
+// AssumeRoleWithWebIdentity is STS AssumeRoleWithWebIdentity, which
+// vws-proto does not carry yet (#105).
+func (s *Server) AssumeRoleWithWebIdentity(
+	ctx context.Context, req sts.WebIdentityRequest,
+) (sts.WebIdentityRoleSession, error) {
+	return s.assumeRoleWithWebIdentity(ctx, req)
+}

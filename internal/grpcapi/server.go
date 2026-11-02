@@ -64,6 +64,8 @@ type Server struct {
 	// saml and samlSP serve AssumeRoleWithSAML (WithSAML).
 	saml   sts.SAMLProviders
 	samlSP sts.SAMLServiceProvider
+	// oidc serves AssumeRoleWithWebIdentity (WithOIDC).
+	oidc sts.OIDCProviders
 }
 
 // Option configures a Server.
@@ -79,6 +81,11 @@ func WithClock(now func() time.Time) Option { return func(s *Server) { s.now = n
 func WithSAML(p sts.SAMLProviders, sp sts.SAMLServiceProvider) Option {
 	return func(s *Server) { s.saml, s.samlSP = p, sp }
 }
+
+// WithOIDC sets the OIDC providers of AssumeRoleWithWebIdentity. Without
+// it (there is no OIDC provider store yet, #208) every
+// AssumeRoleWithWebIdentity call is InvalidIdentityToken.
+func WithOIDC(p sts.OIDCProviders) Option { return func(s *Server) { s.oidc = p } }
 
 // New returns a Server. b is the unscoped backend; keys seals secrets.
 func New(b store.Backend, keys *secret.Keyring, opts ...Option) *Server {
@@ -107,6 +114,9 @@ func (s *Server) stsOptions(m *mfa.Service, id string) []sts.Option {
 	opts := []sts.Option{sts.WithMFA(mfaVerifier{m: m, s: s, project: id}), sts.WithKeyIndex(s.b)}
 	if s.saml != nil {
 		opts = append(opts, sts.WithSAML(s.saml, s.samlSP))
+	}
+	if s.oidc != nil {
+		opts = append(opts, sts.WithOIDC(s.oidc))
 	}
 	return opts
 }
