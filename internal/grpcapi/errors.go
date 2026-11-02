@@ -101,6 +101,7 @@ var mapping = []struct {
 	{sts.ErrPackedPolicyTooLarge, codes.InvalidArgument, "INVALID_SPEC", "PackedPolicyTooLarge"},
 	{sts.ErrInvalidIdentityToken, codes.InvalidArgument, "INVALID_CREDENTIALS", "InvalidIdentityToken"},
 	{sts.ErrIDPRejectedClaim, codes.PermissionDenied, "ACCESS_DENIED", "IDPRejectedClaim"},
+	{sts.ErrIDPCommunication, codes.Unavailable, "", "IDPCommunicationError"},
 	{store.ErrNotFound, codes.NotFound, "RESOURCE_NOT_FOUND", "NoSuchEntity"},
 	{authz.ErrNoSuchEntity, codes.NotFound, "RESOURCE_NOT_FOUND", "NoSuchEntity"},
 	{accesskey.ErrNoSuchUser, codes.NotFound, "RESOURCE_NOT_FOUND", "NoSuchEntity"},

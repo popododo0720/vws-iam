@@ -129,6 +129,13 @@ func (s *Server) authTemporary(
 		// restore them from the session token (sts callerContext).
 		return nil, badCredentials()
 	}
+	if gateway && sess.WebIdentity != nil {
+		// TODO(#209): describe a web identity session to the gateway once
+		// vws-proto lets Authorize carry its <provider>:sub, :aud, :amr and
+		// aws:FederatedProvider keys; until then the session fails closed
+		// here, as a SAML session does.
+		return nil, badCredentials()
+	}
 	pr, err := s.sessionPrincipal(ctx, sess)
 	if err != nil {
 		return nil, toStatus(ctx, err)
@@ -305,12 +312,13 @@ func (s *Server) authorize(
 		}
 		return nil, "", toStatus(ctx, err)
 	}
-	// saml:* keys come only from a verified assertion or a sealed SAML
-	// session, never from the request; Authenticate refuses SAML sessions
-	// (#202), so no principal here has them.
+	// saml:* and web identity keys (sts.ClientKey) come only from a
+	// verified assertion or token or a sealed federated session, never
+	// from the request; Authenticate refuses those sessions (#202, #209),
+	// so no principal here has them.
 	rc := map[string][]string{}
 	for k, v := range req.GetContext() {
-		if lk := strings.ToLower(k); !serverKeys[lk] && !strings.HasPrefix(lk, "saml:") {
+		if lk := strings.ToLower(k); !serverKeys[lk] && sts.ClientKey(k) {
 			rc[k] = v.GetValues()
 		}
 	}
