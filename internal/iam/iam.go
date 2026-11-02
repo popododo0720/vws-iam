@@ -282,6 +282,10 @@ type Role struct {
 	// role (CreateServiceLinkedRole, #103); empty for every other role.
 	// Only DeleteServiceLinkedRole deletes a role that has one (#104).
 	LinkedService string `json:"linkedService,omitempty"`
+	// PermissionsBoundary is the ARN of the managed policy that is the
+	// role's permissions boundary (PutRolePermissionsBoundary, #100);
+	// empty when the role has none (DeleteRolePermissionsBoundary, #101).
+	PermissionsBoundary string `json:"permissionsBoundary,omitempty"`
 }
 
 func (Role) Kind() Kind    { return KindRole }
@@ -298,6 +302,9 @@ func (r Role) Validate() error {
 	}
 	if err := checkServiceLinked(r); err != nil {
 		return err
+	}
+	if b := r.PermissionsBoundary; b != "" && !ValidPolicyARN(b) {
+		return invalid("role %q permissions boundary %q is not a policy ARN", r.Name, b)
 	}
 	if err := checkAttached(r.AttachedPolicies); err != nil {
 		return err

@@ -119,3 +119,9 @@ func (s *Server) CreateServiceLinkedRole(
 func (s *Server) ResyncMfaDevice(ctx context.Context, project string, req ResyncMFADeviceRequest) error {
 	return s.resyncMfaDevice(ctx, project, req)
 }
+
+// DeleteRolePermissionsBoundary is IAM DeleteRolePermissionsBoundary,
+// which vws-proto does not carry yet (#101).
+func (s *Server) DeleteRolePermissionsBoundary(ctx context.Context, project, roleName string) error {
+	return s.deleteRolePermissionsBoundary(ctx, project, roleName)
+}
