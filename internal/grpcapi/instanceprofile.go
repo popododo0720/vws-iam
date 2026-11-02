@@ -471,3 +471,66 @@ func (s *Server) getInstanceProfile(ctx context.Context, pid, profileName string
 	}
 	return out, nil
 }
+
+// deleteInstanceProfile is IAM DeleteInstanceProfile: it deletes instance
+// profile profileName of project pid.
+//
+// A bad project id or an InstanceProfileName outside 1 to 128 characters
+// of [\w+=,.@-] is ValidationError before any store access. An unknown
+// instance profile is NoSuchEntity, so a retry after a lost response is
+// NoSuchEntity, as in AWS. A profile that still holds a role is
+// DeleteConflict: the role must be removed first. A stale name of a role
+// deleted while in the profile (#234) holds no role, as in
+// GetInstanceProfile and ListInstanceProfiles, so it does not block the
+// delete. The delete is conditional on the version read, so a role added
+// in between (AddRoleToInstanceProfile writes the profile) makes the
+// profile be read again and the delete refused, never done blind; a
+// request that was canceled or whose deadline passed deletes nothing. A
+// store failure is InternalFailure. Authorization
+// (iam:DeleteInstanceProfile) is console-api's, as for DeleteRole.
+//
+// TODO(#92): serve this as an RPC once vws-proto carries it
+// (popododo0720/vws-proto#124).
+func (s *Server) deleteInstanceProfile(ctx context.Context, pid, profileName string) error {
+	if !iam.ValidProject(pid) {
+		return invalidID("project " + quote(pid) + " is not a project id")
+	}
+	if !iam.ValidInstanceProfileName(profileName) {
+		return invalidSpec("instanceProfileName must be 1 to 128 characters of [\\w+=,.@-]")
+	}
+	p := s.project(pid)
+	noProfile := notFound("Instance Profile " + profileName + " cannot be found.")
+	for attempt := 1; ; attempt++ {
+		cur, err := store.Get[iam.InstanceProfile](ctx, p.b, profileName)
+		if errors.Is(err, store.ErrNotFound) {
+			return noProfile
+		}
+		if err != nil {
+			return toStatus(ctx, err)
+		}
+		for _, n := range cur.Object.Roles {
+			_, err := store.Get[iam.Role](ctx, p.b, n)
+			if errors.Is(err, store.ErrNotFound) {
+				continue // a stale name of a deleted role (#234)
+			}
+			if err != nil {
+				return toStatus(ctx, err)
+			}
+			return deleteConflict("Cannot delete entity, must remove roles from instance profile first.")
+		}
+		if err := ctx.Err(); err != nil {
+			return toStatus(ctx, err) // the caller is gone; delete nothing
+		}
+		err = store.Delete[iam.InstanceProfile](ctx, p.b, profileName, cur.Version)
+		switch {
+		case err == nil:
+			return nil
+		case errors.Is(err, store.ErrConflict) && attempt < maxDeleteAttempts:
+			continue
+		case errors.Is(err, store.ErrNotFound):
+			return noProfile
+		default:
+			return toStatus(ctx, err)
+		}
+	}
+}
