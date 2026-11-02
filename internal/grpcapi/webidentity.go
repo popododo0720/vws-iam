@@ -14,18 +14,21 @@ import (
 // internal/sts against the provider's signing keys. The project is the
 // account of RoleArn; a RoleArn that names no project of this service is
 // AccessDenied, as an unknown role is. The request carries a bearer token
-// and is never logged.
+// and is never logged. sourceIP is the caller's address as the gateway
+// saw it; it replaces any req.SourceIP, so only the transport sets the
+// aws:SourceIp of the trust evaluation.
 //
 // TODO(#105): serve this as TokenService.AssumeRoleWithWebIdentity once
 // vws-proto carries the RPC (popododo0720/vws-proto#105), and wire
 // WithOIDC to the OIDC provider store once vws-iam has one (#208).
 func (s *Server) assumeRoleWithWebIdentity(
-	ctx context.Context, req sts.WebIdentityRequest,
+	ctx context.Context, req sts.WebIdentityRequest, sourceIP string,
 ) (out sts.WebIdentityRoleSession, err error) {
 	defer func() {
 		s.m.add(ctx, s.m.issued, attribute.String("rpc", "AssumeRoleWithWebIdentity"),
 			attribute.String("result", result(err)))
 	}()
+	req.SourceIP = sourceIP
 	if err := sts.ValidateWebIdentityRequest(req); err != nil {
 		return sts.WebIdentityRoleSession{}, toStatus(ctx, err)
 	}

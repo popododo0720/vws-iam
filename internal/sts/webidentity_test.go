@@ -693,3 +693,71 @@ func TestAssumeRoleWithWebIdentitySingleLabelIssuer(t *testing.T) {
 		}
 	}
 }
+
+// TestAssumeRoleWithWebIdentitySourceIPFailsClosed: AWS always has
+// aws:SourceIp for this call, so a trust policy that tests it is never
+// skipped. Without a trusted source IP the call is refused when the
+// trust policy names aws:SourceIp, also by a Deny with IpAddress that
+// would not match a missing key.
+func TestAssumeRoleWithWebIdentitySourceIPFailsClosed(t *testing.T) {
+	e := wiSetup(t)
+	ctx := context.Background()
+	tok := e.token(t, "RS256", e.claims())
+	base := `{"Effect":"Allow","Principal":{"Federated":"` + wiProvARN + `"},"Action":"sts:AssumeRoleWithWebIdentity"}`
+	for name, stmt := range map[string]string{
+		"deny IpAddress": `{"Effect":"Deny","Principal":"*","Action":"sts:AssumeRoleWithWebIdentity",
+			"Condition":{"IpAddress":{"aws:SourceIp":"0.0.0.0/0"}}}`,
+		"deny IpAddressIfExists": `{"Effect":"Deny","Principal":"*","Action":"sts:AssumeRoleWithWebIdentity",
+			"Condition":{"IpAddressIfExists":{"AWS:SOURCEIP":["::/0","0.0.0.0/0"]}}}`,
+	} {
+		trustDoc(t, e.b, `{"Version":"2012-10-17","Statement":[`+base+`,`+stmt+`]}`)
+		if _, err := e.svc.AssumeRoleWithWebIdentity(ctx, wiReq(tok)); !errors.Is(err, sts.ErrAccessDenied) {
+			t.Errorf("%s without a source IP: %v, want AccessDenied", name, err)
+		}
+	}
+	// A trust policy that does not name aws:SourceIp still works.
+	trustDoc(t, e.b, `{"Version":"2012-10-17","Statement":[`+base+`]}`)
+	if _, err := e.svc.AssumeRoleWithWebIdentity(ctx, wiReq(tok)); err != nil {
+		t.Errorf("no aws:SourceIp in the trust policy: %v", err)
+	}
+}
+
+// TestAssumeRoleWithWebIdentitySourceIP: the trusted source IP is
+// aws:SourceIp in the trust evaluation, so an IP-conditioned Deny refuses
+// a caller in its range and an IP-conditioned Allow admits only its
+// range; a source IP that is not an address is refused.
+func TestAssumeRoleWithWebIdentitySourceIP(t *testing.T) {
+	e := wiSetup(t)
+	ctx := context.Background()
+	tok := e.token(t, "RS256", e.claims())
+	allow := `{"Effect":"Allow","Principal":{"Federated":"` + wiProvARN + `"},"Action":"sts:AssumeRoleWithWebIdentity"`
+	denyRange := `{"Version":"2012-10-17","Statement":[` + allow + `},{"Effect":"Deny","Principal":"*",
+		"Action":"sts:AssumeRoleWithWebIdentity","Condition":{"IpAddress":{"aws:SourceIp":"203.0.113.0/24"}}}]}`
+	denyOutside := `{"Version":"2012-10-17","Statement":[` + allow + `},{"Effect":"Deny","Principal":"*",
+		"Action":"sts:AssumeRoleWithWebIdentity","Condition":{"NotIpAddress":{"aws:SourceIp":"10.0.0.0/8"}}}]}`
+	allowRange := `{"Version":"2012-10-17","Statement":[` + allow +
+		`,"Condition":{"IpAddress":{"aws:SourceIp":["2001:db8::/32","192.0.2.0/24"]}}}]}`
+	for _, tc := range []struct {
+		name, doc, ip string
+		ok            bool
+	}{
+		{"deny range, inside", denyRange, "203.0.113.7", false},
+		{"deny range, IPv4-mapped inside", denyRange, "::ffff:203.0.113.7", false},
+		{"deny range, outside", denyRange, "198.51.100.7", true},
+		{"deny outside, inside", denyOutside, "10.1.2.3", true},
+		{"deny outside, outside", denyOutside, "198.51.100.7", false},
+		{"allow range, v4", allowRange, "192.0.2.10", true},
+		{"allow range, v6", allowRange, "2001:db8::1", true},
+		{"allow range, other", allowRange, "198.51.100.7", false},
+		{"not an address", denyRange, "203.0.113.7:443", false},
+		{"zone", denyRange, "fe80::1%eth0", false},
+	} {
+		trustDoc(t, e.b, tc.doc)
+		r := wiReq(tok)
+		r.SourceIP = tc.ip
+		_, err := e.svc.AssumeRoleWithWebIdentity(ctx, r)
+		if (tc.ok && err != nil) || (!tc.ok && !errors.Is(err, sts.ErrAccessDenied)) {
+			t.Errorf("%s: %v, want ok=%v", tc.name, err, tc.ok)
+		}
+	}
+}

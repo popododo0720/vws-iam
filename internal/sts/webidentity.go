@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"regexp"
 	"slices"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/popododo0720/vws-iam/internal/authz"
 	"github.com/popododo0720/vws-iam/internal/iam"
+	"github.com/popododo0720/vws-iam/internal/policy"
 	"github.com/popododo0720/vws-iam/internal/store"
 )
 
@@ -76,6 +78,46 @@ type WebIdentityRequest struct {
 	Duration   time.Duration
 	Policy     string
 	PolicyARNs []string
+	// SourceIP is the caller's address as the gateway saw it, the
+	// aws:SourceIp of the trust evaluation. Only the transport sets it,
+	// never from the token or another client field. Empty means unknown:
+	// a trust policy that names aws:SourceIp then refuses the call.
+	SourceIP string
+}
+
+// setSourceIP puts the trusted source IP into the trust context as
+// aws:SourceIp, which AWS has for every AssumeRoleWithWebIdentity call
+// (IAM User Guide, AWS global condition context keys). A source IP that
+// is not an IP address, or none while the trust policy of r names
+// aws:SourceIp, is AccessDenied: the condition is never skipped, so an
+// IP-conditioned Deny cannot fail open.
+//
+// TODO(#105): vws-proto#105 carries the gateway's source IP with the RPC;
+// until then no production caller sets it and such a trust policy fails
+// closed.
+func setSourceIP(tctx map[string][]string, r iam.Role, roleARN, sourceIP string) error {
+	if sourceIP != "" {
+		ip, err := netip.ParseAddr(sourceIP)
+		if err != nil || ip.Zone() != "" {
+			return fmt.Errorf("%w: not authorized to perform %s on %s: the source IP is not an IP address",
+				ErrAccessDenied, WebIdentityAction, roleARN)
+		}
+		tctx["aws:SourceIp"] = []string{ip.Unmap().String()}
+		return nil
+	}
+	trust, err := policy.ParseTrust(r.AssumeRolePolicy)
+	if err != nil {
+		return fmt.Errorf("trust policy of %s: %w", roleARN, err)
+	}
+	for _, st := range trust.Statements {
+		for _, c := range st.Conditions {
+			if strings.EqualFold(c.Key, "aws:SourceIp") {
+				return fmt.Errorf("%w: not authorized to perform %s on %s: the trust policy needs aws:SourceIp "+
+					"and the request has none", ErrAccessDenied, WebIdentityAction, roleARN)
+			}
+		}
+	}
+	return nil
 }
 
 // String hides the token.
@@ -259,6 +301,9 @@ func (s *Service) AssumeRoleWithWebIdentity(
 		tctx["sts:SourceIdentity"] = []string{cl.sourceIdentity}
 	}
 	id.addTo(tctx)
+	if err := setSourceIP(tctx, r.Object, req.RoleARN, req.SourceIP); err != nil {
+		return WebIdentityRoleSession{}, err
+	}
 	// Like AssumeRoleWithSAML, the call carries no AWS credentials, so
 	// aws:PrincipalAccount is anonymous; the server sets the time keys.
 	setTimeKeys(tctx, s.now())

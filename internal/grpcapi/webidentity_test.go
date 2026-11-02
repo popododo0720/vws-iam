@@ -152,6 +152,30 @@ func TestAssumeRoleWithWebIdentity(t *testing.T) {
 				t.Run(tc.name, func(t *testing.T) { wantErr(t, err, tc.code, tc.reason, tc.awsError) })
 			}
 
+			// The gateway-observed source IP is aws:SourceIp of the trust
+			// evaluation: an IP-conditioned Deny refuses a caller in its
+			// range, and an IP in the request itself is ignored.
+			ipTrust := strings.TrimSuffix(trust, "]}") + `,{"Effect":"Deny","Principal":"*",
+				"Action":"sts:AssumeRoleWithWebIdentity","Condition":{"IpAddress":{"aws:SourceIp":"203.0.113.0/24"}}}]}`
+			if _, err := e.roles.CreateRole(ctx, &iamv1.CreateRoleRequest{
+				Parent: parentName, RoleId: "ci-ip", Role: &iamv1.Role{Spec: &iamv1.RoleSpec{AssumeRolePolicy: ipTrust}},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			ipReq := req
+			ipReq.RoleARN = "arn:vws:iam::" + proj + ":role/ci-ip"
+			_, err = e.api.AssumeRoleWithWebIdentityFrom(ctx, ipReq, "203.0.113.9")
+			wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+			spoofed := ipReq
+			spoofed.SourceIP = "198.51.100.1"
+			_, err = e.api.AssumeRoleWithWebIdentityFrom(ctx, spoofed, "203.0.113.9")
+			wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+			_, err = e.api.AssumeRoleWithWebIdentity(ctx, spoofed)
+			wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+			if _, err := e.api.AssumeRoleWithWebIdentityFrom(ctx, ipReq, "198.51.100.1"); err != nil {
+				t.Fatalf("outside the denied range: %v", err)
+			}
+
 			// Provider keys that cannot be read are IDPCommunicationError,
 			// with no backend detail.
 			down := newEnvOn(t, b, &now, grpcapi.WithOIDC(oidctest.Providers{
