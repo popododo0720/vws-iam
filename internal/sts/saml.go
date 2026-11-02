@@ -58,9 +58,11 @@ var (
 	samlARNRE = regexp.MustCompile(`^[\t\n\r\x{20}-\x{7E}\x{85}\x{A0}-\x{D7FF}\x{E000}-\x{FFFD}\x{10000}-\x{10FFFF}]+$`)
 	// samlProviderNameRE is the IAM SAML provider name.
 	samlProviderNameRE = regexp.MustCompile(`^[\w._-]{1,128}$`)
-	// sourceIdentityRE is the SourceIdentity SAML attribute: 2 to 256
-	// characters of [\w+=,.@-] (IAM User Guide, Configure SAML assertions
-	// for the authentication response).
+	// sourceIdentityRE is the SourceIdentity SAML attribute and the
+	// https://aws.amazon.com/source_identity claim of a web identity
+	// token: 2 to 256 characters of [\w+=,.@-] (IAM User Guide, Configure
+	// SAML assertions for the authentication response, and Monitor and
+	// control actions taken with assumed roles).
 	sourceIdentityRE = regexp.MustCompile(`^[\w+=,.@-]{2,256}$`)
 )
 
@@ -160,7 +162,7 @@ func (s *Service) AssumeRoleWithSAML(ctx context.Context, req SAMLRequest) (SAML
 	if !ok || s.saml == nil || s.samlSP.Audience == "" || s.samlSP.SignInURL == "" {
 		return SAMLRoleSession{}, fmt.Errorf("%w: SAML provider %s does not exist", ErrInvalidIdentityToken, req.PrincipalARN)
 	}
-	r, err := s.samlRole(ctx, req.RoleARN)
+	r, err := s.federatedRole(ctx, req.RoleARN, SAMLAction)
 	if err != nil {
 		return SAMLRoleSession{}, err
 	}
@@ -210,31 +212,17 @@ func (s *Service) AssumeRoleWithSAML(ctx context.Context, req SAMLRequest) (SAML
 	// of them can win.
 	setTimeKeys(tctx, s.now())
 	setAnonymousPrincipalAccount(tctx)
-	trust, err := policy.ParseTrust(r.Object.AssumeRolePolicy)
-	if err != nil {
-		return SAMLRoleSession{}, fmt.Errorf("trust policy of %s: %w", req.RoleARN, err)
-	}
 	// With a SourceIdentity attribute the trust policy must also allow
 	// sts:SetSourceIdentity, as AWS requires.
 	actions := []string{SAMLAction}
 	if cl.sourceIdentity != "" {
 		actions = append(actions, SetSourceIdentityAction)
 	}
-	for _, action := range actions {
-		tr := policy.Request{Federated: req.PrincipalARN, Action: action, Resource: req.RoleARN, Context: tctx}
-		if td := policy.Evaluate(tr, []policy.Named{{Name: req.RoleARN + " trust policy", Doc: trust}}, nil); !td.Allowed {
-			return SAMLRoleSession{}, fmt.Errorf("%w: not authorized to perform %s on %s",
-				ErrAccessDenied, action, req.RoleARN)
-		}
+	if err := s.federatedTrust(r.Object, req.RoleARN, req.PrincipalARN, actions, tctx); err != nil {
+		return SAMLRoleSession{}, err
 	}
-	for _, arn := range req.PolicyARNs {
-		ok, err := s.authz.ManagedPolicyExists(ctx, arn)
-		if err != nil {
-			return SAMLRoleSession{}, fmt.Errorf("assume role with saml: %w", err)
-		}
-		if !ok {
-			return SAMLRoleSession{}, fmt.Errorf("%w: policy %s does not exist or is not attachable", policy.ErrMalformed, arn)
-		}
+	if err := s.checkSessionPolicyARNs(ctx, req.PolicyARNs); err != nil {
+		return SAMLRoleSession{}, err
 	}
 	var inline []string
 	if req.Policy != "" {
@@ -335,10 +323,11 @@ func (s *Service) samlProviderName(arn string) (string, bool) {
 	return name, ok && samlProviderNameRE.MatchString(name)
 }
 
-// samlRole reads the role roleARN names; an unknown role, or one whose
-// path differs, is AccessDenied as in AssumeRole.
-func (s *Service) samlRole(ctx context.Context, roleARN string) (store.Versioned[iam.Role], error) {
-	denied := fmt.Errorf("%w: not authorized to perform %s on %s", ErrAccessDenied, SAMLAction, roleARN)
+// federatedRole reads the role roleARN names for a federation action;
+// an unknown role, or one whose path differs, is AccessDenied as in
+// AssumeRole.
+func (s *Service) federatedRole(ctx context.Context, roleARN, action string) (store.Versioned[iam.Role], error) {
+	denied := fmt.Errorf("%w: not authorized to perform %s on %s", ErrAccessDenied, action, roleARN)
 	i := strings.LastIndex(roleARN, "/")
 	if !strings.HasPrefix(roleARN, "arn:"+iam.Partition+":iam::"+s.account+":role/") || i < 0 {
 		return store.Versioned[iam.Role]{}, denied
@@ -348,9 +337,43 @@ func (s *Service) samlRole(ctx context.Context, roleARN string) (store.Versioned
 		return store.Versioned[iam.Role]{}, denied
 	}
 	if err != nil {
-		return store.Versioned[iam.Role]{}, fmt.Errorf("assume role with saml: %w", err)
+		return store.Versioned[iam.Role]{}, fmt.Errorf("%s: %w", action, err)
 	}
 	return r, nil
+}
+
+// federatedTrust evaluates the role's trust policy for every action
+// with the Federated principal provider and the trusted context tctx;
+// any action not allowed is AccessDenied.
+func (s *Service) federatedTrust(
+	r iam.Role, roleARN, provider string, actions []string, tctx map[string][]string,
+) error {
+	trust, err := policy.ParseTrust(r.AssumeRolePolicy)
+	if err != nil {
+		return fmt.Errorf("trust policy of %s: %w", roleARN, err)
+	}
+	for _, action := range actions {
+		tr := policy.Request{Federated: provider, Action: action, Resource: roleARN, Context: tctx}
+		if td := policy.Evaluate(tr, []policy.Named{{Name: roleARN + " trust policy", Doc: trust}}, nil); !td.Allowed {
+			return fmt.Errorf("%w: not authorized to perform %s on %s", ErrAccessDenied, action, roleARN)
+		}
+	}
+	return nil
+}
+
+// checkSessionPolicyARNs refuses a managed session policy that does not
+// exist with MalformedPolicyDocument, as AWS does.
+func (s *Service) checkSessionPolicyARNs(ctx context.Context, arns []string) error {
+	for _, arn := range arns {
+		ok, err := s.authz.ManagedPolicyExists(ctx, arn)
+		if err != nil {
+			return fmt.Errorf("session policy %s: %w", arn, err)
+		}
+		if !ok {
+			return fmt.Errorf("%w: policy %s does not exist or is not attachable", policy.ErrMalformed, arn)
+		}
+	}
+	return nil
 }
 
 // samlDuration is the session length: DurationSeconds (default one
@@ -358,16 +381,9 @@ func (s *Service) samlRole(ctx context.Context, roleARN string) (store.Versioned
 // assertion's SessionDuration attribute and SessionNotOnOrAfter. Issuance
 // applies SessionNotOnOrAfter again as an absolute time (issueBy).
 func samlDuration(req, roleMax time.Duration, cl samlClaims, now time.Time) (time.Duration, error) {
-	if roleMax == 0 {
-		roleMax = time.Hour
-	}
-	d := req
-	if d == 0 {
-		d = min(DefaultAssumeDuration, roleMax)
-	}
-	if d > roleMax {
-		return 0, fmt.Errorf("%w: DurationSeconds %d exceeds the MaxSessionDuration %d of the role",
-			ErrInvalidRequest, int(d.Seconds()), int(roleMax.Seconds()))
+	d, err := roleDuration(req, roleMax)
+	if err != nil {
+		return 0, err
 	}
 	if cl.sessionDuration > 0 {
 		d = min(d, cl.sessionDuration)
@@ -378,6 +394,24 @@ func samlDuration(req, roleMax time.Duration, cl samlClaims, now time.Time) (tim
 			return 0, fmt.Errorf("%w: SessionNotOnOrAfter has passed", ErrExpired)
 		}
 		d = min(d, left)
+	}
+	return d, nil
+}
+
+// roleDuration is DurationSeconds of a federated AssumeRole* call:
+// zero means one hour (at most the role's maximum), and a value over the
+// role's MaxSessionDuration is ValidationError.
+func roleDuration(req, roleMax time.Duration) (time.Duration, error) {
+	if roleMax == 0 {
+		roleMax = time.Hour
+	}
+	d := req
+	if d == 0 {
+		d = min(DefaultAssumeDuration, roleMax)
+	}
+	if d > roleMax {
+		return 0, fmt.Errorf("%w: DurationSeconds %d exceeds the MaxSessionDuration %d of the role",
+			ErrInvalidRequest, int(d.Seconds()), int(roleMax.Seconds()))
 	}
 	return d, nil
 }
