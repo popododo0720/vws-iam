@@ -16,7 +16,12 @@ import (
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
 )
 
-const slrService = "lex.vws.internal"
+const (
+	slrService = "lex.vws.internal"
+	slrTrust   = `{"Version":"2012-10-17","Statement":[` +
+		`{"Effect":"Allow","Principal":{"Service":"` + slrService + `"},"Action":"sts:AssumeRole"}]}`
+	slrInline = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"lex:*","Resource":"*"}]}`
+)
 
 // seedLinkedRole stores a service-linked role of slrService in proj, as
 // CreateServiceLinkedRole (#103) will, and returns it.
@@ -25,8 +30,7 @@ func seedLinkedRole(t *testing.T, b store.Backend, name string) iam.Role {
 	r := iam.Role{
 		Meta: iam.Meta{UID: iam.NewUID(), Generation: 1}, Name: name, Path: iam.ServiceRolePath(slrService),
 		ID: iam.NewUniqueID("AROA"), Created: time.Now().UTC(), LinkedService: slrService,
-		AssumeRolePolicy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"` + slrService + `"},"Action":"sts:AssumeRole"}]}`,
-		InlinePolicies:   map[string]string{"svc": `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"lex:*","Resource":"*"}]}`},
+		AssumeRolePolicy: slrTrust, InlinePolicies: map[string]string{"svc": slrInline},
 	}
 	if _, err := store.Create(t.Context(), store.Scoped(b, proj), r); err != nil {
 		t.Fatal(err)
@@ -77,11 +81,9 @@ func TestDeleteServiceLinkedRoleRefusesOtherRoles(t *testing.T) {
 	now := time.Now().UTC()
 	e := newEnvOn(t, b, &now)
 	ctx := t.Context()
-	plain := &iamv1.Role{Spec: &iamv1.RoleSpec{
-		Path:             iam.ServiceRolePath(slrService),
-		AssumeRolePolicy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"` + slrService + `"},"Action":"sts:AssumeRole"}]}`,
-	}}
-	if _, err := e.roles.CreateRole(ctx, &iamv1.CreateRoleRequest{Parent: parentName, RoleId: "plain", Role: plain}); err != nil {
+	plain := &iamv1.Role{Spec: &iamv1.RoleSpec{Path: iam.ServiceRolePath(slrService), AssumeRolePolicy: slrTrust}}
+	req := &iamv1.CreateRoleRequest{Parent: parentName, RoleId: "plain", Role: plain}
+	if _, err := e.roles.CreateRole(ctx, req); err != nil {
 		t.Fatal(err)
 	}
 	_, err := e.api.DeleteServiceLinkedRole(ctx, proj, "plain")
@@ -164,7 +166,8 @@ type swapping struct {
 func (s *swapping) Delete(ctx context.Context, k iam.Kind, key, version string) error {
 	if k == iam.KindRole {
 		s.once.Do(func() {
-			if _, err := store.Mutate(ctx, store.Scoped(s.Backend, proj), strings.TrimPrefix(key, proj+"/"), func(r *iam.Role) error {
+			b, name := store.Scoped(s.Backend, proj), strings.TrimPrefix(key, proj+"/")
+			if _, err := store.Mutate(ctx, b, name, func(r *iam.Role) error {
 				r.LinkedService, r.Path = "", "/"
 				return nil
 			}); err != nil {

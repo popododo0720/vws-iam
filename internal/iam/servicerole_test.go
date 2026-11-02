@@ -25,7 +25,8 @@ func TestDeletionTaskID(t *testing.T) {
 	if got := iam.DeletionTaskID(r); got != want {
 		t.Fatalf("DeletionTaskID = %q, want %q", got, want)
 	}
-	long := linkedRole(strings.Repeat("r", 64), strings.Repeat("s", 63)+"."+strings.Repeat("v", 63)+"."+strings.Repeat("w", 63)+".internal")
+	service := strings.Repeat("s", 63) + "." + strings.Repeat("v", 63) + "." + strings.Repeat("w", 63) + ".internal"
+	long := linkedRole(strings.Repeat("r", 64), service)
 	if err := long.Validate(); err != nil {
 		t.Fatal(err)
 	}
