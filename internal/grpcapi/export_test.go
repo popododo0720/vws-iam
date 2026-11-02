@@ -166,3 +166,14 @@ func (s *Server) ListInstanceProfilesForRole(
 ) (InstanceProfilePage, error) {
 	return s.listInstanceProfilesForRole(ctx, project, roleName, marker, maxItems)
 }
+
+// InstanceProfileListing is one page of ListInstanceProfiles.
+type InstanceProfileListing = instanceProfileListing
+
+// ListInstanceProfiles is IAM ListInstanceProfiles, which vws-proto does
+// not carry yet (#94).
+func (s *Server) ListInstanceProfiles(
+	ctx context.Context, project, pathPrefix, marker string, maxItems int,
+) (InstanceProfileListing, error) {
+	return s.listInstanceProfiles(ctx, project, pathPrefix, marker, maxItems)
+}
