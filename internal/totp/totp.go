@@ -53,3 +53,18 @@ func Match(seed []byte, code string, now time.Time, skew int64) (int64, bool) {
 	}
 	return 0, false
 }
+
+// MatchPair returns the earliest step s in [lo, hi] whose code is code1
+// while the code of s+1 is code2, or false. Resynchronization uses it to
+// find two consecutive codes in a window wider than Match's skew.
+func MatchPair(seed []byte, code1, code2 string, lo, hi int64) (int64, bool) {
+	if len(code1) != Digits || len(code2) != Digits {
+		return 0, false
+	}
+	for s := lo; s <= hi; s++ {
+		if Equal(Code(seed, s, Digits), code1) && Equal(Code(seed, s+1, Digits), code2) {
+			return s, true
+		}
+	}
+	return 0, false
+}

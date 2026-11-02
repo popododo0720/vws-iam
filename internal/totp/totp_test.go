@@ -58,3 +58,35 @@ func TestMatchWindow(t *testing.T) {
 		}
 	}
 }
+
+// TestMatchPair: only two consecutive codes inside [lo, hi] match, at the
+// step of the first; reversed, split, malformed and out-of-window pairs
+// do not.
+func TestMatchPair(t *testing.T) {
+	seed := []byte("12345678901234567890")
+	const at = 1_800_000_000 / 30
+	c := func(s int64) string { return totp.Code(seed, s, totp.Digits) }
+	for _, tc := range []struct {
+		name         string
+		code1, code2 string
+		lo, hi       int64
+		want         int64
+		ok           bool
+	}{
+		{"consecutive", c(at + 5), c(at + 6), at - 20, at + 19, at + 5, true},
+		{"at lo", c(at - 20), c(at - 19), at - 20, at + 19, at - 20, true},
+		{"at hi", c(at + 19), c(at + 20), at - 20, at + 19, at + 19, true},
+		{"below lo", c(at - 21), c(at - 20), at - 20, at + 19, 0, false},
+		{"above hi", c(at + 20), c(at + 21), at - 20, at + 19, 0, false},
+		{"reversed", c(at + 6), c(at + 5), at - 20, at + 19, 0, false},
+		{"gap", c(at + 5), c(at + 7), at - 20, at + 19, 0, false},
+		{"same code", c(at), c(at), at - 20, at + 19, 0, false},
+		{"short", c(at)[:5], c(at + 1), at - 20, at + 19, 0, false},
+		{"empty window", c(at), c(at + 1), at + 1, at, 0, false},
+	} {
+		got, ok := totp.MatchPair(seed, tc.code1, tc.code2, tc.lo, tc.hi)
+		if ok != tc.ok || got != tc.want {
+			t.Errorf("%s: MatchPair = %d, %v; want %d, %v", tc.name, got, ok, tc.want, tc.ok)
+		}
+	}
+}

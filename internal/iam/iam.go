@@ -449,6 +449,9 @@ type MfaDevice struct {
 	Seed       Sealed    `json:"seed"`
 	// LastStep is the last accepted TOTP time step, the replay guard.
 	LastStep int64 `json:"lastStep,omitempty"`
+	// Drift is the device clock minus the service clock in TOTP steps,
+	// learned by ResyncMFADevice; codes are checked around now+Drift.
+	Drift int64 `json:"drift,omitempty"`
 	// FailedAttempts counts wrong codes in a row; LockedUntil is set when
 	// they reach the limit (brute-force guard).
 	FailedAttempts int       `json:"failedAttempts,omitempty"`
