@@ -143,3 +143,9 @@ func (s *Server) DeleteUserPermissionsBoundary(ctx context.Context, project, use
 func (s *Server) PutUserPermissionsBoundary(ctx context.Context, project, userName, boundaryARN string) error {
 	return s.putUserPermissionsBoundary(ctx, project, userName, boundaryARN)
 }
+
+// RemoveRoleFromInstanceProfile is IAM RemoveRoleFromInstanceProfile,
+// which vws-proto does not carry yet (#97).
+func (s *Server) RemoveRoleFromInstanceProfile(ctx context.Context, project, profileName, roleName string) error {
+	return s.removeRoleFromInstanceProfile(ctx, project, profileName, roleName)
+}
