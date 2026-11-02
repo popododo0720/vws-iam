@@ -28,12 +28,15 @@ const (
 	KindAttempt    Kind = "IamAttemptCounter"
 	KindMemberLock Kind = "IamGroupMembershipLock"
 	KindFidoDevice Kind = "IamFidoDevice"
+	// KindInstanceProfile is an instance profile (#97).
+	KindInstanceProfile Kind = "IamInstanceProfile"
 )
 
 // Kinds lists every stored kind.
 var Kinds = []Kind{
 	KindUser, KindGroup, KindRole, KindPolicy, KindAccessKey, KindMfaDevice,
 	KindKeyIndex, KindSession, KindOperation, KindReplay, KindAttempt, KindMemberLock, KindFidoDevice,
+	KindInstanceProfile,
 }
 
 // Meta is the resource envelope every API resource carries.

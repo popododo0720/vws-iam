@@ -40,6 +40,10 @@ func Samples() []iam.Object {
 			SignCount: 7, EnableTime: now, Certifications: map[string]string{"FIDO": "L1", "FIDO-FIPS-140-2": "L2"},
 			Meta: iam.Meta{UID: "f-1", Generation: 1},
 		},
+		iam.InstanceProfile{
+			Name: "web", Path: "/app/", ID: "AIPA1", Created: now, Roles: []string{"deployer"},
+			Meta: iam.Meta{UID: "i-1", Generation: 1},
+		},
 	}
 }
 
@@ -138,6 +142,10 @@ func Run(t *testing.T, open func(t *testing.T) store.Backend) {
 			case iam.FidoDevice:
 				c := o
 				c.SignCount = 8
+				roundTrip(t, b, o, c)
+			case iam.InstanceProfile:
+				c := o
+				c.Roles = nil
 				roundTrip(t, b, o, c)
 			}
 		}
