@@ -113,3 +113,9 @@ func (s *Server) CreateServiceLinkedRole(
 ) (*iamv1.Role, error) {
 	return s.createServiceLinkedRole(ctx, project, req)
 }
+
+// ResyncMfaDevice is IAM ResyncMFADevice, which vws-proto does not carry
+// yet (#102).
+func (s *Server) ResyncMfaDevice(ctx context.Context, project string, req ResyncMFADeviceRequest) error {
+	return s.resyncMfaDevice(ctx, project, req)
+}
