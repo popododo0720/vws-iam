@@ -2,7 +2,6 @@ package grpcapi
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"slices"
 	"strconv"
@@ -179,8 +178,8 @@ func (s *Server) addRoleToInstanceProfile(ctx context.Context, pid, profileName,
 // Instance profile page sizes: the AWS default and maximum MaxItems of
 // ListInstanceProfilesForRole.
 const (
-	DefaultInstanceProfilePageSize = 100
-	MaxInstanceProfilePageSize     = 1000
+	DefaultInstanceProfilePageSize = DefaultListPageSize
+	MaxInstanceProfilePageSize     = MaxListPageSize
 )
 
 // instanceProfilePage is one page of ListInstanceProfilesForRole: the
@@ -370,51 +369,22 @@ func profileRoles(ctx context.Context, b store.Backend, ps []iam.InstanceProfile
 }
 
 // instanceProfilePageSize returns the page size of an instance profile
-// listing for maxItems: 0 means not set, the AWS default of 100; a value
-// outside 1 to 1000 is ValidationError.
-func instanceProfilePageSize(maxItems int) (int, error) {
-	switch {
-	case maxItems == 0:
-		return DefaultInstanceProfilePageSize, nil
-	case maxItems < 1 || maxItems > MaxInstanceProfilePageSize:
-		return 0, invalidSpec("maxItems must be 1 to " + strconv.Itoa(MaxInstanceProfilePageSize))
-	}
-	return maxItems, nil
-}
+// listing for maxItems (see listPageSize).
+func instanceProfilePageSize(maxItems int) (int, error) { return listPageSize(maxItems) }
 
 // pageInstanceProfiles orders ps by case-folded name, whatever order the
 // backend listed them in, and returns the first n of them. When more
 // remain, truncated is set and marker continues after the last one
-// returned (the base64url of its folded name, see decodeMarker).
+// returned (see pageByFoldedName).
 func pageInstanceProfiles(ps []iam.InstanceProfile, n int) (page []iam.InstanceProfile, truncated bool, marker string) {
-	slices.SortFunc(ps, func(a, b iam.InstanceProfile) int {
-		return strings.Compare(store.Fold(a.Name), store.Fold(b.Name))
-	})
-	if len(ps) <= n {
-		return ps, false, ""
-	}
-	ps = ps[:n]
-	return ps, true, base64.RawURLEncoding.EncodeToString([]byte(store.Fold(ps[n-1].Name)))
+	return pageByFoldedName(ps, func(p iam.InstanceProfile) string { return p.Name }, n)
 }
 
 // decodeMarker returns the case-folded profile name an instance profile
-// listing marker continues after; "" for no marker.
-// A marker outside the AWS pattern [\u0020-\u00FF]+ is ValidationError;
-// one this service did not issue is InvalidInput.
+// listing marker continues after; "" for no marker (see
+// decodeNameMarker).
 func decodeMarker(marker string) (string, error) {
-	if marker == "" {
-		return "", nil
-	}
-	for _, c := range marker {
-		if c < 0x20 || c > 0xFF {
-			return "", invalidSpec("marker must be characters of [\\u0020-\\u00FF]")
-		}
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(marker)
-	if err != nil || !iam.ValidInstanceProfileName(string(raw)) || store.Fold(string(raw)) != string(raw) {
-		return "", invalidInput("marker is not valid")
-	}
-	return string(raw), nil
+	return decodeNameMarker(marker, iam.ValidInstanceProfileName)
 }
 
 // instanceProfileView is the result of GetInstanceProfile: the profile as

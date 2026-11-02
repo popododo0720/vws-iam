@@ -200,3 +200,14 @@ func (s *Server) CreateInstanceProfile(
 ) (InstanceProfileView, error) {
 	return s.createInstanceProfile(ctx, project, profileName, path)
 }
+
+// AccountAliasPage is one page of ListAccountAliases.
+type AccountAliasPage = accountAliasPage
+
+// ListAccountAliases is IAM ListAccountAliases, which vws-proto does not
+// carry yet (#90).
+func (s *Server) ListAccountAliases(
+	ctx context.Context, project, marker string, maxItems int,
+) (AccountAliasPage, error) {
+	return s.listAccountAliases(ctx, project, marker, maxItems)
+}

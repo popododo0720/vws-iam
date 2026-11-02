@@ -44,6 +44,7 @@ func Samples() []iam.Object {
 			Name: "web", Path: "/app/", ID: "AIPA1", Created: now, Roles: []string{"deployer"},
 			Meta: iam.Meta{UID: "i-1", Generation: 1},
 		},
+		iam.AccountAlias{Name: "example-corp", Created: now, Meta: iam.Meta{UID: "a-1", Generation: 1}},
 	}
 }
 
@@ -146,6 +147,10 @@ func Run(t *testing.T, open func(t *testing.T) store.Backend) {
 			case iam.InstanceProfile:
 				c := o
 				c.Roles = nil
+				roundTrip(t, b, o, c)
+			case iam.AccountAlias:
+				c := o
+				c.Created = later
 				roundTrip(t, b, o, c)
 			}
 		}
