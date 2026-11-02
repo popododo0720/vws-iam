@@ -260,3 +260,18 @@ func TestGroupNamesUpTo128(t *testing.T) {
 		t.Errorf("group member of 65: %v", err)
 	}
 }
+
+// TestValidPathPrefix: the AWS PathPrefix rule, \u002F[\u0021-\u007F]*
+// of 1 to 512 characters.
+func TestValidPathPrefix(t *testing.T) {
+	for _, s := range []string{"/", "/app/", "/app", "/a!~\x7f/", "/" + strings.Repeat("p", 511)} {
+		if !iam.ValidPathPrefix(s) {
+			t.Errorf("ValidPathPrefix(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{"", "app/", "/a b/", "/a\x00", "/\x80", "/é/", "/" + strings.Repeat("p", 512)} {
+		if iam.ValidPathPrefix(s) {
+			t.Errorf("ValidPathPrefix(%q) = true, want false", s)
+		}
+	}
+}

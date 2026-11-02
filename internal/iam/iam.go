@@ -119,6 +119,18 @@ func ValidPolicyName(s string) bool { return policyNameRE.MatchString(s) }
 // [A-Za-z0-9+=,.@_-], the AWS GroupName rule.
 func ValidGroupName(s string) bool { return groupNameRE.MatchString(s) }
 
+// MaxPathPrefixLen is the AWS limit on a list call's PathPrefix.
+const MaxPathPrefixLen = 512
+
+var pathPrefixRE = regexp.MustCompile(`^/[\x21-\x7f]*$`)
+
+// ValidPathPrefix reports whether s is a PathPrefix of an IAM list call:
+// 1 to MaxPathPrefixLen characters matching the AWS pattern
+// \u002F[\u0021-\u007F]*, a slash followed by printable ASCII or DEL.
+func ValidPathPrefix(s string) bool {
+	return len(s) <= MaxPathPrefixLen && pathPrefixRE.MatchString(s)
+}
+
 func checkPath(what, path string) error {
 	if path != "" && !pathRE.MatchString(path) {
 		return invalid("%s path %q", what, path)
