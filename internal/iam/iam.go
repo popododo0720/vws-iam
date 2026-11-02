@@ -90,7 +90,7 @@ var (
 	nameRE       = regexp.MustCompile("^" + ResourceNamePattern() + "$")
 	policyNameRE = regexp.MustCompile("^" + PolicyNamePattern() + "$")
 	groupNameRE  = regexp.MustCompile("^" + GroupNamePattern() + "$")
-	pathRE       = regexp.MustCompile(`^/([\x21-\x7e]{0,510}/)?$`)
+	pathRE       = regexp.MustCompile(`^/([\x21-\x7e]{1,510}/)?$`)
 )
 
 func invalid(format string, a ...any) error {
@@ -130,6 +130,15 @@ var pathPrefixRE = regexp.MustCompile(`^/[\x21-\x7f]*$`)
 func ValidPathPrefix(s string) bool {
 	return len(s) <= MaxPathPrefixLen && pathPrefixRE.MatchString(s)
 }
+
+// MaxPathLen is the AWS limit on an entity's Path.
+const MaxPathLen = 512
+
+// ValidPath reports whether s is the Path of an IAM entity: 1 to
+// MaxPathLen characters matching the AWS pattern
+// (\u002F)|(\u002F[\u0021-\u007E]+\u002F), "/" or a slash-delimited
+// run of printable ASCII.
+func ValidPath(s string) bool { return pathRE.MatchString(s) }
 
 func checkPath(what, path string) error {
 	if path != "" && !pathRE.MatchString(path) {

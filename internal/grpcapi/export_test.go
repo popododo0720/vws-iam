@@ -192,3 +192,11 @@ func (s *Server) GetInstanceProfile(ctx context.Context, project, profileName st
 func (s *Server) DeleteInstanceProfile(ctx context.Context, project, profileName string) error {
 	return s.deleteInstanceProfile(ctx, project, profileName)
 }
+
+// CreateInstanceProfile is IAM CreateInstanceProfile, which vws-proto
+// does not carry yet (#91).
+func (s *Server) CreateInstanceProfile(
+	ctx context.Context, project, profileName, path string,
+) (InstanceProfileView, error) {
+	return s.createInstanceProfile(ctx, project, profileName, path)
+}

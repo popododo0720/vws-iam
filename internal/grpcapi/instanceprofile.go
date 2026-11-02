@@ -534,3 +534,57 @@ func (s *Server) deleteInstanceProfile(ctx context.Context, pid, profileName str
 		}
 	}
 }
+
+// createInstanceProfile is IAM CreateInstanceProfile: it creates instance
+// profile profileName under path in project pid, without a role, and
+// returns it with its ARN.
+//
+// A bad project id, an InstanceProfileName outside 1 to 128 characters of
+// [\w+=,.@-] or a Path that is not "/" or a slash-delimited run of 1 to
+// 512 printable ASCII characters is ValidationError before any store
+// access. An empty path is "/", the AWS default. A name that is taken, in
+// any case (IAM names compare case-insensitively), is EntityAlreadyExists
+// and the stored profile stays: the create is one store create, so of
+// racing requests on any replica exactly one makes the profile, and a
+// retry after a lost response is EntityAlreadyExists, as in AWS, which has
+// no request id here. A request that was canceled or whose deadline
+// passed writes nothing. A store failure is InternalFailure. Tags are not
+// modeled yet (#239), and the InstanceProfilesPerAccount quota is not
+// enforced yet (#243). Authorization (iam:CreateInstanceProfile) is
+// console-api's, as for CreateRole.
+//
+// TODO(#91): serve this as an RPC once vws-proto carries it
+// (popododo0720/vws-proto#126).
+func (s *Server) createInstanceProfile(
+	ctx context.Context, pid, profileName, path string,
+) (instanceProfileView, error) {
+	if !iam.ValidProject(pid) {
+		return instanceProfileView{}, invalidID("project " + quote(pid) + " is not a project id")
+	}
+	if !iam.ValidInstanceProfileName(profileName) {
+		return instanceProfileView{}, invalidSpec("instanceProfileName must be 1 to 128 characters of [\\w+=,.@-]")
+	}
+	if path == "" {
+		path = "/"
+	}
+	if !iam.ValidPath(path) {
+		return instanceProfileView{}, invalidSpec("path must be / or 1 to 512 characters of " +
+			"\\u002F[\\u0021-\\u007E]+\\u002F")
+	}
+	if err := ctx.Err(); err != nil {
+		return instanceProfileView{}, toStatus(ctx, err) // the caller is gone; write nothing
+	}
+	p := s.project(pid)
+	ip := iam.InstanceProfile{
+		Meta: iam.Meta{UID: iam.NewUID(), Generation: 1}, Name: profileName, Path: path,
+		ID: iam.NewUniqueID("AIPA"), Created: s.now().UTC(),
+	}
+	_, err := store.Create(ctx, p.b, ip)
+	if errors.Is(err, store.ErrExists) {
+		return instanceProfileView{}, alreadyExists("Instance Profile " + profileName + " already exists.")
+	}
+	if err != nil {
+		return instanceProfileView{}, toStatus(ctx, err)
+	}
+	return instanceProfileView{Profile: ip, ARN: iam.InstanceProfileARN(p.id, ip)}, nil
+}
