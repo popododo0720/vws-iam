@@ -278,6 +278,11 @@ func (s *Service) AssumeRoleWithWebIdentity(
 		inline = []string{req.Policy}
 	}
 	arn := iam.ARN("sts", "", s.account, "assumed-role/"+r.Object.Name+"/"+req.RoleSessionName)
+	// TODO(#210): AWS keeps the source identity in the session as
+	// aws:SourceIdentity for later requests and chained role sessions
+	// (IAM User Guide, Monitor and control actions taken with assumed
+	// roles). It is checked and returned here but not sealed yet, the
+	// same gap as #197 for AssumeRoleWithSAML.
 	creds, err := s.issue(ctx, session{
 		Kind: int(authz.Role), Name: r.Object.Name, ARN: arn, Policies: inline, PolicyARNs: req.PolicyARNs,
 		PrincipalID: r.Object.ID, RoleID: r.Object.ID, SessionName: req.RoleSessionName, WebIdentity: id,
