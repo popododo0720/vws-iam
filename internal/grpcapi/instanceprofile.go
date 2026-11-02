@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strconv"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/store"
@@ -80,6 +81,86 @@ func (s *Server) removeRoleFromInstanceProfile(ctx context.Context, pid, profile
 		ip.Generation++
 		ip.Updated = s.now().UTC()
 		_, err = store.Update(ctx, p.b, ip, cur.Version)
+		switch {
+		case err == nil:
+			return nil
+		case errors.Is(err, store.ErrConflict) && attempt < maxDeleteAttempts:
+			continue
+		case errors.Is(err, store.ErrNotFound):
+			return noProfile
+		default:
+			return toStatus(ctx, err)
+		}
+	}
+}
+
+// addRoleToInstanceProfile is IAM AddRoleToInstanceProfile: it adds role
+// roleName to instance profile profileName in project pid, under the
+// role's name as stored.
+//
+// A bad project id, an InstanceProfileName outside 1 to 128 or a RoleName
+// outside 1 to 64 characters of [\w+=,.@-] is ValidationError before any
+// store access. An unknown instance profile or role is NoSuchEntity. A
+// service-linked role is UnmodifiableEntity, as AWS protects it. A profile
+// that already holds a role, this one included, is LimitExceeded: an
+// instance profile holds at most one role (iam.MaxInstanceProfileRoles, a
+// fixed AWS quota), so a retry after a lost response is LimitExceeded and
+// the profile keeps the one role, as in AWS. AWS also lists
+// EntityAlreadyExists, but the quota check comes first, so it cannot
+// occur. Role names compare case-insensitively, like every IAM name.
+//
+// The profile write commits only while the role is still at the version
+// read (store.UpdateIf), so a role deleted in between is never added; a
+// profile or role changed in between is read again, never written from a
+// stale copy. A request that was canceled or whose deadline passed is not
+// written. Authorization (iam:AddRoleToInstanceProfile, and iam:PassRole
+// on the role, as AWS requires) is console-api's, as for UpdateRole.
+//
+// TODO(#96): serve this as an RPC once vws-proto carries it
+// (popododo0720/vws-proto#119).
+func (s *Server) addRoleToInstanceProfile(ctx context.Context, pid, profileName, roleName string) error {
+	if !iam.ValidProject(pid) {
+		return invalidID("project " + quote(pid) + " is not a project id")
+	}
+	if !iam.ValidInstanceProfileName(profileName) {
+		return invalidSpec("instanceProfileName must be 1 to 128 characters of [\\w+=,.@-]")
+	}
+	if !iam.ValidName(roleName) {
+		return invalidSpec("roleName must be 1 to 64 characters of [\\w+=,.@-]")
+	}
+	p := s.project(pid)
+	noProfile := notFound("Instance Profile " + profileName + " cannot be found.")
+	noRole := notFound("The role with name " + roleName + " cannot be found.")
+	for attempt := 1; ; attempt++ {
+		cur, err := store.Get[iam.InstanceProfile](ctx, p.b, profileName)
+		if errors.Is(err, store.ErrNotFound) {
+			return noProfile
+		}
+		if err != nil {
+			return toStatus(ctx, err)
+		}
+		r, err := store.Get[iam.Role](ctx, p.b, roleName)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			return noRole
+		case err != nil:
+			return toStatus(ctx, err)
+		case r.Object.ServiceLinked():
+			return unmodifiable("Cannot perform the operation on the protected role '" + r.Object.Name +
+				"' - this role is only modifiable by its linked service")
+		}
+		ip := cur.Object
+		if len(ip.Roles) >= iam.MaxInstanceProfileRoles {
+			return quota("Cannot exceed quota for InstanceSessionsPerInstanceProfile: " +
+				strconv.Itoa(iam.MaxInstanceProfileRoles))
+		}
+		if err := ctx.Err(); err != nil {
+			return toStatus(ctx, err) // the caller is gone; write nothing
+		}
+		ip.Roles = append(slices.Clone(ip.Roles), r.Object.Name)
+		ip.Generation++
+		ip.Updated = s.now().UTC()
+		_, err = store.UpdateIf(ctx, p.b, ip, cur.Version, store.PreOf(r))
 		switch {
 		case err == nil:
 			return nil

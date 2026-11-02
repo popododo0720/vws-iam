@@ -149,3 +149,9 @@ func (s *Server) PutUserPermissionsBoundary(ctx context.Context, project, userNa
 func (s *Server) RemoveRoleFromInstanceProfile(ctx context.Context, project, profileName, roleName string) error {
 	return s.removeRoleFromInstanceProfile(ctx, project, profileName, roleName)
 }
+
+// AddRoleToInstanceProfile is IAM AddRoleToInstanceProfile, which
+// vws-proto does not carry yet (#96).
+func (s *Server) AddRoleToInstanceProfile(ctx context.Context, project, profileName, roleName string) error {
+	return s.addRoleToInstanceProfile(ctx, project, profileName, roleName)
+}
