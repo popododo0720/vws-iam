@@ -186,3 +186,9 @@ type InstanceProfileView = instanceProfileView
 func (s *Server) GetInstanceProfile(ctx context.Context, project, profileName string) (InstanceProfileView, error) {
 	return s.getInstanceProfile(ctx, project, profileName)
 }
+
+// DeleteInstanceProfile is IAM DeleteInstanceProfile, which vws-proto
+// does not carry yet (#92).
+func (s *Server) DeleteInstanceProfile(ctx context.Context, project, profileName string) error {
+	return s.deleteInstanceProfile(ctx, project, profileName)
+}
