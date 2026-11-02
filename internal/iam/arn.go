@@ -79,3 +79,18 @@ func SplitUserARN(arn string) (account, path, name string, ok bool) {
 	}
 	return account, path, name, true
 }
+
+// ValidPolicyARN reports whether a is a managed policy ARN as a
+// permissions boundary holds it: arn:vws:iam::<account>:policy/<path><name>,
+// 20 to 2048 characters (the AWS PermissionsBoundary length).
+func ValidPolicyARN(a string) bool {
+	if len(a) < 20 || len(a) > 2048 {
+		return false
+	}
+	rest, ok := strings.CutPrefix(a, "arn:"+Partition+":iam::")
+	if !ok {
+		return false
+	}
+	account, res, ok := strings.Cut(rest, ":")
+	return ok && account != "" && strings.HasPrefix(res, "policy/") && len(res) > len("policy/")
+}
