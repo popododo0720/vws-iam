@@ -73,6 +73,12 @@ func deleteConflict(msg string) error {
 	return fail(codes.FailedPrecondition, "DEPENDENCY_MISSING", "DeleteConflict", msg)
 }
 
+// unmodifiable is AWS UnmodifiableEntity: the entity is protected, such
+// as a service-linked role, which only DeleteServiceLinkedRole deletes.
+func unmodifiable(msg string) error {
+	return fail(codes.FailedPrecondition, "INVALID_SPEC", "UnmodifiableEntity", msg)
+}
+
 func quota(msg string) error {
 	return fail(codes.ResourceExhausted, "QUOTA_EXCEEDED", "LimitExceeded", msg)
 }
