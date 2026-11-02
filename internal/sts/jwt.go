@@ -59,10 +59,14 @@ type jwt struct {
 var integerRE = regexp.MustCompile(`^-?[0-9]{1,18}$`)
 
 // parseJWT decodes a compact JWS (three base64url parts without
-// padding). An encrypted token (JWE), a duplicated or unknown critical
+// padding, no CR or LF: Go's base64 decoder skips line breaks even in
+// strict mode). An encrypted token (JWE), a duplicated or unknown critical
 // header, a duplicated claim, or an algorithm outside jwtAlgs is
 // InvalidIdentityToken.
 func parseJWT(s string) (jwt, error) {
+	if strings.ContainsAny(s, "\r\n") {
+		return jwt{}, fmt.Errorf("%w: the token is not base64url", ErrInvalidIdentityToken)
+	}
 	parts := strings.Split(s, ".")
 	if len(parts) != 3 {
 		return jwt{}, fmt.Errorf("%w: the token is not a signed JWT", ErrInvalidIdentityToken)
