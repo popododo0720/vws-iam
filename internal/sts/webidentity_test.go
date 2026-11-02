@@ -761,3 +761,26 @@ func TestAssumeRoleWithWebIdentitySourceIP(t *testing.T) {
 		}
 	}
 }
+
+// TestAssumeRoleWithWebIdentityRejectsLineBreaks: base64url segments of a
+// compact JWS have no CR or LF. Go's decoder skips them even in strict
+// mode, so a valid token with a line break added would still verify.
+func TestAssumeRoleWithWebIdentityRejectsLineBreaks(t *testing.T) {
+	e := wiSetup(t)
+	ctx := context.Background()
+	tok := e.token(t, "RS256", e.claims())
+	if _, err := e.svc.AssumeRoleWithWebIdentity(ctx, wiReq(tok)); err != nil {
+		t.Fatal(err)
+	}
+	i := strings.Index(tok, ".") + 2
+	for name, bad := range map[string]string{
+		"LF after signature": tok + "\n",
+		"CRLF in signature":  tok[:len(tok)-4] + "\r\n" + tok[len(tok)-4:],
+		"CR in header":       tok[:2] + "\r" + tok[2:],
+		"LF in payload":      tok[:i] + "\n" + tok[i:],
+	} {
+		if _, err := e.svc.AssumeRoleWithWebIdentity(ctx, wiReq(bad)); !errors.Is(err, sts.ErrInvalidIdentityToken) {
+			t.Errorf("%s: %v, want InvalidIdentityToken", name, err)
+		}
+	}
+}
