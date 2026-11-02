@@ -187,6 +187,10 @@ type User struct {
 	// writes it, so a DeleteUser that checked for keys before the
 	// registration fails its versioned delete (#133).
 	FidoRegistrations uint64 `json:"fidoRegistrations,omitempty"`
+	// PermissionsBoundary is the ARN of the managed policy that is the
+	// user's permissions boundary (PutUserPermissionsBoundary, #98);
+	// empty when the user has none (DeleteUserPermissionsBoundary, #99).
+	PermissionsBoundary string `json:"permissionsBoundary,omitempty"`
 	RenameState
 }
 
@@ -204,6 +208,9 @@ func (u User) Validate() error {
 	}
 	if u.PasswordHash != "" && !strings.HasPrefix(u.PasswordHash, "$argon2id$") {
 		return invalid("password hash is not argon2id")
+	}
+	if b := u.PermissionsBoundary; b != "" && !ValidPolicyARN(b) {
+		return invalid("user %q permissions boundary %q is not a policy ARN", u.Name, b)
 	}
 	if err := checkAttached(u.AttachedPolicies); err != nil {
 		return err
