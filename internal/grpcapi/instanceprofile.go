@@ -260,6 +260,115 @@ func (s *Server) listInstanceProfilesForRole(
 	return out, nil
 }
 
+// instanceProfileListing is one page of ListInstanceProfiles: the
+// profiles whose path starts with the PathPrefix, ordered by case-folded
+// name, each as stored. Roles holds, by case-folded name, the stored
+// roles the listed profiles name, so a caller can render each profile's
+// Roles; a name with no stored role (a role deleted while in the profile,
+// #234) is absent. When IsTruncated is set, Marker continues the listing.
+type instanceProfileListing struct {
+	Profiles    []iam.InstanceProfile
+	Roles       map[string]iam.Role
+	IsTruncated bool
+	Marker      string
+}
+
+// listInstanceProfiles is IAM ListInstanceProfiles: the instance profiles
+// of project pid whose path starts with pathPrefix, in pages.
+//
+// pathPrefix "" means not set: the AWS default "/", every profile. A bad
+// project id, a pathPrefix outside 1 to 512 characters of
+// \u002F[\u0021-\u007F]*, a maxItems outside 1 to 1000 (0 means not set:
+// the AWS default of 100) or a marker with a character outside
+// [\u0020-\u00FF] is ValidationError, all before any store access. A
+// marker this call did not return is InvalidInput, as for
+// ListInstanceProfilesForRole. No profile is an empty page. Paths match
+// case-sensitively, as IAM paths are; a profile stored without a path has
+// the path "/".
+//
+// Profiles are ordered by case-folded name, so pages are deterministic
+// and a marker (the last name of the previous page) continues after that
+// name even when profiles are created or deleted in between: every
+// profile that exists for the whole listing is returned once. The call
+// only reads. Authorization (iam:ListInstanceProfiles) is console-api's,
+// as for the other IAM reads.
+//
+// TODO(#94): serve this as an RPC once vws-proto carries it
+// (popododo0720/vws-proto#121).
+func (s *Server) listInstanceProfiles(
+	ctx context.Context, pid, pathPrefix, marker string, maxItems int,
+) (instanceProfileListing, error) {
+	if !iam.ValidProject(pid) {
+		return instanceProfileListing{}, invalidID("project " + quote(pid) + " is not a project id")
+	}
+	if pathPrefix == "" {
+		pathPrefix = "/"
+	}
+	if !iam.ValidPathPrefix(pathPrefix) {
+		return instanceProfileListing{}, invalidSpec("pathPrefix must be 1 to " +
+			strconv.Itoa(iam.MaxPathPrefixLen) + " characters of \\u002F[\\u0021-\\u007F]*")
+	}
+	maxItems, err := instanceProfilePageSize(maxItems)
+	if err != nil {
+		return instanceProfileListing{}, err
+	}
+	after, err := decodeMarker(marker)
+	if err != nil {
+		return instanceProfileListing{}, err
+	}
+	p := s.project(pid)
+	all, err := store.List[iam.InstanceProfile](ctx, p.b)
+	if err != nil {
+		return instanceProfileListing{}, toStatus(ctx, err)
+	}
+	var match []iam.InstanceProfile
+	for _, v := range all {
+		if after != "" && store.Fold(v.Object.Name) <= after {
+			continue
+		}
+		path := v.Object.Path
+		if path == "" {
+			path = "/"
+		}
+		if strings.HasPrefix(path, pathPrefix) {
+			match = append(match, v.Object)
+		}
+	}
+	var out instanceProfileListing
+	out.Profiles, out.IsTruncated, out.Marker = pageInstanceProfiles(match, maxItems)
+	if out.Roles, err = profileRoles(ctx, p.b, out.Profiles); err != nil {
+		return instanceProfileListing{}, toStatus(ctx, err)
+	}
+	return out, nil
+}
+
+// profileRoles returns, by case-folded name, the stored roles of b that
+// the profiles ps name; empty, without a store read, when they name none.
+// Names with no stored role are left out. It lists the roles once rather
+// than reading each.
+func profileRoles(ctx context.Context, b store.Backend, ps []iam.InstanceProfile) (map[string]iam.Role, error) {
+	want := map[string]bool{}
+	for _, ip := range ps {
+		for _, n := range ip.Roles {
+			want[store.Fold(n)] = true
+		}
+	}
+	out := make(map[string]iam.Role, len(want))
+	if len(want) == 0 {
+		return out, nil
+	}
+	roles, err := store.List[iam.Role](ctx, b)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range roles {
+		if k := store.Fold(r.Object.Name); want[k] {
+			out[k] = r.Object
+		}
+	}
+	return out, nil
+}
+
 // instanceProfilePageSize returns the page size of an instance profile
 // listing for maxItems: 0 means not set, the AWS default of 100; a value
 // outside 1 to 1000 is ValidationError.
