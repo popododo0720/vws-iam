@@ -304,7 +304,10 @@ func TestAssumeRoleWithWebIdentityClaims(t *testing.T) {
 		{"other aud", []any{"aud", "someone-else"}, sts.ErrInvalidIdentityToken},
 		{"aud list with client", []any{"aud", []string{"x", wiClientID}}, nil},
 		{"aud list without client", []any{"aud", []string{"x", "y"}}, sts.ErrInvalidIdentityToken},
-		{"azp alone is not aud", []any{"aud", "x", "azp", wiClientID}, sts.ErrInvalidIdentityToken},
+		// AWS STS uses azp as the audience when the token has one.
+		{"azp registered, aud not", []any{"aud", "x", "azp", wiClientID}, nil},
+		{"aud registered, azp not", []any{"aud", wiClientID, "azp", "x"}, sts.ErrInvalidIdentityToken},
+		{"empty azp", []any{"azp", ""}, sts.ErrInvalidIdentityToken},
 		{"http issuer", []any{"iss", "http://oidc.ci.test/org/1"}, sts.ErrInvalidIdentityToken},
 		{"issuer with port", []any{"iss", "https://oidc.ci.test:8443/org/1"}, sts.ErrInvalidIdentityToken},
 		{"issuer with query", []any{"iss", wiIssuer + "?x=1"}, sts.ErrInvalidIdentityToken},
@@ -335,17 +338,17 @@ func TestAssumeRoleWithWebIdentityClaims(t *testing.T) {
 		}
 	}
 	// azp, when present, is the audience AWS reports and the aud key.
-	tok := e.token(t, "RS256", with(e.claims(), "azp", "android-app",
+	tok := e.token(t, "RS256", with(e.claims(), "azp", "other-client",
 		"https://aws.amazon.com/source_identity", "alice@corp"))
 	got, err := e.svc.AssumeRoleWithWebIdentity(ctx, wiReq(tok))
 	if !errors.Is(err, sts.ErrAccessDenied) {
 		t.Fatalf("azp with trust on aud=%s: %v, want AccessDenied", wiClientID, err)
 	}
-	trustDoc(t, e.b, strings.ReplaceAll(wiTrust, `"`+wiClientID+`"`, `"android-app"`))
+	trustDoc(t, e.b, strings.ReplaceAll(wiTrust, `"`+wiClientID+`"`, `"other-client"`))
 	if got, err = e.svc.AssumeRoleWithWebIdentity(ctx, wiReq(tok)); err != nil {
 		t.Fatal(err)
 	}
-	if got.Audience != "android-app" || got.SourceIdentity != "alice@corp" {
+	if got.Audience != "other-client" || got.SourceIdentity != "alice@corp" {
 		t.Fatalf("azp session %+v", got)
 	}
 }

@@ -157,6 +157,8 @@ func ClientKey(k string) bool {
 type webClaims struct {
 	iss, sub, azp, email, sourceIdentity string
 	aud, amr                             []string
+	// hasAzp is whether the token has an azp claim, even an empty one.
+	hasAzp bool
 }
 
 // AssumeRoleWithWebIdentity returns role credentials for a user
@@ -213,14 +215,25 @@ func (s *Service) AssumeRoleWithWebIdentity(
 	if err != nil {
 		return WebIdentityRoleSession{}, err
 	}
-	matched := ""
-	for _, a := range cl.aud {
-		if slices.Contains(prov.ClientIDs, a) {
-			matched = a
-			break
+	// When the token has azp, AWS STS uses it as the audience (IAM User
+	// Guide, Create an OpenID Connect identity provider): azp must be a
+	// client id of the provider and aud is not checked. Without azp, one
+	// aud value must be a client id.
+	audKey, audience := cl.aud, ""
+	if cl.hasAzp {
+		audKey = []string{cl.azp}
+		if slices.Contains(prov.ClientIDs, cl.azp) {
+			audience = cl.azp
+		}
+	} else {
+		for _, a := range cl.aud {
+			if slices.Contains(prov.ClientIDs, a) {
+				audience = a
+				break
+			}
 		}
 	}
-	if matched == "" {
+	if audience == "" {
 		return WebIdentityRoleSession{}, fmt.Errorf("%w: incorrect token audience", ErrInvalidIdentityToken)
 	}
 	r, err := s.federatedRole(ctx, req.RoleARN, WebIdentityAction)
@@ -233,10 +246,6 @@ func (s *Service) AssumeRoleWithWebIdentity(
 	}
 	// <provider>:aud is azp when the token has one, else aud; oaud is
 	// always aud (IAM User Guide, Available keys for AWS OIDC federation).
-	audKey, audience := cl.aud, matched
-	if cl.azp != "" {
-		audKey, audience = []string{cl.azp}, cl.azp
-	}
 	id := &WebIdentity{Provider: name, ProviderARN: provARN, Subject: cl.sub, Audience: audKey, AMR: cl.amr}
 	tctx := map[string][]string{name + ":oaud": slices.Clone(cl.aud), "sts:RoleSessionName": {req.RoleSessionName}}
 	if cl.email != "" {
@@ -321,6 +330,7 @@ func readWebClaims(tok jwt, now time.Time) (webClaims, error) {
 	if cl.amr, err = jsonStrings(tok.claims, "amr"); err != nil {
 		return webClaims{}, bad("%v", err)
 	}
+	_, cl.hasAzp = tok.claims["azp"]
 	if cl.azp, err = jsonString(tok.claims, "azp"); err != nil {
 		return webClaims{}, bad("%v", err)
 	}
