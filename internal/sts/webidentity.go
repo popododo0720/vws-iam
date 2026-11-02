@@ -39,9 +39,6 @@ var (
 	// https://, as the oidc-provider ARN and the condition key prefix use
 	// it. A colon (port) is refused: it would make "<name>:sub" ambiguous.
 	oidcProviderNameRE = regexp.MustCompile(`^[A-Za-z0-9.-]+(/[A-Za-z0-9._~%-]+)*$`)
-	// webSourceIdentityRE is the SourceIdentity of
-	// AssumeRoleWithWebIdentity: 2 to 64 characters of [\w+=,.@-].
-	webSourceIdentityRE = regexp.MustCompile(`^[\w+=,.@-]{2,64}$`)
 )
 
 // OIDCProvider is an IAM OpenID Connect provider: its issuer URL, the
@@ -333,7 +330,7 @@ func readWebClaims(tok jwt, now time.Time) (webClaims, error) {
 		return webClaims{}, bad("%v", err)
 	}
 	if cl.sourceIdentity, err = jsonString(tok.claims, webSourceIdentityClaim); err != nil ||
-		(cl.sourceIdentity != "" && !webSourceIdentityRE.MatchString(cl.sourceIdentity)) {
+		(cl.sourceIdentity != "" && !sourceIdentityRE.MatchString(cl.sourceIdentity)) {
 		return webClaims{}, bad("the source identity claim must be 2 to 64 characters of [\\w+=,.@-]")
 	}
 	if _, ok := tok.claims[webTagsClaim]; ok {
