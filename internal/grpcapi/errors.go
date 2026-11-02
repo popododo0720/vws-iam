@@ -79,6 +79,12 @@ func unmodifiable(msg string) error {
 	return fail(codes.FailedPrecondition, "INVALID_SPEC", "UnmodifiableEntity", msg)
 }
 
+// serviceFailure is AWS ServiceFailure: the request failed for a reason
+// on the service side, such as a misconfigured linked service.
+func serviceFailure(msg string) error {
+	return fail(codes.Internal, "", "ServiceFailure", msg)
+}
+
 func quota(msg string) error {
 	return fail(codes.ResourceExhausted, "QUOTA_EXCEEDED", "LimitExceeded", msg)
 }

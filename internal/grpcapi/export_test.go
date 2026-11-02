@@ -105,3 +105,11 @@ func (s *Server) AssumeRoleWithSAML(ctx context.Context, req sts.SAMLRequest) (s
 func (s *Server) DeleteServiceLinkedRole(ctx context.Context, project, roleName string) (string, error) {
 	return s.deleteServiceLinkedRole(ctx, project, roleName)
 }
+
+// CreateServiceLinkedRole is IAM CreateServiceLinkedRole, which vws-proto
+// does not carry yet (#103).
+func (s *Server) CreateServiceLinkedRole(
+	ctx context.Context, project string, req ServiceLinkedRoleRequest,
+) (*iamv1.Role, error) {
+	return s.createServiceLinkedRole(ctx, project, req)
+}
