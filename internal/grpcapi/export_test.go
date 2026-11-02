@@ -99,3 +99,9 @@ func (s *Server) GetFederationToken(
 func (s *Server) AssumeRoleWithSAML(ctx context.Context, req sts.SAMLRequest) (sts.SAMLRoleSession, error) {
 	return s.assumeRoleWithSAML(ctx, req)
 }
+
+// DeleteServiceLinkedRole is IAM DeleteServiceLinkedRole, which vws-proto
+// does not carry yet (#104).
+func (s *Server) DeleteServiceLinkedRole(ctx context.Context, project, roleName string) (string, error) {
+	return s.deleteServiceLinkedRole(ctx, project, roleName)
+}
