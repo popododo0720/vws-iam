@@ -37,7 +37,10 @@ const (
 // oidcProviderNameRE is the host and path of an issuer URL after
 // https://, as the oidc-provider ARN and the condition key prefix use
 // it. A colon (port) is refused: it would make "<name>:sub" ambiguous.
-var oidcProviderNameRE = regexp.MustCompile(`^[A-Za-z0-9.-]+(/[A-Za-z0-9._~%-]+)*$`)
+// The host needs at least two non-empty labels: a single-label host
+// (idp, sts) could collide with a service prefix and would not be a
+// qualifier that ClientKey keeps away from clients.
+var oidcProviderNameRE = regexp.MustCompile(`^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+(/[A-Za-z0-9._~%-]+)*$`)
 
 // OIDCProvider is an IAM OpenID Connect provider: its issuer URL, the
 // client ids (audiences) it accepts, and the signing keys of its JWKS.
@@ -143,8 +146,9 @@ func (id *WebIdentity) addTo(m map[string][]string) {
 // ClientKey reports whether a request context key may come from a
 // client. saml:* keys, aws:FederatedProvider and OIDC provider keys
 // (a qualifier with a dot or slash, like accounts.google.com:sub, which
-// no service prefix has) come only from a verified assertion or token or
-// a sealed session. Server keys such as aws:userid are checked
+// no service prefix has; oidcProviderNameRE accepts no other provider
+// name) come only from a verified assertion or token or a sealed
+// session. Server keys such as aws:userid are checked
 // separately.
 func ClientKey(k string) bool {
 	lk := strings.ToLower(k)

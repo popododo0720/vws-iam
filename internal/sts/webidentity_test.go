@@ -313,6 +313,7 @@ func TestAssumeRoleWithWebIdentityClaims(t *testing.T) {
 		{"issuer with query", []any{"iss", wiIssuer + "?x=1"}, sts.ErrInvalidIdentityToken},
 		{"unknown issuer", []any{"iss", "https://other.test"}, sts.ErrInvalidIdentityToken},
 		{"issuer trailing slash", []any{"iss", wiIssuer + "/"}, sts.ErrInvalidIdentityToken},
+		{"single-label issuer", []any{"iss", "https://idp"}, sts.ErrInvalidIdentityToken},
 		{"no issuer", []any{"iss", nil}, sts.ErrInvalidIdentityToken},
 		{
 			"session tags",
@@ -633,6 +634,8 @@ func TestClientKey(t *testing.T) {
 		"aws:SourceIp": true, "sts:ExternalId": true, "s3:prefix": true, "aws:RequestTag/team": true,
 		"saml:sub": false, "SAML:aud": false, "aws:FederatedProvider": false, "AWS:FEDERATEDPROVIDER": false,
 		"accounts.google.com:sub": false, "oidc.ci.test/org/1:aud": false, "Token.Actions.Example:SUB": false,
+		// A single-label qualifier is a client key: no provider has one.
+		"idp:sub": true,
 	} {
 		if got := sts.ClientKey(k); got != want {
 			t.Errorf("ClientKey(%q) = %v, want %v", k, got, want)
@@ -658,6 +661,35 @@ func TestAssumeRoleWithWebIdentityJWKSKeys(t *testing.T) {
 	for _, alg := range []string{"RS256", "RS512", "ES256", "ES384", "ES512"} {
 		if _, err := svc.AssumeRoleWithWebIdentity(context.Background(), wiReq(e.token(t, alg, e.claims()))); err != nil {
 			t.Errorf("%s: %v", alg, err)
+		}
+	}
+}
+
+// TestAssumeRoleWithWebIdentitySingleLabelIssuer: an issuer host without
+// a dot (https://idp, https://sts) can never name an OIDC provider, even
+// one that is configured, so its keys (idp:sub, sts:sub) cannot collide
+// with a service prefix or be forged by a client (sts.ClientKey keeps
+// only dotted or pathed qualifiers away from clients).
+func TestAssumeRoleWithWebIdentitySingleLabelIssuer(t *testing.T) {
+	e := wiSetup(t)
+	ctx := context.Background()
+	for _, iss := range []string{"https://idp", "https://sts", "https://idp/tenant", "https://.idp", "https://idp."} {
+		name := strings.TrimPrefix(iss, "https://")
+		arn := "arn:vws:iam::" + acct + ":oidc-provider/" + name
+		idp, err := oidctest.New(iss)
+		if err != nil {
+			t.Fatal(err)
+		}
+		trust := strings.ReplaceAll(strings.ReplaceAll(wiTrust, wiProvARN, arn), wiName+":aud", name+":aud")
+		trustDoc(t, e.b, trust)
+		provs := oidctest.Providers{ByARN: map[string]sts.OIDCProvider{arn: idp.Provider(arn, wiClientID)}}
+		svc := sts.New(e.b, e.keys, e.az, acct, e.clk.now, sts.WithOIDC(provs))
+		tok, err := idp.Token("ES256", with(e.claims(), "iss", iss))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.AssumeRoleWithWebIdentity(ctx, wiReq(tok)); !errors.Is(err, sts.ErrInvalidIdentityToken) {
+			t.Errorf("issuer %s: %v, want InvalidIdentityToken", iss, err)
 		}
 	}
 }
