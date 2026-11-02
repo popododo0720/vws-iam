@@ -105,5 +105,13 @@ func (s *Server) AssumeRoleWithSAML(ctx context.Context, req sts.SAMLRequest) (s
 func (s *Server) AssumeRoleWithWebIdentity(
 	ctx context.Context, req sts.WebIdentityRequest,
 ) (sts.WebIdentityRoleSession, error) {
-	return s.assumeRoleWithWebIdentity(ctx, req)
+	return s.assumeRoleWithWebIdentity(ctx, req, "")
+}
+
+// AssumeRoleWithWebIdentityFrom is AssumeRoleWithWebIdentity with the
+// gateway-observed source IP, which vws-proto does not carry yet (#105).
+func (s *Server) AssumeRoleWithWebIdentityFrom(
+	ctx context.Context, req sts.WebIdentityRequest, sourceIP string,
+) (sts.WebIdentityRoleSession, error) {
+	return s.assumeRoleWithWebIdentity(ctx, req, sourceIP)
 }
