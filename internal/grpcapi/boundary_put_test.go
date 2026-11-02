@@ -22,7 +22,8 @@ const boundaryDoc = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Act
 // PolicyService and returns its ARN.
 func seedBoundaryPolicy(t *testing.T, e *env, n, path string) string {
 	t.Helper()
-	req := &iamv1.CreatePolicyRequest{Parent: parentName, PolicyId: n, Policy: &iamv1.Policy{Spec: &iamv1.PolicySpec{Path: path, Document: boundaryDoc}}}
+	pol := &iamv1.Policy{Spec: &iamv1.PolicySpec{Path: path, Document: boundaryDoc}}
+	req := &iamv1.CreatePolicyRequest{Parent: parentName, PolicyId: n, Policy: pol}
 	op, err := e.policies.CreatePolicy(t.Context(), req)
 	if err != nil {
 		t.Fatal(err)
@@ -135,7 +136,8 @@ func TestPutRolePermissionsBoundaryErrors(t *testing.T) {
 	} {
 		wantAWS(t, e.api.PutRolePermissionsBoundary(ctx, proj, "plain", a), codes.InvalidArgument, "InvalidInput")
 	}
-	wantAWS(t, e.api.PutRolePermissionsBoundary(ctx, "Bad_Project", "plain", pol), codes.InvalidArgument, "ValidationError")
+	err := e.api.PutRolePermissionsBoundary(ctx, "Bad_Project", "plain", pol)
+	wantAWS(t, err, codes.InvalidArgument, "ValidationError")
 
 	if got := storedRole(t, b, "plain"); got.Version != before.Version || got.Object.PermissionsBoundary != "" {
 		t.Fatalf("a refused call wrote the role: version %q boundary %q", got.Version, got.Object.PermissionsBoundary)
