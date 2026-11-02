@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"regexp"
 	"strconv"
@@ -165,7 +166,9 @@ func jsonObject(b []byte) (map[string]json.RawMessage, error) {
 	if t, err := d.Token(); err != nil || t != json.Delim('}') {
 		return nil, errors.New("not a JSON object")
 	}
-	if _, err := d.Token(); err == nil {
+	// Only a clean end of input may follow: a syntax error after the
+	// object is data after it too.
+	if _, err := d.Token(); !errors.Is(err, io.EOF) {
 		return nil, errors.New("data after the JSON object")
 	}
 	return m, nil
