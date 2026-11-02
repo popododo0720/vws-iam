@@ -189,6 +189,80 @@ func (s *Server) deleteUserPermissionsBoundary(ctx context.Context, pid, userNam
 	}
 }
 
+// putUserPermissionsBoundary is IAM PutUserPermissionsBoundary: it sets
+// the permissions boundary of user userName in project pid to the managed
+// policy boundaryARN, replacing any boundary the user has. The user, its
+// policies, groups and credentials stay. A user that already has this
+// boundary is left unwritten and the call succeeds, so a retry after a
+// lost response succeeds too.
+//
+// UserName and the ARN length are ValidationError and an ARN that is not a
+// managed policy ARN is InvalidInput, all before any store access. The
+// policy must be a managed policy of pid; any other ARN, including one of
+// another account, is NoSuchEntity, as VWS has no AWS managed policies and
+// so no policy that is not attachable (PolicyNotAttachable). An unknown
+// user is NoSuchEntity. A user being renamed is frozen and keeps its
+// boundary (ConcurrentModification, as for UpdateUser). The write is
+// conditional on the version read, so a user changed in between is read
+// again, never written from a stale copy; a request whose deadline has
+// passed or that was canceled is not written.
+// Authorization (iam:PutUserPermissionsBoundary) is console-api's, as for
+// UpdateUser.
+//
+// TODO(#98): serve this as UserService.PutUserPermissionsBoundary once
+// vws-proto carries the RPC (popododo0720/vws-proto#117).
+func (s *Server) putUserPermissionsBoundary(ctx context.Context, pid, userName, boundaryARN string) error {
+	if !iam.ValidProject(pid) {
+		return invalidID("project " + quote(pid) + " is not a project id")
+	}
+	if !iam.ValidName(userName) {
+		return invalidSpec("userName must be 1 to 64 characters of [\\w+=,.@-]")
+	}
+	if n := len(boundaryARN); n < minBoundaryARN || n > maxBoundaryARN {
+		return invalidSpec("permissionsBoundary must be 20 to 2048 characters")
+	}
+	if !iam.ValidPolicyARN(boundaryARN) {
+		return invalidInput("ARN " + boundaryARN + " is not valid.")
+	}
+	p := s.project(pid)
+	if err := p.boundaryPolicy(ctx, boundaryARN); err != nil {
+		return err
+	}
+	for attempt := 1; ; attempt++ {
+		cur, err := store.Get[iam.User](ctx, p.b, userName)
+		if errors.Is(err, store.ErrNotFound) {
+			return notFound("The user with name " + userName + " cannot be found.")
+		}
+		if err != nil {
+			return toStatus(ctx, err)
+		}
+		u := cur.Object
+		if u.PermissionsBoundary == boundaryARN {
+			return nil
+		}
+		if u.Renaming() {
+			return toStatus(ctx, fmt.Errorf("user %q: %w", u.Name, store.ErrRenaming))
+		}
+		if err := ctx.Err(); err != nil {
+			return toStatus(ctx, err) // the caller is gone; write nothing
+		}
+		u.PermissionsBoundary = boundaryARN
+		bumpUser(&u)
+		u.Updated = s.now().UTC()
+		_, err = store.Update(ctx, p.b, u, cur.Version)
+		switch {
+		case err == nil:
+			return nil
+		case errors.Is(err, store.ErrConflict) && attempt < maxDeleteAttempts:
+			continue
+		case errors.Is(err, store.ErrNotFound):
+			return notFound("The user with name " + userName + " cannot be found.")
+		default:
+			return toStatus(ctx, err)
+		}
+	}
+}
+
 // The AWS PermissionsBoundary length constraints.
 const (
 	minBoundaryARN = 20
