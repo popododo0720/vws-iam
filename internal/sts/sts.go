@@ -1,5 +1,5 @@
 // Package sts issues temporary credentials: AssumeRole, GetSessionToken,
-// GetFederationToken and AssumeRoleWithSAML.
+// GetFederationToken, AssumeRoleWithSAML and AssumeRoleWithWebIdentity.
 //
 // A session token is the session itself (principal, temporary secret,
 // expiry, MFA flag, session policies) sealed with AES-256-GCM under the KEK
@@ -70,6 +70,9 @@ type Caller struct {
 	// saml is the SAML identity of a SAML role session (or one chained
 	// from it); callerContext restores it as trusted saml:* keys.
 	saml *SAMLIdentity
+	// webIdentity is the OIDC identity of a web identity role session
+	// (or one chained from it); callerContext restores its keys.
+	webIdentity *WebIdentity
 }
 
 // Principal is the caller's principal.
@@ -174,6 +177,9 @@ type session struct {
 	// SAML is the cross-service SAML identity (AssumeRoleWithSAML, and
 	// role sessions chained from it).
 	SAML *SAMLIdentity `json:"saml,omitempty"`
+	// WebIdentity is the OIDC identity (AssumeRoleWithWebIdentity, and
+	// role sessions chained from it).
+	WebIdentity *WebIdentity `json:"wi,omitempty"`
 }
 
 // Session is a validated temporary session.
@@ -195,6 +201,10 @@ type Session struct {
 	// SAML is the SAML identity of a session that AssumeRoleWithSAML
 	// issued, or one chained from it; nil otherwise.
 	SAML *SAMLIdentity
+	// WebIdentity is the OIDC identity of a session that
+	// AssumeRoleWithWebIdentity issued, or one chained from it; nil
+	// otherwise.
+	WebIdentity *WebIdentity
 }
 
 // SAMLIdentity is what AWS keeps of a SAML assertion for later requests:
@@ -215,6 +225,7 @@ func (s Session) Caller() Caller {
 	return Caller{
 		principal: s.Principal, principalID: s.PrincipalID, mfa: s.MFA, temporary: true, authTime: s.AuthTime,
 		sessionName: s.SessionName, federated: s.Federated, saml: s.SAML.clone(),
+		webIdentity: s.WebIdentity.clone(),
 	}
 }
 
@@ -222,6 +233,7 @@ func (s Session) Caller() Caller {
 func (s Session) Context() map[string][]string {
 	m := map[string][]string{"aws:MultiFactorAuthPresent": {fmt.Sprint(s.MFA)}}
 	s.SAML.addTo(m)
+	s.WebIdentity.addTo(m)
 	return m
 }
 
@@ -261,6 +273,8 @@ type Service struct {
 	// saml and samlSP serve AssumeRoleWithSAML (WithSAML).
 	saml   SAMLProviders
 	samlSP SAMLServiceProvider
+	// oidc serves AssumeRoleWithWebIdentity (WithOIDC).
+	oidc OIDCProviders
 }
 
 // Option configures a Service.
@@ -290,18 +304,19 @@ var serverKeys = map[string]bool{
 }
 
 // callerContext copies request keys (aws:SourceIp, sts:ExternalId, ...),
-// drops any server key or saml:* key a client tried to set, and adds the
-// server's own: the same trusted keys grpcapi Authorize builds, so a
-// policy conditioned on them is evaluated alike on every path, and the
-// caller's sealed SAML identity.
+// drops any key a client may not set (ClientKey), and adds the server's
+// own: the same trusted keys grpcapi Authorize builds, so a policy
+// conditioned on them is evaluated alike on every path, and the caller's
+// sealed SAML or web identity.
 func (s *Service) callerContext(c Caller, reqCtx map[string][]string) map[string][]string {
 	m := map[string][]string{}
 	for k, v := range reqCtx {
-		if lk := strings.ToLower(k); !serverKeys[lk] && !strings.HasPrefix(lk, samlKeyPrefix) {
+		if !serverKeys[strings.ToLower(k)] && ClientKey(k) {
 			m[k] = v
 		}
 	}
 	c.saml.addTo(m)
+	c.webIdentity.addTo(m)
 	m["aws:MultiFactorAuthPresent"] = []string{strconv.FormatBool(c.mfa)}
 	if c.mfa {
 		var age time.Duration // a zero authTime means now
@@ -531,7 +546,8 @@ func (s *Service) AssumeRole(ctx context.Context, c Caller, reqCtx map[string][]
 	creds, err := s.issue(ctx, session{
 		Kind: int(authz.Role), Name: r.Object.Name, ARN: arn, MFA: c.mfa, Policies: policies, Chained: chained,
 		PrincipalID: r.Object.ID, AuthTime: c.authTime, RoleID: r.Object.ID, SessionName: sessionName,
-		SAML: c.saml.clone(), // a chained session keeps the SAML identity
+		// A chained session keeps the SAML or web identity.
+		SAML: c.saml.clone(), WebIdentity: c.webIdentity.clone(),
 	}, duration)
 	creds.AssumedRoleARN = arn
 	return creds, err
@@ -667,7 +683,7 @@ func (s *Service) Validate(ctx context.Context, accessKeyID, token string) (Sess
 		AccessKeyID: sess.AccessKeyID, Secret: sess.Secret, Project: sess.Project, AuthTime: sess.AuthTime,
 		RoleID: sess.RoleID, SessionName: sess.SessionName, Federated: sess.Federated, Principal: p,
 		PrincipalID: sess.PrincipalID, MFA: sess.MFA, IssuedAt: sess.IssuedAt, Expires: sess.Expires,
-		SAML: sess.SAML.clone(),
+		SAML: sess.SAML.clone(), WebIdentity: sess.WebIdentity.clone(),
 	}, nil
 }
 
