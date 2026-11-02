@@ -416,3 +416,58 @@ func decodeMarker(marker string) (string, error) {
 	}
 	return string(raw), nil
 }
+
+// instanceProfileView is the result of GetInstanceProfile: the profile as
+// stored, its ARN, and the stored roles it names, in the profile's order,
+// so a caller can render InstanceProfile.Roles with every role field. A
+// name with no stored role (a role deleted while in the profile, #234) is
+// left out.
+type instanceProfileView struct {
+	Profile iam.InstanceProfile
+	ARN     string
+	Roles   []iam.Role
+}
+
+// getInstanceProfile is IAM GetInstanceProfile: instance profile
+// profileName of project pid, with its roles.
+//
+// A bad project id or an InstanceProfileName outside 1 to 128 characters
+// of [\w+=,.@-] is ValidationError before any store access. An unknown
+// instance profile is NoSuchEntity. Names compare case-insensitively, like
+// every IAM name; the profile is returned under its name as stored. The
+// call only reads: one profile read and one read per role it names (at
+// most iam.MaxInstanceProfileRoles). Authorization (iam:GetInstanceProfile)
+// is console-api's, as for the other IAM reads. AWS also returns the
+// profile's Tags, which iam.InstanceProfile does not model yet (#239).
+//
+// TODO(#93): serve this as an RPC once vws-proto carries it
+// (popododo0720/vws-proto#122).
+func (s *Server) getInstanceProfile(ctx context.Context, pid, profileName string) (instanceProfileView, error) {
+	if !iam.ValidProject(pid) {
+		return instanceProfileView{}, invalidID("project " + quote(pid) + " is not a project id")
+	}
+	if !iam.ValidInstanceProfileName(profileName) {
+		return instanceProfileView{}, invalidSpec("instanceProfileName must be 1 to 128 characters of [\\w+=,.@-]")
+	}
+	p := s.project(pid)
+	cur, err := store.Get[iam.InstanceProfile](ctx, p.b, profileName)
+	if errors.Is(err, store.ErrNotFound) {
+		return instanceProfileView{}, notFound("Instance Profile " + profileName + " cannot be found.")
+	}
+	if err != nil {
+		return instanceProfileView{}, toStatus(ctx, err)
+	}
+	ip := cur.Object
+	out := instanceProfileView{Profile: ip, ARN: iam.InstanceProfileARN(p.id, ip)}
+	for _, n := range ip.Roles {
+		r, err := store.Get[iam.Role](ctx, p.b, n)
+		if errors.Is(err, store.ErrNotFound) {
+			continue // a stale name of a deleted role (#234)
+		}
+		if err != nil {
+			return instanceProfileView{}, toStatus(ctx, err)
+		}
+		out.Roles = append(out.Roles, r.Object)
+	}
+	return out, nil
+}

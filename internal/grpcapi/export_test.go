@@ -177,3 +177,12 @@ func (s *Server) ListInstanceProfiles(
 ) (InstanceProfileListing, error) {
 	return s.listInstanceProfiles(ctx, project, pathPrefix, marker, maxItems)
 }
+
+// InstanceProfileView is the result of GetInstanceProfile.
+type InstanceProfileView = instanceProfileView
+
+// GetInstanceProfile is IAM GetInstanceProfile, which vws-proto does not
+// carry yet (#93).
+func (s *Server) GetInstanceProfile(ctx context.Context, project, profileName string) (InstanceProfileView, error) {
+	return s.getInstanceProfile(ctx, project, profileName)
+}

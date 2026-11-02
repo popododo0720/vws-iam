@@ -101,7 +101,15 @@ func TestARNs(t *testing.T) {
 	if got := iam.RoleARN("000000000000", iam.Role{Name: "r"}); got != "arn:vws:iam::000000000000:role/r" {
 		t.Fatal(got)
 	}
-	got := iam.MfaDeviceARN("000000000000", iam.MfaDevice{Name: "d", Path: "/team/"})
+	got := iam.InstanceProfileARN("000000000000", iam.InstanceProfile{Name: "web", Path: "/app/"})
+	if want := "arn:vws:iam::000000000000:instance-profile/app/web"; got != want {
+		t.Fatal(got)
+	}
+	got = iam.InstanceProfileARN("000000000000", iam.InstanceProfile{Name: "web"})
+	if want := "arn:vws:iam::000000000000:instance-profile/web"; got != want {
+		t.Fatal(got)
+	}
+	got = iam.MfaDeviceARN("000000000000", iam.MfaDevice{Name: "d", Path: "/team/"})
 	if want := "arn:vws:iam::000000000000:mfa/team/d"; got != want {
 		t.Fatal(got)
 	}
