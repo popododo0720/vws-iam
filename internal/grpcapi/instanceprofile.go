@@ -178,8 +178,8 @@ func (s *Server) addRoleToInstanceProfile(ctx context.Context, pid, profileName,
 // Instance profile page sizes: the AWS default and maximum MaxItems of
 // ListInstanceProfilesForRole.
 const (
-	DefaultInstanceProfilePageSize = 100
-	MaxInstanceProfilePageSize     = 1000
+	DefaultInstanceProfilePageSize = DefaultListPageSize
+	MaxInstanceProfilePageSize     = MaxListPageSize
 )
 
 // instanceProfilePage is one page of ListInstanceProfilesForRole: the
@@ -369,17 +369,8 @@ func profileRoles(ctx context.Context, b store.Backend, ps []iam.InstanceProfile
 }
 
 // instanceProfilePageSize returns the page size of an instance profile
-// listing for maxItems: 0 means not set, the AWS default of 100; a value
-// outside 1 to 1000 is ValidationError.
-func instanceProfilePageSize(maxItems int) (int, error) {
-	switch {
-	case maxItems == 0:
-		return DefaultInstanceProfilePageSize, nil
-	case maxItems < 1 || maxItems > MaxInstanceProfilePageSize:
-		return 0, invalidSpec("maxItems must be 1 to " + strconv.Itoa(MaxInstanceProfilePageSize))
-	}
-	return maxItems, nil
-}
+// listing for maxItems (see listPageSize).
+func instanceProfilePageSize(maxItems int) (int, error) { return listPageSize(maxItems) }
 
 // pageInstanceProfiles orders ps by case-folded name, whatever order the
 // backend listed them in, and returns the first n of them. When more
