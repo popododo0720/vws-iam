@@ -125,3 +125,9 @@ func (s *Server) ResyncMfaDevice(ctx context.Context, project string, req Resync
 func (s *Server) DeleteRolePermissionsBoundary(ctx context.Context, project, roleName string) error {
 	return s.deleteRolePermissionsBoundary(ctx, project, roleName)
 }
+
+// PutRolePermissionsBoundary is IAM PutRolePermissionsBoundary, which
+// vws-proto does not carry yet (#100).
+func (s *Server) PutRolePermissionsBoundary(ctx context.Context, project, roleName, boundaryARN string) error {
+	return s.putRolePermissionsBoundary(ctx, project, roleName, boundaryARN)
+}
