@@ -3,6 +3,7 @@ package grpcapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
@@ -127,6 +128,61 @@ func (s *Server) putRolePermissionsBoundary(ctx context.Context, pid, roleName, 
 			continue
 		case errors.Is(err, store.ErrNotFound):
 			return notFound("The role with name " + roleName + " cannot be found.")
+		default:
+			return toStatus(ctx, err)
+		}
+	}
+}
+
+// deleteUserPermissionsBoundary is IAM DeleteUserPermissionsBoundary: it
+// removes the permissions boundary of user userName in project pid. The
+// user, its policies, groups and credentials stay. A user with no
+// boundary is left unwritten and the call succeeds, so a retry after a
+// lost response succeeds too. A UserName outside 1 to 64 characters of
+// [\w+=,.@-] is ValidationError before any store access; an unknown user
+// is NoSuchEntity. A user being renamed is frozen and its boundary is
+// kept (ConcurrentModification, as for UpdateUser). The write is
+// conditional on the version read, so a user changed in between is read
+// again, never written from a stale copy.
+// Authorization (iam:DeleteUserPermissionsBoundary) is console-api's, as
+// for UpdateUser.
+//
+// TODO(#99): serve this as UserService.DeleteUserPermissionsBoundary
+// once vws-proto carries the RPC (popododo0720/vws-proto#116).
+func (s *Server) deleteUserPermissionsBoundary(ctx context.Context, pid, userName string) error {
+	if !iam.ValidProject(pid) {
+		return invalidID("project " + quote(pid) + " is not a project id")
+	}
+	if !iam.ValidName(userName) {
+		return invalidSpec("userName must be 1 to 64 characters of [\\w+=,.@-]")
+	}
+	p := s.project(pid)
+	for attempt := 1; ; attempt++ {
+		cur, err := store.Get[iam.User](ctx, p.b, userName)
+		if errors.Is(err, store.ErrNotFound) {
+			return notFound("The user with name " + userName + " cannot be found.")
+		}
+		if err != nil {
+			return toStatus(ctx, err)
+		}
+		u := cur.Object
+		if u.PermissionsBoundary == "" {
+			return nil
+		}
+		if u.Renaming() {
+			return toStatus(ctx, fmt.Errorf("user %q: %w", u.Name, store.ErrRenaming))
+		}
+		u.PermissionsBoundary = ""
+		bumpUser(&u)
+		u.Updated = s.now().UTC()
+		_, err = store.Update(ctx, p.b, u, cur.Version)
+		switch {
+		case err == nil:
+			return nil
+		case errors.Is(err, store.ErrConflict) && attempt < maxDeleteAttempts:
+			continue
+		case errors.Is(err, store.ErrNotFound):
+			return notFound("The user with name " + userName + " cannot be found.")
 		default:
 			return toStatus(ctx, err)
 		}

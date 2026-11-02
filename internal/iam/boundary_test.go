@@ -51,3 +51,20 @@ func TestRoleValidateBoundary(t *testing.T) {
 		t.Fatal("role ARN boundary accepted")
 	}
 }
+
+// TestUserValidateBoundary: a user with no boundary or a policy ARN
+// boundary is valid; any other boundary is refused before it is stored.
+func TestUserValidateBoundary(t *testing.T) {
+	u := iam.User{Name: "u", ID: "AIDAEXAMPLE"}
+	if err := u.Validate(); err != nil {
+		t.Fatalf("no boundary: %v", err)
+	}
+	u.PermissionsBoundary = "arn:vws:iam::123456789012:policy/Boundary"
+	if err := u.Validate(); err != nil {
+		t.Fatalf("policy boundary: %v", err)
+	}
+	u.PermissionsBoundary = "arn:vws:iam::123456789012:user/u"
+	if err := u.Validate(); err == nil {
+		t.Fatal("user ARN boundary accepted")
+	}
+}
