@@ -319,9 +319,12 @@ func TestAssumeRoleWithWebIdentityClaims(t *testing.T) {
 		{"short source identity", []any{"https://aws.amazon.com/source_identity", "a"}, sts.ErrInvalidIdentityToken},
 		{
 			"long source identity",
-			[]any{"https://aws.amazon.com/source_identity", strings.Repeat("a", 65)},
+			[]any{"https://aws.amazon.com/source_identity", strings.Repeat("a", 257)},
 			sts.ErrInvalidIdentityToken,
 		},
+		{"longest source identity", []any{"https://aws.amazon.com/source_identity", strings.Repeat("a", 256)}, nil},
+		{"source identity charset", []any{"https://aws.amazon.com/source_identity", "a_b+c=d,e.f@g-h"}, nil},
+		{"source identity colon", []any{"https://aws.amazon.com/source_identity", "aws:x"}, sts.ErrInvalidIdentityToken},
 		{"bad amr", []any{"amr", 3}, sts.ErrInvalidIdentityToken},
 	}
 	for _, tc := range cases {
