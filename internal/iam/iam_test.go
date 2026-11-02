@@ -283,3 +283,16 @@ func TestValidPathPrefix(t *testing.T) {
 		}
 	}
 }
+
+func TestValidPath(t *testing.T) {
+	for _, s := range []string{"/", "/app/", "/a/b/", "/a!~/", "/" + strings.Repeat("p", 510) + "/"} {
+		if !iam.ValidPath(s) {
+			t.Errorf("ValidPath(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{"", "app/", "/app", "//", "//x", "/a b/", "/a\x7f/", "/é/", "/" + strings.Repeat("p", 511) + "/"} {
+		if iam.ValidPath(s) {
+			t.Errorf("ValidPath(%q) = true, want false", s)
+		}
+	}
+}
