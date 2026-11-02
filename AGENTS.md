@@ -6,7 +6,7 @@ Rules for anyone changing this repository, human or agent. A rule with an enforc
 
 | Package | Owns |
 | --- | --- |
-| `internal/iam` | Domain types (users, groups, roles, managed policies, access keys, MFA devices, FIDO security keys, instance profiles), validation, and ARNs. Pure. |
+| `internal/iam` | Domain types (users, groups, roles, managed policies, access keys, MFA devices, FIDO security keys, instance profiles, account aliases), validation, and ARNs. Pure. |
 | `internal/store` | The `Backend` interface, typed helpers, and `Mutate` (read, apply, compare-and-swap, retry). `UpdateIf`/`DeleteIf` are conditional writes: they commit only while another object (`Pre`) is still at the version read, atomically with the write. `storetest` is the suite every backend passes. |
 | `internal/store/memstore`, `internal/store/kubestore` | The two backends. `kubestore` keeps each object in one `iam.vws.popododo0720.io/v1alpha1` custom resource in the service namespace. Kubernetes has no multi-object transaction, so a `kubestore` conditional write is serialized through resourceVersions (`fence.go`): it fences the precondition object by a compare-and-swap at the version read, and every `Update`/`Delete` of a fenced object first moves each fenced object off the version its pending write needs. |
 | `internal/secret` | AES-256-GCM sealing under a KEK keyring loaded from the `vws-iam-kek` Secret. The KEK id is stored with each value; associated data binds a value to its owner. |

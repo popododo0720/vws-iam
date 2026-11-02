@@ -30,13 +30,15 @@ const (
 	KindFidoDevice Kind = "IamFidoDevice"
 	// KindInstanceProfile is an instance profile (#97).
 	KindInstanceProfile Kind = "IamInstanceProfile"
+	// KindAccountAlias is an account alias (#90).
+	KindAccountAlias Kind = "IamAccountAlias"
 )
 
 // Kinds lists every stored kind.
 var Kinds = []Kind{
 	KindUser, KindGroup, KindRole, KindPolicy, KindAccessKey, KindMfaDevice,
 	KindKeyIndex, KindSession, KindOperation, KindReplay, KindAttempt, KindMemberLock, KindFidoDevice,
-	KindInstanceProfile,
+	KindInstanceProfile, KindAccountAlias,
 }
 
 // Meta is the resource envelope every API resource carries.
