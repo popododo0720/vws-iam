@@ -56,3 +56,49 @@ func checkServiceLinked(r Role) error {
 	}
 	return nil
 }
+
+// ServiceRoleNamePrefix starts the name of every service-linked role, as
+// in AWS: AWSServiceRoleFor<service role name>[_<custom suffix>]. Like
+// ServiceRolePathPrefix it is an AWS wire string and keeps the AWS name.
+const ServiceRoleNamePrefix = "AWSServiceRoleFor"
+
+// LinkedService is a service that can own service-linked roles: its
+// service principal (the AWS AWSServiceName), the part of the role name
+// after ServiceRoleNamePrefix that the service picks, whether
+// CreateServiceLinkedRole accepts a CustomSuffix for it, and the role
+// description used when the request has none.
+type LinkedService struct {
+	Principal    string
+	RoleName     string
+	CustomSuffix bool
+	Description  string
+}
+
+// Validate reports whether l can name a service-linked role.
+func (l LinkedService) Validate() error {
+	// AWSServiceName is at most 128 characters.
+	if len(l.Principal) > 128 || !ValidServicePrincipal(l.Principal) {
+		return invalid("linked service principal %q", l.Principal)
+	}
+	if l.RoleName == "" || !ValidName(ServiceRoleNamePrefix+l.RoleName) {
+		return invalid("linked service %q role name %q", l.Principal, l.RoleName)
+	}
+	return nil
+}
+
+// ServiceLinkedRoleName is the name of the role of l with the custom
+// suffix suffix (none when empty): AWSServiceRoleFor<RoleName>[_<suffix>].
+// The caller checks that the result is a valid role name.
+func (l LinkedService) ServiceLinkedRoleName(suffix string) string {
+	if suffix == "" {
+		return ServiceRoleNamePrefix + l.RoleName
+	}
+	return ServiceRoleNamePrefix + l.RoleName + "_" + suffix
+}
+
+// ServiceTrustPolicy is the trust policy of a role linked to service:
+// only that service principal may assume it.
+func ServiceTrustPolicy(service string) string {
+	return `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"` +
+		service + `"},"Action":"sts:AssumeRole"}]}`
+}
