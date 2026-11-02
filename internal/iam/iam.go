@@ -278,6 +278,10 @@ type Role struct {
 	// revocations (at most MaxRevokeRequests), so a duplicate request
 	// racing its first delivery does not bump the generation twice (#48).
 	SessionsRevokeRequests []string `json:"sessionsRevokeRequests,omitempty"`
+	// LinkedService is the service principal that owns a service-linked
+	// role (CreateServiceLinkedRole, #103); empty for every other role.
+	// Only DeleteServiceLinkedRole deletes a role that has one (#104).
+	LinkedService string `json:"linkedService,omitempty"`
 }
 
 func (Role) Kind() Kind    { return KindRole }
@@ -291,6 +295,9 @@ func (r Role) Validate() error {
 	}
 	if d := r.MaxSessionDuration; d != 0 && (d < time.Hour || d > MaxSessionDuration) {
 		return invalid("max session duration %s", d)
+	}
+	if err := checkServiceLinked(r); err != nil {
+		return err
 	}
 	if err := checkAttached(r.AttachedPolicies); err != nil {
 		return err
