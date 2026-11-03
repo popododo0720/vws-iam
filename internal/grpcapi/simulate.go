@@ -186,6 +186,13 @@ func simulateRequest(pid string, in *simulateInput) (map[string][]string, int, i
 	if n := len(in.PolicySourceARN); n < 20 || n > 2048 {
 		return nil, 0, 0, invalidSpec("PolicySourceArn must be 20 to 2048 characters")
 	}
+	return checkSimulation(in)
+}
+
+// checkSimulation validates the inputs SimulatePrincipalPolicy and
+// SimulateCustomPolicy share and returns the request context, the page
+// offset and the page size. ResourceARNs defaults to "*".
+func checkSimulation(in *simulateInput) (map[string][]string, int, int, error) {
 	if len(in.ActionNames) == 0 {
 		return nil, 0, 0, invalidSpec("ActionNames is required")
 	}
@@ -320,13 +327,29 @@ func (s *Server) simulatePrincipalPolicy(ctx context.Context, pid string, in sim
 	if caller == "" {
 		caller = in.PolicySourceARN
 	}
-	total := len(in.ActionNames)
+	base := policy.Request{Principal: caller, Account: pid, Context: reqCtx}
+	out := simulateActions(base, in.ActionNames, in.ResourceARNs, explicit, off, size, ids, boundary)
+	slog.Default().LogAttrs(ctx, slog.LevelInfo, "simulated principal policy",
+		slog.String("project", pid), slog.String("policy_source", in.PolicySourceARN),
+		slog.Int("results", len(out.Results)), slog.Bool("truncated", out.IsTruncated))
+	return out, nil
+}
+
+// simulateActions evaluates base with identity and boundary (nil for
+// none) for the page of actions from off of at most size, each on every
+// resource, and returns one result per action, with the result of each
+// resource when explicit (ResourceArns was given).
+func simulateActions(
+	base policy.Request, actions, resources []string, explicit bool, off, size int, identity, boundary []policy.Named,
+) simulationPage {
+	total := len(actions)
 	var out simulationPage
-	for _, action := range in.ActionNames[off:min(total, off+size)] {
-		per := make([]resourceResult, 0, len(in.ResourceARNs))
-		for _, resource := range in.ResourceARNs {
-			r := policy.Request{Principal: caller, Account: pid, Action: action, Resource: resource, Context: reqCtx}
-			per = append(per, toResult(resource, policy.Simulate(r, ids, boundary)))
+	for _, action := range actions[off:min(total, off+size)] {
+		per := make([]resourceResult, 0, len(resources))
+		for _, resource := range resources {
+			r := base
+			r.Action, r.Resource = action, resource
+			per = append(per, toResult(resource, policy.Simulate(r, identity, boundary)))
 		}
 		e := evaluationResult{ActionName: action, resourceResult: aggregate(per)}
 		if explicit {
@@ -337,10 +360,7 @@ func (s *Server) simulatePrincipalPolicy(ctx context.Context, pid string, in sim
 	if next := off + size; next < total {
 		out.IsTruncated, out.Marker = true, base64.RawURLEncoding.EncodeToString([]byte(strconv.Itoa(next)))
 	}
-	slog.Default().LogAttrs(ctx, slog.LevelInfo, "simulated principal policy",
-		slog.String("project", pid), slog.String("policy_source", in.PolicySourceARN),
-		slog.Int("results", len(out.Results)), slog.Bool("truncated", out.IsTruncated))
-	return out, nil
+	return out
 }
 
 // sourcePolicies returns the identity policies of the user, group or role
