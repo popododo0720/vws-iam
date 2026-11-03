@@ -251,3 +251,15 @@ func (s *Server) SimulateCustomPolicy(
 ) (SimulationPage, error) {
 	return s.simulateCustomPolicy(ctx, project, in)
 }
+
+// EntitiesQuery is the request of ListEntitiesForPolicy.
+type EntitiesQuery = entitiesQuery
+
+// PolicyEntities is one page of ListEntitiesForPolicy.
+type PolicyEntities = policyEntities
+
+// ListEntitiesForPolicy is IAM ListEntitiesForPolicy, which vws-proto
+// does not carry yet (#85).
+func (s *Server) ListEntitiesForPolicy(ctx context.Context, project string, q EntitiesQuery) (PolicyEntities, error) {
+	return s.listEntitiesForPolicy(ctx, project, q)
+}
