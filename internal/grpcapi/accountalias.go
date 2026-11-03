@@ -157,7 +157,9 @@ const maxAliasClaimAttempts = 8
 //
 // AWS overwrites the previous alias: once a create holds its alias, every
 // alias of the project before the latest held one (by Seq, then name,
-// never a replica clock) is deleted, so LimitExceeded never applies. A
+// never a replica clock) is deleted before it returns, so LimitExceeded
+// never applies; if that fails, the create fails and its repeat deletes
+// them. A
 // claim that keeps changing is ConcurrentModification; a canceled request
 // writes nothing more; any other store failure is an internal error
 // (console-api: ServiceFailure). Authorization is console-api's.
@@ -182,7 +184,9 @@ func (s *Server) createAccountAlias(ctx context.Context, pid, alias string) erro
 		return err
 	}
 	if held {
-		s.dropOlderAliases(ctx, p)
+		if err := s.dropOlderAliases(ctx, p); err != nil {
+			return toStatus(ctx, err) // a repeat of this create drops them
+		}
 	}
 	if !wrote {
 		return alreadyExists("The account alias " + alias + " already exists.")
@@ -283,8 +287,9 @@ func (s *Server) holdsAccountAlias(ctx context.Context, pid string, a iam.Accoun
 
 // dropOlderAliases deletes every alias of p before its latest held one
 // (aliasBefore), so p never ends without one. It runs even when the
-// request is canceled; a failure leaves them for the next create of p.
-func (s *Server) dropOlderAliases(ctx context.Context, p project) {
+// request is canceled. On a failure some may be left: the create fails,
+// and its repeat (the alias is held then) drops them.
+func (s *Server) dropOlderAliases(ctx context.Context, p project) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	all, err := store.List[iam.AccountAlias](ctx, p.b)
@@ -304,10 +309,7 @@ func (s *Server) dropOlderAliases(ctx context.Context, p project) {
 			}
 		}
 	}
-	if err != nil {
-		slog.Default().LogAttrs(ctx, slog.LevelWarn, "replaced account alias left for the next create",
-			slog.String("project", p.id), slog.String("error", err.Error()))
-	}
+	return err
 }
 
 // aliasBefore orders aliases by Seq, then name.

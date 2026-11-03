@@ -45,7 +45,8 @@ func wantHolder(t *testing.T, e *env, b store.Backend, name, pid string, pids ..
 	}
 }
 
-// stepStore calls at before every Get, Create, Update and DeleteIf, so a
+// stepStore calls at before every Get, List, Create, Update, Delete and
+// DeleteIf, so a
 // test can run another request at an exact step or fail the step.
 type stepStore struct {
 	store.Backend
@@ -57,6 +58,20 @@ func (s stepStore) Get(ctx context.Context, k iam.Kind, key string) (store.Entry
 		return store.Entry{}, err
 	}
 	return s.Backend.Get(ctx, k, key)
+}
+
+func (s stepStore) List(ctx context.Context, k iam.Kind) ([]store.Entry, error) {
+	if err := s.at("list", k, ""); err != nil {
+		return nil, err
+	}
+	return s.Backend.List(ctx, k)
+}
+
+func (s stepStore) Delete(ctx context.Context, k iam.Kind, key, version string) error {
+	if err := s.at("delete", k, key); err != nil {
+		return err
+	}
+	return s.Backend.Delete(ctx, k, key, version)
 }
 
 func (s stepStore) Create(ctx context.Context, k iam.Kind, key string, spec []byte) (string, error) {
@@ -454,6 +469,45 @@ func TestCreateAccountAliasErrors(t *testing.T) {
 				t.Fatalf("%s %s failing: project lists %q, want exactly one alias", op, k, got)
 			}
 		}
+	}
+}
+
+// TestCreateAccountAliasDropFails: a create whose drop of the replaced
+// alias fails (its List, claim read or Delete) is InternalFailure, never
+// a success that leaves two aliases, and its repeat on a healthy store
+// leaves exactly the new alias.
+func TestCreateAccountAliasDropFails(t *testing.T) {
+	now := time.Now().UTC()
+	boom := errors.New("backend down")
+	for _, tc := range []struct {
+		op string
+		k  iam.Kind
+		n  int // the failing call of op on k, 1-based
+	}{
+		{"list", iam.KindAccountAlias, 2},
+		{"get", iam.KindAccountAliasClaim, 3},
+		{"delete", iam.KindAccountAlias, 1},
+	} {
+		t.Run(tc.op, func(t *testing.T) {
+			m := memstore.New()
+			seedAlias(t, m, proj, "old-corp")
+			calls := 0
+			fail := newEnvOn(t, stepStore{m, func(o string, k iam.Kind, _ string) error {
+				if o == tc.op && k == tc.k {
+					if calls++; calls == tc.n {
+						return boom
+					}
+				}
+				return nil
+			}}, &now)
+			wantAWS(t, fail.api.CreateAccountAlias(t.Context(), proj, "new-corp"), codes.Internal, "InternalFailure")
+			e := newEnvOn(t, m, &now)
+			wantAWS(t, e.api.CreateAccountAlias(t.Context(), proj, "new-corp"), codes.AlreadyExists, "EntityAlreadyExists")
+			if got := listedAliases(t, e, proj); !slices.Equal(got, []string{"new-corp"}) {
+				t.Fatalf("after the repeat the project lists %q, want only new-corp", got)
+			}
+			aliasGone(t, m, proj, "old-corp")
+		})
 	}
 }
 
