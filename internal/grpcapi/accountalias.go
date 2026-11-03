@@ -157,7 +157,12 @@ const maxAliasClaimAttempts = 8
 // within aliasClaimLease/2 of the claim write, and a claim is taken over
 // only when it is older than aliasClaimLease and its project holds no
 // such alias, by a compare-and-swap on the claim; a claim that keeps
-// changing is ConcurrentModification after maxAliasClaimAttempts. A
+// changing is ConcurrentModification after maxAliasClaimAttempts. Both
+// sides are fenced, so a write that outruns its window never leaves two
+// projects holding the alias: the taker rereads the old project after
+// its swap and hands the claim back if the alias is there, and the writer
+// rereads the claim after storing the alias and deletes it again (the
+// create is then EntityAlreadyExists) if the claim names another project. A
 // claim outlives its alias (DeleteAccountAlias leaves it) and is taken
 // over, never deleted, so a delete racing a create cannot drop the claim
 // of a live alias. A canceled request writes nothing more. Any other
@@ -200,10 +205,15 @@ func (s *Server) createAccountAlias(ctx context.Context, pid, alias string) erro
 		Meta: iam.Meta{UID: iam.NewUID(), Generation: 1}, Name: alias, Created: p.now().UTC(),
 		Seq: latestAlias(all).Seq + 1,
 	}
-	if _, err := store.Create(wctx, p.b, a); errors.Is(err, store.ErrExists) {
+	v, err := store.Create(wctx, p.b, a)
+	if errors.Is(err, store.ErrExists) {
 		return taken
-	} else if err != nil {
+	}
+	if err != nil {
 		return toStatus(ctx, err)
+	}
+	if err := s.fenceAccountAlias(ctx, p, alias, v, taken); err != nil {
+		return err
 	}
 	p.dropReplacedAliases(ctx)
 	return nil
@@ -242,7 +252,12 @@ func (s *Server) claimAccountAlias(
 			if held {
 				return nil, nil, taken
 			}
-			_, err = store.Update(ctx, s.b, c, cur.Version)
+			var v string
+			if v, err = store.Update(ctx, s.b, c, cur.Version); err == nil {
+				if err := s.handBackIfHeld(ctx, cur.Object, v, taken); err != nil {
+					return nil, nil, err
+				}
+			}
 		case now.Before(cur.Object.Claimed.Add(aliasClaimLease / 4)):
 			// pid's own claim, written recently: no other project can take
 			// it before Claimed+aliasClaimLease, so write under it as is.
@@ -278,6 +293,48 @@ func (s *Server) aliasHeld(ctx context.Context, c iam.AccountAliasClaim, now tim
 		return false, nil
 	}
 	return err == nil, err
+}
+
+// handBackIfHeld rechecks, after claim old was taken over at version v,
+// that its project still holds no such alias. One the project stored
+// while the claim was being taken (a write that outran its window) keeps
+// the alias: old is written back and the create is taken.
+func (s *Server) handBackIfHeld(ctx context.Context, old iam.AccountAliasClaim, v string, taken error) error {
+	_, err := store.Get[iam.AccountAlias](ctx, s.project(old.Project).b, old.Name)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	hctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if _, uerr := store.Update(hctx, s.b, old, v); uerr != nil {
+		slog.Default().LogAttrs(hctx, slog.LevelWarn, "account alias claim not handed back",
+			slog.String("alias", old.Name), slog.String("error", uerr.Error()))
+	}
+	if err != nil {
+		return toStatus(ctx, err)
+	}
+	return taken
+}
+
+// fenceAccountAlias fences alias, just stored for p at version v, against
+// a takeover of its claim during the write: unless the claim still names
+// p, the alias is deleted again and the create is taken (or failed, when
+// the claim cannot be read). It runs even when the request is canceled.
+func (s *Server) fenceAccountAlias(ctx context.Context, p project, alias, v string, taken error) error {
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	c, err := store.Get[iam.AccountAliasClaim](fctx, s.b, alias)
+	if err == nil && c.Object.Project == p.id {
+		return nil
+	}
+	if derr := store.Delete[iam.AccountAlias](fctx, p.b, alias, v); derr != nil && !errors.Is(derr, store.ErrNotFound) {
+		slog.Default().LogAttrs(fctx, slog.LevelWarn, "account alias stored under a lost claim not deleted",
+			slog.String("project", p.id), slog.String("alias", alias), slog.String("error", derr.Error()))
+	}
+	if err != nil {
+		return toStatus(fctx, err)
+	}
+	return taken
 }
 
 // latestAlias returns the alias of all that a create made last: the

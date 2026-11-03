@@ -412,3 +412,72 @@ func TestCreateAccountAliasSlowClaimRead(t *testing.T) {
 		t.Fatalf("alias write deadline %v after %v: the claim read extended it", slow.deadline, latest)
 	}
 }
+
+// beforeWrite runs f once before the first create or update of kind k,
+// as a replica racing the request would.
+type beforeWrite struct {
+	store.Backend
+	k    iam.Kind
+	once sync.Once
+	f    func(ctx context.Context)
+}
+
+func (w *beforeWrite) Create(ctx context.Context, k iam.Kind, key string, spec []byte) (string, error) {
+	if k == w.k {
+		w.once.Do(func() { w.f(ctx) })
+	}
+	return w.Backend.Create(ctx, k, key, spec)
+}
+
+func (w *beforeWrite) Update(ctx context.Context, k iam.Kind, key string, spec []byte, version string) (string, error) {
+	if k == w.k {
+		w.once.Do(func() { w.f(ctx) })
+	}
+	return w.Backend.Update(ctx, k, key, spec, version)
+}
+
+// TestCreateAccountAliasClaimTakenDuringWrite: when another project
+// takes the claim over while the alias is being written, the alias is
+// deleted again and the create is EntityAlreadyExists, so the alias never
+// stays with two projects.
+func TestCreateAccountAliasClaimTakenDuringWrite(t *testing.T) {
+	b := memstore.New()
+	now := time.Now().UTC()
+	w := &beforeWrite{Backend: b, k: iam.KindAccountAlias, f: func(ctx context.Context) {
+		if _, err := store.Mutate(ctx, b, "example-corp", func(c *iam.AccountAliasClaim) error {
+			c.Project = "other"
+			return nil
+		}); err != nil {
+			t.Error(err)
+		}
+	}}
+	err := newEnvOn(t, w, &now).api.CreateAccountAlias(t.Context(), proj, "example-corp")
+	wantAWS(t, err, codes.AlreadyExists, "EntityAlreadyExists")
+	aliasGone(t, b, proj, "example-corp")
+}
+
+// TestCreateAccountAliasTakeoverRace: when the project of a stale claim
+// stores the alias while another project takes the claim over, the
+// claim is handed back and the taker is EntityAlreadyExists with no
+// alias.
+func TestCreateAccountAliasTakeoverRace(t *testing.T) {
+	b := memstore.New()
+	now := time.Now().UTC()
+	stale := iam.AccountAliasClaim{Name: "example-corp", Project: proj, Claimed: now.Add(-aliasClaimLease)}
+	if _, err := store.Create(t.Context(), b, stale); err != nil {
+		t.Fatal(err)
+	}
+	w := &beforeWrite{Backend: b, k: iam.KindAccountAliasClaim, f: func(ctx context.Context) {
+		a := iam.AccountAlias{Meta: iam.Meta{UID: iam.NewUID(), Generation: 1}, Name: "example-corp", Created: now, Seq: 1}
+		if _, err := store.Create(ctx, store.Scoped(b, proj), a); err != nil {
+			t.Error(err)
+		}
+	}}
+	err := newEnvOn(t, w, &now).api.CreateAccountAlias(t.Context(), "other", "example-corp")
+	wantAWS(t, err, codes.AlreadyExists, "EntityAlreadyExists")
+	aliasGone(t, b, "other", "example-corp")
+	if c := storedClaim(t, b, "example-corp"); c.Object.Project != proj {
+		t.Fatalf("claim %+v, want handed back to %s", c.Object, proj)
+	}
+	storedAlias(t, b, proj, "example-corp")
+}
