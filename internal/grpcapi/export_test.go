@@ -240,3 +240,14 @@ func (s *Server) SimulatePrincipalPolicy(
 ) (SimulationPage, error) {
 	return s.simulatePrincipalPolicy(ctx, project, in)
 }
+
+// CustomSimulateInput is the SimulateCustomPolicy request.
+type CustomSimulateInput = customSimulateInput
+
+// SimulateCustomPolicy is IAM SimulateCustomPolicy, which vws-proto does
+// not carry yet (#87).
+func (s *Server) SimulateCustomPolicy(
+	ctx context.Context, project string, in CustomSimulateInput,
+) (SimulationPage, error) {
+	return s.simulateCustomPolicy(ctx, project, in)
+}
