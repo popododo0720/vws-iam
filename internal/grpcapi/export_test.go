@@ -287,3 +287,14 @@ type AccountPasswordPolicy = accountPasswordPolicy
 func (s *Server) GetAccountPasswordPolicy(ctx context.Context, project string) (AccountPasswordPolicy, error) {
 	return s.getAccountPasswordPolicy(ctx, project)
 }
+
+// AuthorizationDetails is one page of GetAccountAuthorizationDetails.
+type AuthorizationDetails = authorizationDetails
+
+// GetAccountAuthorizationDetails is IAM GetAccountAuthorizationDetails,
+// which vws-proto does not carry yet (#81).
+func (s *Server) GetAccountAuthorizationDetails(
+	ctx context.Context, project string, filter []string, marker string, maxItems int,
+) (AuthorizationDetails, error) {
+	return s.getAccountAuthorizationDetails(ctx, project, filter, marker, maxItems)
+}
