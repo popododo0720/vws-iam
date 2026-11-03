@@ -278,3 +278,12 @@ type PasswordPolicyInput = passwordPolicyInput
 func (s *Server) UpdateAccountPasswordPolicy(ctx context.Context, project string, in PasswordPolicyInput) error {
 	return s.updateAccountPasswordPolicy(ctx, project, in)
 }
+
+// AccountPasswordPolicy is the GetAccountPasswordPolicy response.
+type AccountPasswordPolicy = accountPasswordPolicy
+
+// GetAccountPasswordPolicy is IAM GetAccountPasswordPolicy, which
+// vws-proto does not carry yet (#82).
+func (s *Server) GetAccountPasswordPolicy(ctx context.Context, project string) (AccountPasswordPolicy, error) {
+	return s.getAccountPasswordPolicy(ctx, project)
+}

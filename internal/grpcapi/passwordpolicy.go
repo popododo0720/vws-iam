@@ -9,6 +9,81 @@ import (
 	"github.com/popododo0720/vws-iam/internal/store"
 )
 
+// noPasswordPolicy is the AWS NoSuchEntity of an account without a
+// custom password policy.
+func noPasswordPolicy(pid string) error {
+	return notFound("The Password Policy with domain name " + pid + " cannot be found.")
+}
+
+// accountPasswordPolicy is the GetAccountPasswordPolicy response, the AWS
+// PasswordPolicy data type. MaxPasswordAge and PasswordReusePrevention
+// are nil when not set (AWS leaves them out; their valid range starts at
+// 1), and ExpirePasswords is true exactly when MaxPasswordAge is above 0.
+type accountPasswordPolicy struct {
+	MinimumPasswordLength      int
+	RequireSymbols             bool
+	RequireNumbers             bool
+	RequireUppercaseCharacters bool
+	RequireLowercaseCharacters bool
+	AllowUsersToChangePassword bool
+	ExpirePasswords            bool
+	MaxPasswordAge             *int
+	PasswordReusePrevention    *int
+	HardExpiry                 bool
+}
+
+// awsPasswordPolicy returns p in the AWS response shape.
+func awsPasswordPolicy(p iam.PasswordPolicy) accountPasswordPolicy {
+	out := accountPasswordPolicy{
+		MinimumPasswordLength:      p.MinimumPasswordLength,
+		RequireSymbols:             p.RequireSymbols,
+		RequireNumbers:             p.RequireNumbers,
+		RequireUppercaseCharacters: p.RequireUppercaseCharacters,
+		RequireLowercaseCharacters: p.RequireLowercaseCharacters,
+		AllowUsersToChangePassword: p.AllowUsersToChangePassword,
+		ExpirePasswords:            p.MaxPasswordAge > 0,
+		HardExpiry:                 p.HardExpiry,
+	}
+	if p.MaxPasswordAge > 0 {
+		out.MaxPasswordAge = &p.MaxPasswordAge
+	}
+	if p.PasswordReusePrevention > 0 {
+		out.PasswordReusePrevention = &p.PasswordReusePrevention
+	}
+	return out
+}
+
+// getAccountPasswordPolicy is IAM GetAccountPasswordPolicy: it returns the
+// custom password policy of project pid.
+//
+// A bad project id is ValidationError before any store access. A project
+// without a custom policy is NoSuchEntity ("The Password Policy with
+// domain name <project> cannot be found."), as in AWS. The read writes
+// nothing, so a repeat returns the same policy until it is changed. A
+// request that was canceled or whose deadline passed reads nothing. Any
+// other store failure is an internal error, which console-api answers as
+// ServiceFailure. Authorization (iam:GetAccountPasswordPolicy) is
+// console-api's, as for the other IAM reads.
+//
+// TODO(#82): serve this as an RPC once vws-proto carries it
+// (popododo0720/vws-proto#136).
+func (s *Server) getAccountPasswordPolicy(ctx context.Context, pid string) (accountPasswordPolicy, error) {
+	if !iam.ValidProject(pid) {
+		return accountPasswordPolicy{}, invalidID("project " + quote(pid) + " is not a project id")
+	}
+	if err := ctx.Err(); err != nil {
+		return accountPasswordPolicy{}, toStatus(ctx, err)
+	}
+	cur, err := store.Get[iam.PasswordPolicy](ctx, s.project(pid).b, iam.PasswordPolicyKey)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return accountPasswordPolicy{}, noPasswordPolicy(pid)
+	case err != nil:
+		return accountPasswordPolicy{}, toStatus(ctx, err)
+	}
+	return awsPasswordPolicy(cur.Object), nil
+}
+
 // deleteAccountPasswordPolicy is IAM DeleteAccountPasswordPolicy: it
 // deletes the custom password policy of project pid.
 //
@@ -31,7 +106,7 @@ func (s *Server) deleteAccountPasswordPolicy(ctx context.Context, pid string) er
 		return invalidID("project " + quote(pid) + " is not a project id")
 	}
 	p := s.project(pid)
-	noPolicy := notFound("The Password Policy with domain name " + pid + " cannot be found.")
+	noPolicy := noPasswordPolicy(pid)
 	for attempt := 1; ; attempt++ {
 		cur, err := store.Get[iam.PasswordPolicy](ctx, p.b, iam.PasswordPolicyKey)
 		if errors.Is(err, store.ErrNotFound) {
