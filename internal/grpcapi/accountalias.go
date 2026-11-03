@@ -195,9 +195,11 @@ func (s *Server) createAccountAlias(ctx context.Context, pid, alias string) erro
 }
 
 // claimAccountAlias writes the claim of alias for pid: a new claim, a
-// renewal of pid's own, or a takeover of a stale one. It returns the
-// context to write pid's alias under, which ends aliasClaimLease/2 after
-// the claim write began, and taken if another project holds the alias.
+// renewal of pid's own, or a takeover of a stale one; pid's own claim
+// written within aliasClaimLease/4 is used as is, so racing creates in
+// one project do not contend on it. It returns the context to write
+// pid's alias under, which ends aliasClaimLease/2 after the claim was
+// written, and taken if another project holds the alias.
 func (s *Server) claimAccountAlias(
 	ctx context.Context, pid, alias string, taken error,
 ) (context.Context, context.CancelFunc, error) {
@@ -223,6 +225,12 @@ func (s *Server) claimAccountAlias(
 				return nil, nil, taken
 			}
 			_, err = store.Update(ctx, s.b, c, cur.Version)
+		case now.Before(cur.Object.Claimed.Add(aliasClaimLease / 4)):
+			// pid's own claim, written recently: no other project can take
+			// it before Claimed+aliasClaimLease, so write under it as is.
+			left := cur.Object.Claimed.Add(aliasClaimLease / 2).Sub(now)
+			wctx, cancel := context.WithDeadline(ctx, time.Now().Add(left))
+			return wctx, cancel, nil
 		default:
 			_, err = store.Update(ctx, s.b, c, cur.Version)
 		}

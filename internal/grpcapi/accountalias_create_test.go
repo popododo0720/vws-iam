@@ -92,7 +92,7 @@ func TestCreateAccountAlias(t *testing.T) {
 // as in AWS, so the project lists only the new one and LimitExceeded
 // never applies. The old alias stays claimed for the lease, so another
 // project gets it only after the lease, while the project itself may
-// take it back at once. On both store backends.
+// take it back at once, renewing its claim. On both store backends.
 func TestCreateAccountAliasReplaces(t *testing.T) {
 	for _, bk := range renameBackends {
 		t.Run(bk.name, func(t *testing.T) {
@@ -111,9 +111,12 @@ func TestCreateAccountAliasReplaces(t *testing.T) {
 			}
 			aliasGone(t, b, proj, "first-corp")
 			wantAWS(t, e.api.CreateAccountAlias(ctx, "other", "first-corp"), codes.AlreadyExists, "EntityAlreadyExists")
-			now = now.Add(time.Second)
+			now = now.Add(aliasClaimLease / 3) // past a quarter lease: the claim is renewed
 			if err := e.api.CreateAccountAlias(ctx, proj, "second-corp"); err != nil {
 				t.Fatalf("taking back the project's own old alias: %v", err)
+			}
+			if c := storedClaim(t, b, "second-corp"); c.Object.Project != proj || !c.Object.Claimed.Equal(now) {
+				t.Fatalf("claim %+v, want renewed by %s now", c.Object, proj)
 			}
 			if got := listedAliases(t, e, proj); !slices.Equal(got, []string{"second-corp"}) {
 				t.Fatalf("project lists %q, want second-corp", got)
