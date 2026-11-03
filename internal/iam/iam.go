@@ -34,13 +34,15 @@ const (
 	KindAccountAlias Kind = "IamAccountAlias"
 	// KindAccountAliasClaim reserves an account alias across projects (#88).
 	KindAccountAliasClaim Kind = "IamAccountAliasClaim"
+	// KindPasswordPolicy is the account password policy (#84).
+	KindPasswordPolicy Kind = "IamAccountPasswordPolicy"
 )
 
 // Kinds lists every stored kind.
 var Kinds = []Kind{
 	KindUser, KindGroup, KindRole, KindPolicy, KindAccessKey, KindMfaDevice,
 	KindKeyIndex, KindSession, KindOperation, KindReplay, KindAttempt, KindMemberLock, KindFidoDevice,
-	KindInstanceProfile, KindAccountAlias, KindAccountAliasClaim,
+	KindInstanceProfile, KindAccountAlias, KindAccountAliasClaim, KindPasswordPolicy,
 }
 
 // Meta is the resource envelope every API resource carries.

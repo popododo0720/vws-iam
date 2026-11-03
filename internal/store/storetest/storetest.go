@@ -46,6 +46,7 @@ func Samples() []iam.Object {
 		},
 		iam.AccountAlias{Name: "example-corp", Created: now, Meta: iam.Meta{UID: "a-1", Generation: 1}},
 		iam.AccountAliasClaim{Name: "example-corp", Project: "proj-a", UID: "a-1"},
+		iam.PasswordPolicy{MinimumPasswordLength: 8, RequireSymbols: true, Meta: iam.Meta{UID: "pp-1", Generation: 1}},
 	}
 }
 
@@ -156,6 +157,10 @@ func Run(t *testing.T, open func(t *testing.T) store.Backend) {
 			case iam.AccountAliasClaim:
 				c := o
 				c.Project, c.UID = "proj-b", "a-2"
+				roundTrip(t, b, o, c)
+			case iam.PasswordPolicy:
+				c := o
+				c.MinimumPasswordLength, c.MaxPasswordAge = 12, 90
 				roundTrip(t, b, o, c)
 			}
 		}
