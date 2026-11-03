@@ -163,8 +163,8 @@ func TestSimulatePrincipalPolicyBoundary(t *testing.T) {
 }
 
 // TestSimulatePrincipalPolicyContext: condition keys come only from
-// ContextEntries, a missing one is reported, and with ResourceArns the
-// result for each resource is repeated as its resource-specific result.
+// ContextEntries, a missing one is reported, and with ResourceArns it is
+// reported in the resource-specific result and in the aggregate.
 func TestSimulatePrincipalPolicyContext(t *testing.T) {
 	b := fakeKube()
 	now := time.Now().UTC()
@@ -191,14 +191,110 @@ func TestSimulatePrincipalPolicyContext(t *testing.T) {
 	}
 	in.ContextEntries = in.ContextEntries[:1]
 	r = simulate(t, e, in).Results[0]
-	if r.MissingContextValues != nil ||
+	if !slices.Equal(r.MissingContextValues, []string{"aws:securetransport"}) ||
 		!slices.Equal(r.ResourceSpecific[0].MissingContextValues, []string{"aws:securetransport"}) {
-		t.Fatalf("missing key of a listed resource: %+v, want it only in the resource-specific result", r)
+		t.Fatalf("missing key of a listed resource: %+v, want it in the resource-specific result and the aggregate", r)
 	}
 }
 
-// TestSimulatePrincipalPolicyPages: every action is evaluated for every
-// resource, in that order, and pages continue where the last ended.
+// resourceSummary is "resource decision [type:id ...]" for each
+// resource-specific result of r.
+func resourceSummary(r grpcapi.EvaluationResult) []string {
+	var out []string
+	for _, rr := range r.ResourceSpecific {
+		var ms []string
+		for _, m := range rr.MatchedStatements {
+			ms = append(ms, m.SourcePolicyType+":"+m.SourcePolicyID)
+		}
+		out = append(out, fmt.Sprintf("%s %s %v", rr.ResourceName, rr.Decision, ms))
+	}
+	return out
+}
+
+// TestSimulatePrincipalPolicyResources: an action on several resources is
+// one result whose top level is the most restrictive decision with the
+// statements that made it, and each resource has its own result.
+func TestSimulatePrincipalPolicyResources(t *testing.T) {
+	for _, bk := range renameBackends {
+		t.Run(bk.name, func(t *testing.T) {
+			b := bk.open()
+			now := time.Now().UTC()
+			e := newEnvOn(t, b, &now)
+			seedSim(t, b, nil)
+			denyB := `{"Version":"2012-10-17","Statement":{"Effect":"Deny","Action":"s3:GetObject",` +
+				`"Resource":"arn:vws:s3:::b"}}`
+			allowC := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"iam:GetUser",` +
+				`"Resource":"arn:vws:s3:::c"}}`
+			p := simulate(t, e, grpcapi.SimulateInput{
+				PolicySourceARN: simARN + "user/alice",
+				ActionNames:     []string{"s3:GetObject", "s3:GetBucketPolicy", "iam:GetUser"},
+				ResourceARNs:    []string{"arn:vws:s3:::a", "arn:vws:s3:::b", "arn:vws:s3:::c"},
+				PolicyInputList: []string{denyB, allowC},
+			})
+			want := []string{
+				"s3:GetObject * explicitDeny [none:PolicyInputList.1]",
+				"s3:GetBucketPolicy * allowed [user-managed:S3Read]",
+				"iam:GetUser * implicitDeny []",
+			}
+			if got := summary(p); !slices.Equal(got, want) || p.IsTruncated {
+				t.Fatalf("results %q truncated %v, want one per action %q", got, p.IsTruncated, want)
+			}
+			perResource := [][]string{
+				{
+					"arn:vws:s3:::a allowed [user-managed:S3Read]",
+					"arn:vws:s3:::b explicitDeny [none:PolicyInputList.1]",
+					"arn:vws:s3:::c allowed [user-managed:S3Read]",
+				},
+				{
+					"arn:vws:s3:::a allowed [user-managed:S3Read]",
+					"arn:vws:s3:::b allowed [user-managed:S3Read]",
+					"arn:vws:s3:::c allowed [user-managed:S3Read]",
+				},
+				{
+					"arn:vws:s3:::a implicitDeny []",
+					"arn:vws:s3:::b implicitDeny []",
+					"arn:vws:s3:::c allowed [none:PolicyInputList.2]",
+				},
+			}
+			for i, want := range perResource {
+				if got := resourceSummary(p.Results[i]); !slices.Equal(got, want) {
+					t.Fatalf("%s resource-specific %q, want %q", p.Results[i].ActionName, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestSimulatePrincipalPolicyResourcesBoundary: the aggregate is allowed
+// by the boundary only when every resource is.
+func TestSimulatePrincipalPolicyResourcesBoundary(t *testing.T) {
+	b := fakeKube()
+	now := time.Now().UTC()
+	e := newEnvOn(t, b, &now)
+	seedSim(t, b, nil)
+	onlyA := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"arn:vws:s3:::a"}}`
+	r := simulate(t, e, grpcapi.SimulateInput{
+		PolicySourceARN:        simARN + "user/alice",
+		ActionNames:            []string{"s3:GetObject"},
+		ResourceARNs:           []string{"arn:vws:s3:::a", "arn:vws:s3:::b"},
+		PermissionsBoundaryInp: []string{onlyA},
+	}).Results[0]
+	if r.Decision != "implicitDeny" || len(r.MatchedStatements) != 0 {
+		t.Fatalf("aggregate %+v, want implicitDeny without statements", r)
+	}
+	for i, want := range []bool{false, true, false} {
+		a := r.AllowedByPermissionsBoundary
+		if i > 0 {
+			a = r.ResourceSpecific[i-1].AllowedByPermissionsBoundary
+		}
+		if a == nil || *a != want {
+			t.Fatalf("AllowedByPermissionsBoundary %d is %v, want %v", i, a, want)
+		}
+	}
+}
+
+// TestSimulatePrincipalPolicyPages: pages hold whole actions, each over
+// every resource, and continue where the last ended.
 func TestSimulatePrincipalPolicyPages(t *testing.T) {
 	b := fakeKube()
 	now := time.Now().UTC()
@@ -208,7 +304,7 @@ func TestSimulatePrincipalPolicyPages(t *testing.T) {
 		PolicySourceARN: simARN + "user/alice",
 		ActionNames:     []string{"s3:GetObject", "s3:DeleteObject", "iam:GetUser"},
 		ResourceARNs:    []string{"arn:vws:s3:::a", "arn:vws:s3:::b"},
-		MaxItems:        4,
+		MaxItems:        2,
 	}
 	var got []string
 	pages := 0
@@ -216,7 +312,7 @@ func TestSimulatePrincipalPolicyPages(t *testing.T) {
 		p := simulate(t, e, in)
 		pages++
 		for _, r := range p.Results {
-			got = append(got, r.ActionName+" "+r.ResourceName)
+			got = append(got, r.ActionName+" "+strings.Join(resourceSummary(r), ", "))
 		}
 		if !p.IsTruncated {
 			if p.Marker != "" {
@@ -227,16 +323,21 @@ func TestSimulatePrincipalPolicyPages(t *testing.T) {
 		in.Marker = p.Marker
 	}
 	want := []string{
-		"s3:GetObject arn:vws:s3:::a", "s3:GetObject arn:vws:s3:::b",
-		"s3:DeleteObject arn:vws:s3:::a", "s3:DeleteObject arn:vws:s3:::b",
-		"iam:GetUser arn:vws:s3:::a", "iam:GetUser arn:vws:s3:::b",
+		"s3:GetObject arn:vws:s3:::a allowed [user-managed:S3Read], arn:vws:s3:::b allowed [user-managed:S3Read]",
+		"s3:DeleteObject arn:vws:s3:::a explicitDeny [user:user_alice_nodelete], " +
+			"arn:vws:s3:::b explicitDeny [user:user_alice_nodelete]",
+		"iam:GetUser arn:vws:s3:::a implicitDeny [], arn:vws:s3:::b implicitDeny []",
 	}
 	if pages != 2 || !slices.Equal(got, want) {
 		t.Fatalf("%d pages %q, want 2 pages %q", pages, got, want)
 	}
 	in.Marker, in.MaxItems = "", 0
-	if p := simulate(t, e, in); len(p.Results) != 6 || p.IsTruncated {
-		t.Fatalf("default page: %d results truncated %v, want all 6", len(p.Results), p.IsTruncated)
+	if p := simulate(t, e, in); len(p.Results) != 3 || p.IsTruncated {
+		t.Fatalf("default page: %d results truncated %v, want all 3", len(p.Results), p.IsTruncated)
+	}
+	in.Marker, in.MaxItems = "Mw", 1 // offset 3 of 3 actions
+	if _, err := e.api.SimulatePrincipalPolicy(t.Context(), proj, in); err == nil {
+		t.Fatal("a marker past the last action was accepted")
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -51,7 +52,8 @@ type matchedStatement struct {
 }
 
 // resourceResult is the result for one action and resource (AWS
-// EvaluationResult, or ResourceSpecificResult for its resource).
+// ResourceSpecificResult), or the aggregate of an action over every
+// resource (the top level of an AWS EvaluationResult).
 type resourceResult struct {
 	ResourceName         string
 	Decision             string
@@ -61,10 +63,10 @@ type resourceResult struct {
 	AllowedByPermissionsBoundary *bool
 }
 
-// evaluationResult is an AWS EvaluationResult. ResourceSpecific holds the
-// result for its resource when ResourceArns was given; the missing
-// context values of a resource other than "*" are reported only there,
-// as in AWS.
+// evaluationResult is an AWS EvaluationResult: one per action, whatever
+// the number of resources. Its top level aggregates every resource (see
+// aggregate) and ResourceSpecific holds the result of each resource of
+// ResourceArns, in order, when ResourceArns was given.
 type evaluationResult struct {
 	ActionName string
 	resourceResult
@@ -229,7 +231,7 @@ func simulateRequest(pid string, in *simulateInput) (map[string][]string, int, i
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	off, err := decodeOffset(in.Marker, len(in.ActionNames)*len(in.ResourceARNs))
+	off, err := decodeOffset(in.Marker, len(in.ActionNames))
 	return ctxVals, off, size, err
 }
 
@@ -257,9 +259,10 @@ func decodeOffset(marker string, total int) (int, error) {
 // the policies of the user (with its groups'), group or role
 // PolicySourceArn of project pid, plus PolicyInputList, for every action
 // of ActionNames on every resource of ResourceArns ("*" when not set),
-// in that order and in pages, and reports the decision (allowed,
-// explicitDeny, implicitDeny), the statements that decided it and the
-// context keys it lacked. The permissions boundary is
+// and reports, one result per action and in pages of actions, the
+// decision (allowed, explicitDeny, implicitDeny), the statements that
+// decided it and the context keys it lacked, aggregated over the
+// resources, with the result of each listed resource. The permissions boundary is
 // PermissionsBoundaryPolicyInputList when given, else the stored boundary
 // of the user or role. Context keys come only from ContextEntries.
 //
@@ -317,18 +320,17 @@ func (s *Server) simulatePrincipalPolicy(ctx context.Context, pid string, in sim
 	if caller == "" {
 		caller = in.PolicySourceARN
 	}
-	total := len(in.ActionNames) * len(in.ResourceARNs)
+	total := len(in.ActionNames)
 	var out simulationPage
-	for i := off; i < total && i < off+size; i++ {
-		action, resource := in.ActionNames[i/len(in.ResourceARNs)], in.ResourceARNs[i%len(in.ResourceARNs)]
-		r := policy.Request{Principal: caller, Account: pid, Action: action, Resource: resource, Context: reqCtx}
-		res := toResult(resource, policy.Simulate(r, ids, boundary))
-		e := evaluationResult{ActionName: action, resourceResult: res}
+	for _, action := range in.ActionNames[off:min(total, off+size)] {
+		per := make([]resourceResult, 0, len(in.ResourceARNs))
+		for _, resource := range in.ResourceARNs {
+			r := policy.Request{Principal: caller, Account: pid, Action: action, Resource: resource, Context: reqCtx}
+			per = append(per, toResult(resource, policy.Simulate(r, ids, boundary)))
+		}
+		e := evaluationResult{ActionName: action, resourceResult: aggregate(per)}
 		if explicit {
-			e.ResourceSpecific = []resourceResult{res}
-			if resource != "*" {
-				e.MissingContextValues = nil
-			}
+			e.ResourceSpecific = per
 		}
 		out.Results = append(out.Results, e)
 	}
@@ -385,6 +387,50 @@ func simulationError(ctx context.Context, err error) error {
 		return fail(codes.Internal, "", "PolicyEvaluation", "a stored policy could not be evaluated")
 	}
 	return toStatus(ctx, err)
+}
+
+// decisionRank orders decisions from least to most restrictive.
+var decisionRank = map[string]int{
+	policy.DecisionAllowed: 0, policy.DecisionImplicitDeny: 1, policy.DecisionExplicitDeny: 2,
+}
+
+// aggregate is the top level of the EvaluationResult of one action over
+// the results of each resource, as in AWS: the most restrictive decision
+// (explicitDeny, then implicitDeny, then allowed), the union of the
+// statements of the resources with that decision (only those that
+// contributed to it), the union of the missing context values of every
+// resource, and the boundary allowing it only when it allows every
+// resource. Its resource name is "*": AWS gives the ARN template of the
+// action's resource type there (or "*" when the action has none), which
+// needs a catalog of resource types this service does not have yet
+// (#256).
+func aggregate(per []resourceResult) resourceResult {
+	top := resourceResult{ResourceName: "*", Decision: policy.DecisionAllowed}
+	for _, r := range per {
+		if decisionRank[r.Decision] > decisionRank[top.Decision] {
+			top.Decision = r.Decision
+		}
+	}
+	for _, r := range per {
+		if r.Decision == top.Decision {
+			for _, m := range r.MatchedStatements {
+				if !slices.Contains(top.MatchedStatements, m) {
+					top.MatchedStatements = append(top.MatchedStatements, m)
+				}
+			}
+		}
+		for _, k := range r.MissingContextValues {
+			if !slices.Contains(top.MissingContextValues, k) {
+				top.MissingContextValues = append(top.MissingContextValues, k)
+			}
+		}
+		if b := r.AllowedByPermissionsBoundary; b != nil {
+			allowed := *b && (top.AllowedByPermissionsBoundary == nil || *top.AllowedByPermissionsBoundary)
+			top.AllowedByPermissionsBoundary = &allowed
+		}
+	}
+	slices.Sort(top.MissingContextValues)
+	return top
 }
 
 func toResult(resource string, sim policy.Simulation) resourceResult {

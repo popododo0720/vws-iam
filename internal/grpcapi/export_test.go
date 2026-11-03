@@ -227,9 +227,10 @@ func (s *Server) CreateAccountAlias(ctx context.Context, project, alias string) 
 // SimulateInput, ContextEntry and SimulationPage are the
 // SimulatePrincipalPolicy request and result types.
 type (
-	SimulateInput  = simulateInput
-	ContextEntry   = contextEntry
-	SimulationPage = simulationPage
+	SimulateInput    = simulateInput
+	ContextEntry     = contextEntry
+	SimulationPage   = simulationPage
+	EvaluationResult = evaluationResult
 )
 
 // SimulatePrincipalPolicy is IAM SimulatePrincipalPolicy, which vws-proto
