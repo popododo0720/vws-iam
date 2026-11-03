@@ -45,6 +45,7 @@ func Samples() []iam.Object {
 			Meta: iam.Meta{UID: "i-1", Generation: 1},
 		},
 		iam.AccountAlias{Name: "example-corp", Created: now, Meta: iam.Meta{UID: "a-1", Generation: 1}},
+		iam.AccountAliasClaim{Name: "example-corp", Project: "proj-a", Claimed: now},
 	}
 }
 
@@ -151,6 +152,10 @@ func Run(t *testing.T, open func(t *testing.T) store.Backend) {
 			case iam.AccountAlias:
 				c := o
 				c.Created = later
+				roundTrip(t, b, o, c)
+			case iam.AccountAliasClaim:
+				c := o
+				c.Project, c.Claimed = "proj-b", later
 				roundTrip(t, b, o, c)
 			}
 		}
