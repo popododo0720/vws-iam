@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -71,7 +72,7 @@ func newEnvOn(t *testing.T, b store.Backend, now *time.Time, opts ...grpcapi.Opt
 	api := grpcapi.New(b, keys, append([]grpcapi.Option{grpcapi.WithClock(func() time.Time { return *now })}, opts...)...)
 	grpcapi.Register(srv, api)
 	go func() {
-		if err := srv.Serve(lis); err != nil {
+		if err := srv.Serve(lis); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 			t.Error(err)
 		}
 	}()

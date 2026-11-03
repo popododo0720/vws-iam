@@ -3,6 +3,8 @@ package grpcapi
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"time"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/store"
@@ -55,7 +57,15 @@ func (s *Server) listAccountAliases(ctx context.Context, pid, marker string, max
 	}
 	var names []string
 	for _, v := range all {
-		if n := v.Object.Name; after == "" || store.Fold(n) > after {
+		n := v.Object.Name
+		if after != "" && store.Fold(n) <= after {
+			continue
+		}
+		held, err := s.holdsAccountAlias(ctx, pid, v.Object) // else a create left it unclaimed
+		if err != nil {
+			return accountAliasPage{}, toStatus(ctx, err)
+		}
+		if held {
 			names = append(names, n)
 		}
 	}
@@ -100,6 +110,13 @@ func (s *Server) deleteAccountAlias(ctx context.Context, pid, alias string) erro
 		if err != nil {
 			return toStatus(ctx, err)
 		}
+		held, err := s.holdsAccountAlias(ctx, pid, cur.Object)
+		if err != nil {
+			return toStatus(ctx, err)
+		}
+		if !held {
+			return noAlias // stored by a create that never won the claim
+		}
 		if err := ctx.Err(); err != nil {
 			return toStatus(ctx, err) // the caller is gone; delete nothing
 		}
@@ -115,4 +132,185 @@ func (s *Server) deleteAccountAlias(ctx context.Context, pid, alias string) erro
 			return toStatus(ctx, err)
 		}
 	}
+}
+
+// maxAliasClaimAttempts bounds how often a create rereads an account
+// alias claim that changed under it before ConcurrentModification.
+const maxAliasClaimAttempts = 8
+
+// createAccountAlias is IAM CreateAccountAlias: it makes alias the
+// account alias of project pid.
+//
+// A bad project id or an AccountAlias that is not 3 to 63 characters of
+// ^[a-z0-9]([a-z0-9]|-(?!-)){1,61}[a-z0-9]$ is ValidationError before
+// any store access. The alias claim (iam.AccountAliasClaim, outside any
+// project, keyed by the alias) points at one stored alias by project and
+// UID; a project holds an alias only while the claim points at it. A
+// create stores its alias, then points the claim at it by one store
+// create or compare-and-swap, taking it from another project only when
+// it no longer points at an alias that project stores. Only the create
+// that writes the claim succeeds; others are EntityAlreadyExists (an
+// alias held by this or another project, AWS: unique across accounts).
+// So two projects never hold one alias, of racing creates of one alias
+// exactly one succeeds, and an alias stored by a create that failed or
+// lost its response is held by no project until a repeat claims it.
+//
+// AWS overwrites the previous alias: once a create holds its alias, every
+// alias of the project before the latest held one (by Seq, then name,
+// never a replica clock) is deleted, so LimitExceeded never applies. A
+// claim that keeps changing is ConcurrentModification; a canceled request
+// writes nothing more; any other store failure is an internal error
+// (console-api: ServiceFailure). Authorization is console-api's.
+//
+// TODO(#88): serve this as an RPC once vws-proto carries it
+// (popododo0720/vws-proto#130).
+func (s *Server) createAccountAlias(ctx context.Context, pid, alias string) error {
+	if !iam.ValidProject(pid) {
+		return invalidID("project " + quote(pid) + " is not a project id")
+	}
+	if !iam.ValidAccountAlias(alias) {
+		return invalidSpec("accountAlias must be 3 to 63 lowercase letters, digits and hyphens, " +
+			"without a hyphen at either end or two in a row")
+	}
+	p := s.project(pid)
+	a, err := p.storeAccountAlias(ctx, alias)
+	if err != nil {
+		return err
+	}
+	held, wrote, err := s.claimAccountAlias(ctx, pid, a)
+	if err != nil {
+		return err
+	}
+	if held {
+		s.dropOlderAliases(ctx, p)
+	}
+	if !wrote {
+		return alreadyExists("The account alias " + alias + " already exists.")
+	}
+	return nil
+}
+
+// storeAccountAlias returns the stored alias of p named alias, creating
+// it one past the greatest Seq of p unless it exists.
+func (p project) storeAccountAlias(ctx context.Context, alias string) (store.Versioned[iam.AccountAlias], error) {
+	for range 2 {
+		cur, err := store.Get[iam.AccountAlias](ctx, p.b, alias)
+		if !errors.Is(err, store.ErrNotFound) {
+			return cur, toStatus(ctx, err)
+		}
+		if err := ctx.Err(); err != nil {
+			return cur, toStatus(ctx, err) // the caller is gone; write nothing
+		}
+		all, err := store.List[iam.AccountAlias](ctx, p.b)
+		if err != nil {
+			return cur, toStatus(ctx, err)
+		}
+		var seq int64
+		for _, v := range all {
+			seq = max(seq, v.Object.Seq)
+		}
+		a := iam.AccountAlias{
+			Meta: iam.Meta{UID: iam.NewUID(), Generation: 1},
+			Name: alias, Created: p.now().UTC(), Seq: seq + 1,
+		}
+		v, err := store.Create(ctx, p.b, a)
+		if !errors.Is(err, store.ErrExists) { // else stored meanwhile: read it
+			return store.Versioned[iam.AccountAlias]{Object: a, Version: v}, toStatus(ctx, err)
+		}
+	}
+	return store.Versioned[iam.AccountAlias]{}, toStatus(ctx, store.ErrConflict)
+}
+
+// claimAccountAlias points the claim of a, stored for pid, at a: held
+// reports whether it points at a, wrote whether this call made it. On a
+// loss, a is deleted once, best effort, only while the claim is unchanged.
+func (s *Server) claimAccountAlias(
+	ctx context.Context, pid string, a store.Versioned[iam.AccountAlias],
+) (held, wrote bool, err error) {
+	mine := iam.AccountAliasClaim{Name: a.Object.Name, Project: pid, UID: a.Object.UID}
+	for attempt := 1; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return false, false, toStatus(ctx, err) // the caller is gone; write nothing more
+		}
+		cur, err := store.Get[iam.AccountAliasClaim](ctx, s.b, mine.Name)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			_, err = store.Create(ctx, s.b, mine)
+		case err != nil:
+			return false, false, toStatus(ctx, err)
+		case cur.Object == mine:
+			return true, false, nil
+		default:
+			c := cur.Object
+			var other store.Versioned[iam.AccountAlias]
+			other, err = store.Get[iam.AccountAlias](ctx, s.project(c.Project).b, c.Name)
+			switch {
+			case errors.Is(err, store.ErrNotFound) || err == nil && other.Object.UID != c.UID:
+				_, err = store.Update(ctx, s.b, mine, cur.Version) // the claim points at no alias
+			case err != nil:
+				return false, false, toStatus(ctx, err)
+			default: // unscoped: a project view would prefix the claim key too
+				err = store.DeleteIf[iam.AccountAlias](ctx, s.b, pid+"/"+c.Name, a.Version, store.PreOf(cur))
+				if err != nil && !errors.Is(err, store.ErrNotFound) {
+					slog.Default().LogAttrs(ctx, slog.LevelWarn, "unclaimed account alias left",
+						slog.String("project", pid), slog.String("alias", c.Name), slog.String("error", err.Error()))
+				}
+				return false, false, nil
+			}
+		}
+		switch {
+		case err == nil:
+			return true, true, nil
+		case errors.Is(err, store.ErrConflict) || errors.Is(err, store.ErrExists):
+			if attempt >= maxAliasClaimAttempts {
+				return false, false, toStatus(ctx, store.ErrConflict)
+			}
+		default:
+			return false, false, toStatus(ctx, err)
+		}
+	}
+}
+
+// holdsAccountAlias reports whether the claim of stored alias a of
+// project pid points at it.
+func (s *Server) holdsAccountAlias(ctx context.Context, pid string, a iam.AccountAlias) (bool, error) {
+	c, err := store.Get[iam.AccountAliasClaim](ctx, s.b, a.Name)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	return err == nil && c.Object.Project == pid && c.Object.UID == a.UID, err
+}
+
+// dropOlderAliases deletes every alias of p before its latest held one
+// (aliasBefore), so p never ends without one. It runs even when the
+// request is canceled; a failure leaves them for the next create of p.
+func (s *Server) dropOlderAliases(ctx context.Context, p project) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	all, err := store.List[iam.AccountAlias](ctx, p.b)
+	var keep iam.AccountAlias
+	for _, v := range all {
+		held, herr := s.holdsAccountAlias(ctx, p.id, v.Object)
+		if herr != nil {
+			err = herr
+		} else if held && !aliasBefore(v.Object, keep) {
+			keep = v.Object
+		}
+	}
+	for _, v := range all {
+		if err == nil && keep.UID != "" && aliasBefore(v.Object, keep) {
+			if err = store.Delete[iam.AccountAlias](ctx, p.b, v.Object.Name, v.Version); errors.Is(err, store.ErrNotFound) {
+				err = nil
+			}
+		}
+	}
+	if err != nil {
+		slog.Default().LogAttrs(ctx, slog.LevelWarn, "replaced account alias left for the next create",
+			slog.String("project", p.id), slog.String("error", err.Error()))
+	}
+}
+
+// aliasBefore orders aliases by Seq, then name.
+func aliasBefore(a, b iam.AccountAlias) bool {
+	return a.Seq < b.Seq || a.Seq == b.Seq && a.Name < b.Name
 }
