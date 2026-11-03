@@ -29,10 +29,12 @@ type Simulation struct {
 	// when one applies (only those, as in AWS), else every allow when the
 	// action is allowed, else none.
 	Matched []MatchedStatement
-	// Missing are the condition keys of statements that match the action
-	// and resource but that the request context does not carry, each once,
-	// sorted (condition order in a document is not kept). Keys are
-	// case-insensitive, so they are reported lowercase.
+	// Missing are the context keys that statements matching the action
+	// need but that the request context does not carry: condition keys
+	// and policy variables in condition values of statements that match
+	// the resource, and policy variables in a Resource pattern that could
+	// match it once given. Each once, sorted (order in a document is not
+	// kept); keys are case-insensitive, so they are reported lowercase.
 	Missing []string
 	// Boundary reports whether a permissions boundary was given and,
 	// if so, AllowedByBoundary whether it allows the request.
@@ -71,19 +73,38 @@ func Simulate(r Request, identity []Named, boundary []Named) Simulation {
 }
 
 // matches returns the statements of set that apply to r, by effect, and
-// adds to missing the condition keys of statements matching the action
-// and resource that r lacks.
+// adds to missing the context keys that statements matching the action
+// need and r lacks (see Simulation.Missing).
 func matches(set []Named, r Request, missing *[]string) (deny, allow []MatchedStatement) {
+	add := func(keys ...string) {
+		for _, k := range keys {
+			if !slices.Contains(*missing, k) {
+				*missing = append(*missing, k)
+			}
+		}
+	}
 	for _, n := range set {
 		vars := n.Doc.Version == Version
 		for i, s := range n.Doc.Statements {
-			if !s.matchAction(r.Action) || !s.matchResource(r, vars) {
+			if !s.matchAction(r.Action) {
+				continue
+			}
+			for _, p := range s.Resources {
+				if pat, keys := r.unresolved(p); vars && len(keys) > 0 && Match(pat, r.Resource, false) {
+					add(keys...)
+				}
+			}
+			if !s.matchResource(r, vars) {
 				continue
 			}
 			for _, c := range s.Conditions {
-				k := strings.ToLower(c.Key)
-				if _, ok := r.value(k); !ok && !slices.Contains(*missing, k) {
-					*missing = append(*missing, k)
+				if _, ok := r.value(c.Key); !ok {
+					add(strings.ToLower(c.Key))
+				}
+				for _, v := range c.Values {
+					if _, keys := r.unresolved(v); vars {
+						add(keys...)
+					}
 				}
 			}
 			if !s.applies(r, vars) {

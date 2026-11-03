@@ -196,6 +196,40 @@ func (r Request) expand(s string, vars bool) (string, bool) {
 	}
 }
 
+// unresolved returns the policy variables of s (Version 2012-10-17) that
+// the request does not carry, lowercase, and s with each of them replaced
+// by "*" and the others substituted, so a caller can tell whether s could
+// match once they are given.
+func (r Request) unresolved(s string) (string, []string) {
+	var missing []string
+	var b strings.Builder
+	for {
+		i := strings.Index(s, "${")
+		j := -1
+		if i >= 0 {
+			j = strings.IndexByte(s[i:], '}')
+		}
+		if j < 0 {
+			b.WriteString(s)
+			return b.String(), missing
+		}
+		b.WriteString(s[:i])
+		name := s[i+2 : i+j]
+		switch v, ok := r.value(name); {
+		case name == "*" || name == "?" || name == "$":
+			b.WriteString(name)
+		case ok && len(v) == 1:
+			b.WriteString(v[0])
+		default:
+			b.WriteByte('*')
+			if !ok {
+				missing = append(missing, strings.ToLower(name))
+			}
+		}
+		s = s[i+j+1:]
+	}
+}
+
 func (s Statement) matchAction(a string) bool {
 	m := false
 	for _, p := range s.Actions {

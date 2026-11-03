@@ -45,6 +45,14 @@ func TestSimulate(t *testing.T) {
 	denyIAM := named(t, "boundary", doc(`{"Effect":"Allow","Action":"*","Resource":"*"}`,
 		`{"Effect":"Deny","Action":"iam:DeleteUser","Resource":"*"}`))
 	insecure := map[string][]string{"aws:SecureTransport": {"false"}}
+	prefix := named(t, "prefix", doc(`{"Effect":"Allow","Action":"s3:ListBucket","Resource":"*",`+
+		`"Condition":{"StringLike":{"s3:prefix":["home/${aws:username}/*","${aws:PrincipalTag/team}/*","pub${*}"]}}}`))
+	home := named(t, "home", doc(`{"Effect":"Allow","Action":"s3:GetObject",`+
+		`"Resource":"arn:vws:s3:::home/${aws:username}/${aws:userid}/*"}`))
+	literal := named(t, "literal", `{"Statement":{"Effect":"Allow","Action":"s3:GetObject",`+
+		`"Resource":"arn:vws:s3:::home/${aws:username}/*"}}`)
+	prefixCtx := map[string][]string{"s3:prefix": {"home/bob/k"}}
+	userCtx := map[string][]string{"aws:username": {"bob"}}
 
 	const (
 		allowed  = policy.DecisionAllowed
@@ -90,6 +98,26 @@ func TestSimulate(t *testing.T) {
 		{
 			"unrelated action reports no key", req("ec2:RunInstances", "*", nil), ns(deny), nil,
 			allowed, strs("deny#0"), nil, false, false,
+		},
+		{
+			"condition variables missing", req("s3:ListBucket", "*", prefixCtx), ns(prefix), nil,
+			implicit, nil, strs("aws:principaltag/team", "aws:username"), false, false,
+		},
+		{
+			"resource variables missing", req("s3:GetObject", "arn:vws:s3:::home/bob/AIDA1/k", nil), ns(home), nil,
+			implicit, nil, strs("aws:userid", "aws:username"), false, false,
+		},
+		{
+			"resource variable given", req("s3:GetObject", "arn:vws:s3:::home/bob/AIDA1/k", userCtx), ns(home), nil,
+			implicit, nil, strs("aws:userid"), false, false,
+		},
+		{
+			"resource variables of another resource", req("s3:GetObject", "arn:vws:s3:::logs/k", nil), ns(home), nil,
+			implicit, nil, nil, false, false,
+		},
+		{
+			"no variables before 2012-10-17", req("s3:GetObject", "arn:vws:s3:::home/x/k", nil), ns(literal), nil,
+			implicit, nil, nil, false, false,
 		},
 		{"boundary narrows", get, ns(all), ns(iamOnly), implicit, nil, nil, true, false},
 		{"boundary allows", getUser, ns(all), ns(iamOnly), allowed, strs("all#0"), nil, true, true},
