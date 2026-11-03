@@ -136,16 +136,21 @@ const maxAliasClaimAttempts = 8
 // A bad project id or an AccountAlias that is not 3 to 63 characters of
 // ^[a-z0-9]([a-z0-9]|-(?!-)){1,61}[a-z0-9]$ is ValidationError before
 // any store access. An alias the project already holds is
-// EntityAlreadyExists and changes nothing, so a retry after a lost
+// EntityAlreadyExists and changes nothing (but see the repeat below), so a retry after a lost
 // response is EntityAlreadyExists and of racing creates of one alias
 // exactly one succeeds. An alias another project holds (AWS: unique
 // across accounts) is EntityAlreadyExists too.
 //
 // An account has one alias, and AWS overwrites the previous one, so a
 // different alias of the project is deleted once the new one is stored:
-// LimitExceeded, which AWS also documents, never applies. Of racing
-// creates of different aliases in one project every one succeeds, as if
-// in the order of their creation times, and the latest stays.
+// LimitExceeded, which AWS also documents, never applies. Which alias is
+// the latest rests on stored state only, never on a replica clock: a
+// create numbers its alias one past the greatest Seq the project has
+// stored, so a create that starts after another returned replaces it. Of
+// racing creates of different aliases in one project every one succeeds
+// and exactly one stays (the greatest Seq, then name). A repeat of a
+// stored alias first deletes any alias it replaced that a create stopped
+// before deleting.
 //
 // Uniqueness across projects rests on one store create of the alias
 // claim (iam.AccountAliasClaim). The project's alias is written only
@@ -174,6 +179,9 @@ func (s *Server) createAccountAlias(ctx context.Context, pid, alias string) erro
 	taken := alreadyExists("The account alias " + alias + " already exists.")
 	_, err := store.Get[iam.AccountAlias](ctx, p.b, alias)
 	if err == nil {
+		// Maybe the repeat of a create that stopped before it deleted the
+		// alias it replaced: finish that first.
+		p.dropReplacedAliases(ctx)
 		return taken
 	}
 	if !errors.Is(err, store.ErrNotFound) {
@@ -184,13 +192,20 @@ func (s *Server) createAccountAlias(ctx context.Context, pid, alias string) erro
 		return err
 	}
 	defer cancel()
-	a := iam.AccountAlias{Meta: iam.Meta{UID: iam.NewUID(), Generation: 1}, Name: alias, Created: p.now().UTC()}
+	all, err := store.List[iam.AccountAlias](wctx, p.b)
+	if err != nil {
+		return toStatus(ctx, err)
+	}
+	a := iam.AccountAlias{
+		Meta: iam.Meta{UID: iam.NewUID(), Generation: 1}, Name: alias, Created: p.now().UTC(),
+		Seq: latestAlias(all).Seq + 1,
+	}
 	if _, err := store.Create(wctx, p.b, a); errors.Is(err, store.ErrExists) {
 		return taken
 	} else if err != nil {
 		return toStatus(ctx, err)
 	}
-	p.dropReplacedAliases(ctx, a)
+	p.dropReplacedAliases(ctx)
 	return nil
 }
 
@@ -262,22 +277,25 @@ func (s *Server) aliasHeld(ctx context.Context, c iam.AccountAliasClaim, now tim
 	return err == nil, err
 }
 
-// newerAlias reports whether a replaces b: it was created later, or at
-// the same time with a greater name, so racing creates agree on the
-// alias that stays.
-func newerAlias(a, b iam.AccountAlias) bool {
-	if !a.Created.Equal(b.Created) {
-		return a.Created.After(b.Created)
+// latestAlias returns the alias of all that a create made last: the
+// greatest Seq, then the greatest name, so racing creates agree on the
+// alias that stays. It is the zero AccountAlias when all is empty.
+func latestAlias(all []store.Versioned[iam.AccountAlias]) iam.AccountAlias {
+	var keep iam.AccountAlias
+	for _, v := range all {
+		if a := v.Object; a.Seq > keep.Seq || a.Seq == keep.Seq && a.Name > keep.Name {
+			keep = a
+		}
 	}
-	return a.Name > b.Name
+	return keep
 }
 
-// dropReplacedAliases deletes every alias of the project but the newest,
-// after mine was stored: AWS overwrites the previous alias. It runs even
-// when the request is canceled, as mine is already stored. A delete that
+// dropReplacedAliases deletes every alias of the project but the latest
+// (latestAlias): AWS overwrites the previous alias. It runs even when the
+// request is canceled, as the new alias is already stored. A delete that
 // fails leaves an alias the next create of the project deletes; it does
 // not fail the create, which has committed.
-func (p project) dropReplacedAliases(ctx context.Context, mine iam.AccountAlias) {
+func (p project) dropReplacedAliases(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	all, err := store.List[iam.AccountAlias](ctx, p.b)
@@ -286,12 +304,7 @@ func (p project) dropReplacedAliases(ctx context.Context, mine iam.AccountAlias)
 			slog.String("project", p.id), slog.String("error", err.Error()))
 		return
 	}
-	keep := mine
-	for _, v := range all {
-		if newerAlias(v.Object, keep) {
-			keep = v.Object
-		}
-	}
+	keep := latestAlias(all)
 	for _, v := range all {
 		if v.Object.Name == keep.Name {
 			continue

@@ -41,11 +41,14 @@ func ValidAccountAlias(s string) bool {
 // alias. A project holds at most MaxAccountAliases of them: creating one
 // (#88) replaces the one the project had, and an AccountAliasClaim keeps
 // it unique across projects, as AWS keeps it unique across accounts.
-// Deleting one is #89.
+// Deleting one is #89. Seq is one more than the greatest Seq of the
+// project's aliases stored when it was created, so a later create has a
+// greater Seq whatever the replicas' clocks say.
 type AccountAlias struct {
 	Meta
 	Name    string    `json:"name"`
 	Created time.Time `json:"created"`
+	Seq     int64     `json:"seq,omitempty"`
 }
 
 func (AccountAlias) Kind() Kind    { return KindAccountAlias }

@@ -215,9 +215,8 @@ func TestCreateAccountAliasConcurrent(t *testing.T) {
 }
 
 // TestCreateAccountAliasConcurrentReplace: creates of different aliases
-// racing in one project all succeed, as if in order, and exactly the one
-// that orders last (latest creation time, then greatest name) stays. On
-// both store backends.
+// racing in one project all succeed and exactly one alias stays. On both
+// store backends.
 func TestCreateAccountAliasConcurrentReplace(t *testing.T) {
 	for _, bk := range renameBackends {
 		t.Run(bk.name, func(t *testing.T) {
@@ -237,10 +236,54 @@ func TestCreateAccountAliasConcurrentReplace(t *testing.T) {
 					t.Fatalf("create corp-%02d: %v, want success", i, err)
 				}
 			}
-			if got := listedAliases(t, replicas[1], proj); !slices.Equal(got, []string{"corp-11"}) {
-				t.Fatalf("project lists %q, want only corp-11", got)
+			if got := listedAliases(t, replicas[1], proj); len(got) != 1 {
+				t.Fatalf("project lists %q, want exactly one alias", got)
 			}
 		})
+	}
+}
+
+// TestCreateAccountAliasSkewedClock: a create on a replica whose clock is
+// behind still replaces the alias an earlier create stored, as AWS
+// overwrites the previous alias: the latest create wins, not the latest
+// clock. On both store backends.
+func TestCreateAccountAliasSkewedClock(t *testing.T) {
+	for _, bk := range renameBackends {
+		t.Run(bk.name, func(t *testing.T) {
+			b := bk.open()
+			now := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
+			behind := now.Add(-time.Second)
+			e, slow := newEnvOn(t, b, &now), newEnvOn(t, b, &behind)
+			if err := e.api.CreateAccountAlias(t.Context(), proj, "zzz-corp"); err != nil {
+				t.Fatal(err)
+			}
+			if err := slow.api.CreateAccountAlias(t.Context(), proj, "aaa-corp"); err != nil {
+				t.Fatal(err)
+			}
+			if got := listedAliases(t, e, proj); !slices.Equal(got, []string{"aaa-corp"}) {
+				t.Fatalf("project lists %q, want the later create aaa-corp", got)
+			}
+		})
+	}
+}
+
+// TestCreateAccountAliasRepairs: a repeat of a create that stopped after
+// storing its alias and before deleting the one it replaced deletes that
+// one and is EntityAlreadyExists.
+func TestCreateAccountAliasRepairs(t *testing.T) {
+	b := memstore.New()
+	now := time.Now().UTC()
+	sb := store.Scoped(b, proj)
+	for i, n := range []string{"new-corp", "old-corp"} {
+		a := iam.AccountAlias{Meta: iam.Meta{UID: iam.NewUID(), Generation: 1}, Name: n, Created: now, Seq: int64(2 - i)}
+		if _, err := store.Create(t.Context(), sb, a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e := newEnvOn(t, b, &now)
+	wantAWS(t, e.api.CreateAccountAlias(t.Context(), proj, "new-corp"), codes.AlreadyExists, "EntityAlreadyExists")
+	if got := listedAliases(t, e, proj); !slices.Equal(got, []string{"new-corp"}) {
+		t.Fatalf("project lists %q, want only new-corp", got)
 	}
 }
 
