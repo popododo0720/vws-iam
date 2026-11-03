@@ -222,7 +222,10 @@ func (s *Server) claimAccountAlias(
 		if err := ctx.Err(); err != nil {
 			return nil, nil, toStatus(ctx, err) // the caller is gone; write nothing
 		}
-		deadline := time.Now().Add(aliasClaimLease / 2)
+		// Every deadline counts from before the claim read, so a slow read
+		// shortens the write window instead of moving it past the lease.
+		start := time.Now()
+		deadline := start.Add(aliasClaimLease / 2)
 		now := s.now().UTC()
 		c := iam.AccountAliasClaim{Name: alias, Project: pid, Claimed: now}
 		cur, err := store.Get[iam.AccountAliasClaim](ctx, s.b, alias)
@@ -244,7 +247,7 @@ func (s *Server) claimAccountAlias(
 			// pid's own claim, written recently: no other project can take
 			// it before Claimed+aliasClaimLease, so write under it as is.
 			left := cur.Object.Claimed.Add(aliasClaimLease / 2).Sub(now)
-			wctx, cancel := context.WithDeadline(ctx, time.Now().Add(left))
+			wctx, cancel := context.WithDeadline(ctx, start.Add(left))
 			return wctx, cancel, nil
 		default:
 			_, err = store.Update(ctx, s.b, c, cur.Version)

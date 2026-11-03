@@ -367,3 +367,48 @@ func TestCreateAccountAliasContention(t *testing.T) {
 	wantAWS(t, err, codes.Aborted, "ConcurrentModification")
 	aliasGone(t, b, proj, "example-corp")
 }
+
+// slowClaimRead delays every read of an account alias claim by delay and
+// records the deadline of the alias write.
+type slowClaimRead struct {
+	store.Backend
+	delay    time.Duration
+	deadline time.Time
+}
+
+func (s *slowClaimRead) Get(ctx context.Context, k iam.Kind, key string) (store.Entry, error) {
+	if k == iam.KindAccountAliasClaim {
+		time.Sleep(s.delay)
+	}
+	return s.Backend.Get(ctx, k, key)
+}
+
+func (s *slowClaimRead) Create(ctx context.Context, k iam.Kind, key string, spec []byte) (string, error) {
+	if k == iam.KindAccountAlias {
+		s.deadline, _ = ctx.Deadline()
+	}
+	return s.Backend.Create(ctx, k, key, spec)
+}
+
+// TestCreateAccountAliasSlowClaimRead: a slow read of the project's own
+// fresh claim shortens the alias write window, which still ends half a
+// lease after the claim was written, measured from before the read.
+func TestCreateAccountAliasSlowClaimRead(t *testing.T) {
+	b := memstore.New()
+	now := time.Now().UTC()
+	claimed := now.Add(-time.Second)
+	if _, err := store.Create(t.Context(), b, iam.AccountAliasClaim{Name: "example-corp", Project: proj, Claimed: claimed}); err != nil {
+		t.Fatal(err)
+	}
+	slow := &slowClaimRead{Backend: b, delay: 200 * time.Millisecond}
+	e := newEnvOn(t, slow, &now)
+	start := time.Now()
+	if err := e.api.CreateAccountAlias(t.Context(), proj, "example-corp"); err != nil {
+		t.Fatal(err)
+	}
+	// Half of grpcapi.aliasClaimLease (60s) after the claim, a second old,
+	// with slack below the read delay.
+	if latest := start.Add(29*time.Second + slow.delay/2); slow.deadline.After(latest) {
+		t.Fatalf("alias write deadline %v after %v: the claim read extended it", slow.deadline, latest)
+	}
+}
