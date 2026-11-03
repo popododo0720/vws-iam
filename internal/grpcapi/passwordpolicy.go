@@ -97,22 +97,36 @@ func (in passwordPolicyInput) policy() (iam.PasswordPolicy, error) {
 		min, max int
 		dst      *int
 	}{
-		{"minimumPasswordLength", in.MinimumPasswordLength, iam.MinPasswordLength, iam.MaxPasswordLength, &p.MinimumPasswordLength},
+		{
+			"minimumPasswordLength", in.MinimumPasswordLength,
+			iam.MinPasswordLength, iam.MaxPasswordLength, &p.MinimumPasswordLength,
+		},
 		{"maxPasswordAge", in.MaxPasswordAge, 1, iam.MaxPasswordAgeDays, &p.MaxPasswordAge},
-		{"passwordReusePrevention", in.PasswordReusePrevention, 1, iam.MaxPasswordReusePrevention, &p.PasswordReusePrevention},
+		{
+			"passwordReusePrevention", in.PasswordReusePrevention,
+			1, iam.MaxPasswordReusePrevention, &p.PasswordReusePrevention,
+		},
 	} {
 		if f.v == nil {
 			continue
 		}
 		switch {
 		case *f.v < f.min:
-			return p, invalidSpec(fmt.Sprintf("1 validation error detected: Value '%d' at '%s' failed to satisfy constraint: Member must have value greater than or equal to %d", *f.v, f.name, f.min))
+			return p, rangeError(*f.v, f.name, "greater than or equal to", f.min)
 		case *f.v > f.max:
-			return p, invalidSpec(fmt.Sprintf("1 validation error detected: Value '%d' at '%s' failed to satisfy constraint: Member must have value less than or equal to %d", *f.v, f.name, f.max))
+			return p, rangeError(*f.v, f.name, "less than or equal to", f.max)
 		}
 		*f.dst = *f.v
 	}
 	return p, nil
+}
+
+// rangeError is the AWS ValidationError of an integer parameter outside
+// its range.
+func rangeError(v int, param, rel string, bound int) error {
+	return invalidSpec(fmt.Sprintf(
+		"1 validation error detected: Value '%d' at '%s' failed to satisfy constraint: Member must have value %s %d",
+		v, param, rel, bound))
 }
 
 // samePasswordPolicy reports whether a and b set the same rules.
@@ -173,18 +187,22 @@ func (s *Server) updateAccountPasswordPolicy(ctx context.Context, pid string, in
 		next := want
 		next.Updated = s.now().UTC()
 		if found {
-			next.Meta.UID, next.Generation, next.Labels = cur.Object.UID, cur.Object.Generation+1, cur.Object.Labels
+			next.UID, next.Generation, next.Labels = cur.Object.UID, cur.Object.Generation+1, cur.Object.Labels
 			_, err = store.Update(ctx, p.b, next, cur.Version)
 		} else {
-			next.Meta.UID, next.Generation = iam.NewUID(), 1
+			next.UID, next.Generation = iam.NewUID(), 1
 			_, err = store.Create(ctx, p.b, next)
 		}
+		// A lost create (ErrExists), a stale version (ErrConflict) or a
+		// policy deleted in between (ErrNotFound) is read again.
+		raced := errors.Is(err, store.ErrConflict) || errors.Is(err, store.ErrExists) ||
+			errors.Is(err, store.ErrNotFound)
 		switch {
 		case err == nil:
 			return nil
-		case (errors.Is(err, store.ErrConflict) || errors.Is(err, store.ErrExists) || errors.Is(err, store.ErrNotFound)) && attempt < maxPutAttempts:
+		case raced && attempt < maxPutAttempts:
 			continue
-		case errors.Is(err, store.ErrExists) || errors.Is(err, store.ErrNotFound):
+		case raced:
 			return toStatus(ctx, store.ErrConflict)
 		default:
 			return toStatus(ctx, err)

@@ -137,7 +137,8 @@ func TestUpdateAccountPasswordPolicyValidation(t *testing.T) {
 	} {
 		err := e.api.UpdateAccountPasswordPolicy(ctx, proj, tc.in)
 		wantAWS(t, err, codes.InvalidArgument, "ValidationError")
-		if !strings.Contains(err.Error(), tc.param) || !strings.Contains(err.Error(), "failed to satisfy constraint") {
+		msg := err.Error()
+		if !strings.Contains(msg, tc.param) || !strings.Contains(msg, "failed to satisfy constraint") {
 			t.Fatalf("%+v: message %q, want the AWS constraint message naming %s", tc.in, err, tc.param)
 		}
 	}
@@ -156,7 +157,9 @@ type failingUpdate struct {
 	err error
 }
 
-func (f failingUpdate) Update(ctx context.Context, k iam.Kind, key string, spec []byte, version string) (string, error) {
+func (f failingUpdate) Update(
+	ctx context.Context, k iam.Kind, key string, spec []byte, version string,
+) (string, error) {
 	if k == f.k {
 		return "", f.err
 	}
@@ -307,12 +310,16 @@ func (c *changingPolicyBeforeWrite) interfere(ctx context.Context, k iam.Kind) {
 	}
 }
 
-func (c *changingPolicyBeforeWrite) Create(ctx context.Context, k iam.Kind, key string, spec []byte) (string, error) {
+func (c *changingPolicyBeforeWrite) Create(
+	ctx context.Context, k iam.Kind, key string, spec []byte,
+) (string, error) {
 	c.interfere(ctx, k)
 	return c.Backend.Create(ctx, k, key, spec)
 }
 
-func (c *changingPolicyBeforeWrite) Update(ctx context.Context, k iam.Kind, key string, spec []byte, version string) (string, error) {
+func (c *changingPolicyBeforeWrite) Update(
+	ctx context.Context, k iam.Kind, key string, spec []byte, version string,
+) (string, error) {
 	c.interfere(ctx, k)
 	return c.Backend.Update(ctx, k, key, spec, version)
 }
@@ -338,7 +345,8 @@ func TestUpdateAccountPasswordPolicyStaleRead(t *testing.T) {
 				AllowUsersToChangePassword: true, MaxPasswordAge: 90, PasswordReusePrevention: 12,
 			})
 			if b.n > 0 || got.Generation != 2 {
-				t.Fatalf("%d interferences left, generation %d; want both done and this update on the other writer's create", b.n, got.Generation)
+				t.Fatalf("%d interferences left, generation %d; want both done and one update after them",
+					b.n, got.Generation)
 			}
 
 			b = &changingPolicyBeforeWrite{Backend: inner, n: 1 << 30, t: t}
