@@ -224,6 +224,12 @@ func (s *Server) CreateAccountAlias(ctx context.Context, project, alias string) 
 	return s.createAccountAlias(ctx, project, alias)
 }
 
+// DeleteAccountPasswordPolicy is IAM DeleteAccountPasswordPolicy, which
+// vws-proto does not carry yet (#84).
+func (s *Server) DeleteAccountPasswordPolicy(ctx context.Context, project string) error {
+	return s.deleteAccountPasswordPolicy(ctx, project)
+}
+
 // SimulateInput, ContextEntry and SimulationPage are the
 // SimulatePrincipalPolicy request and result types.
 type (
