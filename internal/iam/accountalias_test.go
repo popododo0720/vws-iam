@@ -39,3 +39,19 @@ func TestAccountAliasValidate(t *testing.T) {
 		}
 	}
 }
+
+func TestAccountAliasClaimValidate(t *testing.T) {
+	if err := (iam.AccountAliasClaim{Name: "example-corp", Project: "proj-a", UID: "a-1"}).Validate(); err != nil {
+		t.Errorf("Validate: %v", err)
+	}
+	for _, c := range []iam.AccountAliasClaim{
+		{Name: "a--b", Project: "proj-a", UID: "a-1"},
+		{Name: "example-corp", Project: "Bad_Project", UID: "a-1"},
+		{Name: "example-corp", Project: "", UID: "a-1"},
+		{Name: "example-corp", Project: "proj-a"},
+	} {
+		if err := c.Validate(); !errors.Is(err, iam.ErrInvalid) {
+			t.Errorf("Validate(%+v) = %v, want ErrInvalid", c, err)
+		}
+	}
+}

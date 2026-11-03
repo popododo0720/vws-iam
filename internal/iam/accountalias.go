@@ -38,13 +38,14 @@ func ValidAccountAlias(s string) bool {
 }
 
 // AccountAlias is the alias of an account (a VWS project), keyed by the
-// alias. A project holds at most MaxAccountAliases of them. Creating one
-// (which must also keep an alias unique across projects, as AWS keeps it
-// unique across accounts) is #88; deleting one is #89.
+// alias. A project holds at most MaxAccountAliases of them: a create
+// (#88) replaces the previous one, ordered by Seq (no clocks), and an
+// AccountAliasClaim keeps it unique across projects; deleting is #89.
 type AccountAlias struct {
 	Meta
 	Name    string    `json:"name"`
 	Created time.Time `json:"created"`
+	Seq     int64     `json:"seq,omitempty"`
 }
 
 func (AccountAlias) Kind() Kind    { return KindAccountAlias }
@@ -53,6 +54,28 @@ func (a AccountAlias) Key() string { return a.Name }
 func (a AccountAlias) Validate() error {
 	if !ValidAccountAlias(a.Name) {
 		return invalid("account alias %q", a.Name)
+	}
+	return nil
+}
+
+// AccountAliasClaim points account alias Name, across every project, at
+// the one stored AccountAlias of Project with UID: a project holds an
+// alias only while its claim points at it. It is stored outside any
+// project, keyed by the alias, and never deleted; CreateAccountAlias
+// writes it by compare-and-swap, and repoints it only when it no longer
+// points at a stored alias. A claim holds no secret.
+type AccountAliasClaim struct {
+	Name    string `json:"name"`
+	Project string `json:"project"`
+	UID     string `json:"uid"`
+}
+
+func (AccountAliasClaim) Kind() Kind    { return KindAccountAliasClaim }
+func (c AccountAliasClaim) Key() string { return c.Name }
+
+func (c AccountAliasClaim) Validate() error {
+	if !ValidAccountAlias(c.Name) || !ValidProject(c.Project) || c.UID == "" {
+		return invalid("account alias claim %q", c.Name)
 	}
 	return nil
 }
