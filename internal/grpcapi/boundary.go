@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/store"
@@ -272,20 +271,12 @@ const (
 // boundaryPolicy reports NoSuchEntity unless arn names a managed policy of
 // project p, path included, as the authorizer resolves attached policies.
 func (p project) boundaryPolicy(ctx context.Context, arn string) error {
-	missing := notFound("Policy " + arn + " does not exist or is not attachable.")
-	id := arn[strings.LastIndexByte(arn, '/')+1:]
-	if !strings.HasPrefix(arn, iam.ARN("iam", "", p.id, "policy/")) || !iam.ValidPolicyName(id) {
-		return missing
-	}
-	pol, err := store.Get[iam.Policy](ctx, p.b, id)
-	if errors.Is(err, store.ErrNotFound) {
-		return missing
-	}
+	found, err := p.managedPolicy(ctx, arn)
 	if err != nil {
 		return toStatus(ctx, err)
 	}
-	if iam.PolicyARN(p.id, pol.Object) != arn {
-		return missing
+	if !found {
+		return notFound("Policy " + arn + " does not exist or is not attachable.")
 	}
 	return nil
 }
