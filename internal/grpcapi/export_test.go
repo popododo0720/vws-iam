@@ -298,3 +298,9 @@ func (s *Server) GetAccountAuthorizationDetails(
 ) (AuthorizationDetails, error) {
 	return s.getAccountAuthorizationDetails(ctx, project, filter, marker, maxItems)
 }
+
+// GetAccountSummary is IAM GetAccountSummary, which vws-proto does not
+// carry yet (#80).
+func (s *Server) GetAccountSummary(ctx context.Context, project string) (map[string]int, error) {
+	return s.getAccountSummary(ctx, project)
+}
