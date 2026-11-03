@@ -2,6 +2,7 @@ package grpcapi
 
 import (
 	"context"
+	"errors"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/store"
@@ -61,4 +62,57 @@ func (s *Server) listAccountAliases(ctx context.Context, pid, marker string, max
 	var out accountAliasPage
 	out.Aliases, out.IsTruncated, out.Marker = pageByFoldedName(names, func(n string) string { return n }, maxItems)
 	return out, nil
+}
+
+// deleteAccountAlias is IAM DeleteAccountAlias: it deletes account alias
+// alias of project pid.
+//
+// A bad project id or an AccountAlias that is not 3 to 63 characters of
+// ^[a-z0-9]([a-z0-9]|-(?!-)){1,61}[a-z0-9]$ is ValidationError before any
+// store access. An alias the project does not hold (also one another
+// project holds) is NoSuchEntity, so a retry after a lost response is
+// NoSuchEntity, as in AWS, and changes nothing. The delete is conditional
+// on the version read: when the alias changes in between, it is read
+// again, up to maxDeleteAttempts times, and then ConcurrentModification;
+// a request that was canceled or whose deadline passed deletes nothing.
+// LimitExceeded, which AWS also documents, never applies: a delete frees
+// quota. Any other store failure is an internal error, which console-api
+// answers as ServiceFailure. Authorization (iam:DeleteAccountAlias) is
+// console-api's, as for the other IAM writes.
+//
+// TODO(#89): serve this as an RPC once vws-proto carries it
+// (popododo0720/vws-proto#128).
+func (s *Server) deleteAccountAlias(ctx context.Context, pid, alias string) error {
+	if !iam.ValidProject(pid) {
+		return invalidID("project " + quote(pid) + " is not a project id")
+	}
+	if !iam.ValidAccountAlias(alias) {
+		return invalidSpec("accountAlias must be 3 to 63 lowercase letters, digits and hyphens, " +
+			"without a hyphen at either end or two in a row")
+	}
+	p := s.project(pid)
+	noAlias := notFound("The account alias " + alias + " cannot be found.")
+	for attempt := 1; ; attempt++ {
+		cur, err := store.Get[iam.AccountAlias](ctx, p.b, alias)
+		if errors.Is(err, store.ErrNotFound) {
+			return noAlias
+		}
+		if err != nil {
+			return toStatus(ctx, err)
+		}
+		if err := ctx.Err(); err != nil {
+			return toStatus(ctx, err) // the caller is gone; delete nothing
+		}
+		err = store.Delete[iam.AccountAlias](ctx, p.b, alias, cur.Version)
+		switch {
+		case err == nil:
+			return nil
+		case errors.Is(err, store.ErrConflict) && attempt < maxDeleteAttempts:
+			continue
+		case errors.Is(err, store.ErrNotFound):
+			return noAlias
+		default:
+			return toStatus(ctx, err)
+		}
+	}
 }
