@@ -304,3 +304,17 @@ func (s *Server) GetAccountAuthorizationDetails(
 func (s *Server) GetAccountSummary(ctx context.Context, project string) (map[string]int, error) {
 	return s.getAccountSummary(ctx, project)
 }
+
+// RoleTagPage is one page of ListRoleTags.
+type RoleTagPage = roleTagPage
+
+// RoleTag is one tag of a RoleTagPage.
+type RoleTag = roleTag
+
+// ListRoleTags is IAM ListRoleTags, which vws-proto does not carry yet
+// (#73).
+func (s *Server) ListRoleTags(
+	ctx context.Context, project, roleName, marker string, maxItems int,
+) (RoleTagPage, error) {
+	return s.listRoleTags(ctx, project, roleName, marker, maxItems)
+}
