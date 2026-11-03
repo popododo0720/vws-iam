@@ -369,10 +369,11 @@ func TestCreateAccountAliasContention(t *testing.T) {
 // first create or update of kind k (a slow store, a racing replica).
 type aliasHooks struct {
 	store.Backend
-	k     iam.Kind
-	delay time.Duration
-	write func(ctx context.Context)
-	once  sync.Once
+	k        iam.Kind
+	delay    time.Duration
+	write    func()
+	once     sync.Once
+	deadline time.Time // of the last create or update of kind k
 }
 
 func (h *aliasHooks) Get(ctx context.Context, k iam.Kind, key string) (store.Entry, error) {
@@ -384,7 +385,8 @@ func (h *aliasHooks) Get(ctx context.Context, k iam.Kind, key string) (store.Ent
 
 func (h *aliasHooks) hook(ctx context.Context, k iam.Kind) {
 	if k == h.k {
-		h.once.Do(func() { h.write(ctx) })
+		h.deadline, _ = ctx.Deadline()
+		h.once.Do(h.write)
 	}
 }
 
@@ -408,18 +410,15 @@ func TestCreateAccountAliasSlowClaimRead(t *testing.T) {
 	if _, err := store.Create(t.Context(), b, own); err != nil {
 		t.Fatal(err)
 	}
-	const delay = 200 * time.Millisecond
-	var deadline time.Time
-	setDeadline := func(ctx context.Context) { deadline, _ = ctx.Deadline() }
-	h := &aliasHooks{Backend: b, k: iam.KindAccountAlias, delay: delay, write: setDeadline}
+	h := &aliasHooks{Backend: b, k: iam.KindAccountAlias, delay: 200 * time.Millisecond, write: func() {}}
 	e := newEnvOn(t, h, &now)
 	start := time.Now()
 	if err := e.api.CreateAccountAlias(t.Context(), proj, "example-corp"); err != nil {
 		t.Fatal(err)
 	}
 	// Half of grpcapi.aliasClaimLease (60s) after the claim, plus slack.
-	if latest := start.Add(29*time.Second + delay/2); deadline.After(latest) {
-		t.Fatalf("alias write deadline %v after %v: the claim read extended it", deadline, latest)
+	if latest := start.Add(29*time.Second + h.delay/2); h.deadline.After(latest) {
+		t.Fatalf("alias write deadline %v after %v: the claim read extended it", h.deadline, latest)
 	}
 }
 
@@ -428,8 +427,8 @@ func TestCreateAccountAliasSlowClaimRead(t *testing.T) {
 func TestCreateAccountAliasClaimTakenDuringWrite(t *testing.T) {
 	b := memstore.New()
 	now := time.Now().UTC()
-	h := &aliasHooks{Backend: b, k: iam.KindAccountAlias, write: func(ctx context.Context) {
-		if _, err := store.Mutate(ctx, b, "example-corp", func(c *iam.AccountAliasClaim) error {
+	h := &aliasHooks{Backend: b, k: iam.KindAccountAlias, write: func() {
+		if _, err := store.Mutate(t.Context(), b, "example-corp", func(c *iam.AccountAliasClaim) error {
 			c.Project = "other"
 			return nil
 		}); err != nil {
@@ -450,8 +449,7 @@ func TestCreateAccountAliasTakeoverRace(t *testing.T) {
 	if _, err := store.Create(t.Context(), b, stale); err != nil {
 		t.Fatal(err)
 	}
-	seed := func(context.Context) { seedAlias(t, b, proj, "example-corp") }
-	h := &aliasHooks{Backend: b, k: iam.KindAccountAliasClaim, write: seed}
+	h := &aliasHooks{Backend: b, k: iam.KindAccountAliasClaim, write: func() { seedAlias(t, b, proj, "example-corp") }}
 	err := newEnvOn(t, h, &now).api.CreateAccountAlias(t.Context(), "other", "example-corp")
 	wantAWS(t, err, codes.AlreadyExists, "EntityAlreadyExists")
 	aliasGone(t, b, "other", "example-corp")
