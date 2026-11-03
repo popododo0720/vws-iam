@@ -269,3 +269,12 @@ type PolicyEntities = policyEntities
 func (s *Server) ListEntitiesForPolicy(ctx context.Context, project string, q EntitiesQuery) (PolicyEntities, error) {
 	return s.listEntitiesForPolicy(ctx, project, q)
 }
+
+// PasswordPolicyInput is the UpdateAccountPasswordPolicy request.
+type PasswordPolicyInput = passwordPolicyInput
+
+// UpdateAccountPasswordPolicy is IAM UpdateAccountPasswordPolicy, which
+// vws-proto does not carry yet (#83).
+func (s *Server) UpdateAccountPasswordPolicy(ctx context.Context, project string, in PasswordPolicyInput) error {
+	return s.updateAccountPasswordPolicy(ctx, project, in)
+}
