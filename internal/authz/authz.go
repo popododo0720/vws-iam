@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -101,10 +103,16 @@ func (a *Authorizer) managed(ctx context.Context, arn string) (policy.Named, err
 	if err != nil {
 		return policy.Named{}, fmt.Errorf("stored policy %q: %w", arn, err)
 	}
-	return policy.Named{Name: arn, Doc: d}, nil
+	return policy.Named{Name: arn, Doc: d, ID: p.Object.Name, Type: "user-managed"}, nil
 }
 
-func (a *Authorizer) collect(ctx context.Context, owner string, attached []string, inline map[string]string, out []policy.Named) ([]policy.Named, error) {
+// source is the user, group or role a policy is attached to: its
+// simulator policy type ("user", "group" or "role"), name and ARN.
+type source struct{ kind, name, arn string }
+
+func (a *Authorizer) collect(
+	ctx context.Context, src source, attached []string, inline map[string]string, out []policy.Named,
+) ([]policy.Named, error) {
 	for _, arn := range attached {
 		n, err := a.managed(ctx, arn)
 		if err != nil {
@@ -112,14 +120,17 @@ func (a *Authorizer) collect(ctx context.Context, owner string, attached []strin
 		}
 		out = append(out, n)
 	}
-	for name, doc := range inline {
+	for _, name := range slices.Sorted(maps.Keys(inline)) {
 		// Inline documents are held to the aggregate size quota on write,
 		// not to policy.MaxSize, so parse them the way the write path did.
-		d, err := policy.ParseInline(doc)
+		d, err := policy.ParseInline(inline[name])
 		if err != nil {
-			return nil, fmt.Errorf("inline policy %s/%s: %w", owner, name, err)
+			return nil, fmt.Errorf("inline policy %s/%s: %w", src.arn, name, err)
 		}
-		out = append(out, policy.Named{Name: owner + ":inline/" + name, Doc: d})
+		out = append(out, policy.Named{
+			Name: src.arn + ":inline/" + name, Doc: d,
+			ID: src.kind + "_" + src.name + "_" + name, Type: src.kind,
+		})
 	}
 	return out, nil
 }
@@ -137,7 +148,8 @@ func (a *Authorizer) IdentityPolicies(ctx context.Context, p Principal) ([]polic
 			return nil, "", err
 		}
 		arn := iam.UserARN(a.account, u.Object)
-		if out, err = a.collect(ctx, arn, u.Object.AttachedPolicies, u.Object.InlinePolicies, out); err != nil {
+		src := source{"user", u.Object.Name, arn}
+		if out, err = a.collect(ctx, src, u.Object.AttachedPolicies, u.Object.InlinePolicies, out); err != nil {
 			return nil, "", err
 		}
 		// While a rename is in flight some groups may still list the
@@ -164,7 +176,8 @@ func (a *Authorizer) IdentityPolicies(ctx context.Context, p Principal) ([]polic
 			}
 		}
 		for _, g := range groups {
-			if out, err = a.collect(ctx, iam.GroupARN(a.account, g), g.AttachedPolicies, g.InlinePolicies, out); err != nil {
+			src := source{"group", g.Name, iam.GroupARN(a.account, g)}
+			if out, err = a.collect(ctx, src, g.AttachedPolicies, g.InlinePolicies, out); err != nil {
 				return nil, "", err
 			}
 		}
@@ -178,10 +191,33 @@ func (a *Authorizer) IdentityPolicies(ctx context.Context, p Principal) ([]polic
 			return nil, "", err
 		}
 		arn := iam.RoleARN(a.account, r.Object)
-		out, err = a.collect(ctx, arn, r.Object.AttachedPolicies, r.Object.InlinePolicies, out)
+		out, err = a.collect(ctx, source{"role", r.Object.Name, arn}, r.Object.AttachedPolicies, r.Object.InlinePolicies, out)
 		return out, arn, err
 	}
 	return nil, "", fmt.Errorf("principal kind %d: %w", p.Kind, ErrNoSuchEntity)
+}
+
+// GroupPolicies returns the identity policies of group name and its ARN,
+// for the policy simulator: a group is not a principal, so Authorize
+// never evaluates one.
+func (a *Authorizer) GroupPolicies(ctx context.Context, name string) ([]policy.Named, string, error) {
+	g, err := store.Get[iam.Group](ctx, a.b, name)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, "", fmt.Errorf("group %q: %w", name, ErrNoSuchEntity)
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	arn := iam.GroupARN(a.account, g.Object)
+	src := source{"group", g.Object.Name, arn}
+	out, err := a.collect(ctx, src, g.Object.AttachedPolicies, g.Object.InlinePolicies, nil)
+	return out, arn, err
+}
+
+// ManagedPolicy returns managed policy arn of this project, parsed; an
+// unknown one is ErrNoSuchEntity.
+func (a *Authorizer) ManagedPolicy(ctx context.Context, arn string) (policy.Named, error) {
+	return a.managed(ctx, arn)
 }
 
 // Authorize decides whether p may perform action on resource. reqCtx
