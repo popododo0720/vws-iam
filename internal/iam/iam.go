@@ -32,13 +32,15 @@ const (
 	KindInstanceProfile Kind = "IamInstanceProfile"
 	// KindAccountAlias is an account alias (#90).
 	KindAccountAlias Kind = "IamAccountAlias"
+	// KindAccountAliasClaim reserves an account alias across projects (#88).
+	KindAccountAliasClaim Kind = "IamAccountAliasClaim"
 )
 
 // Kinds lists every stored kind.
 var Kinds = []Kind{
 	KindUser, KindGroup, KindRole, KindPolicy, KindAccessKey, KindMfaDevice,
 	KindKeyIndex, KindSession, KindOperation, KindReplay, KindAttempt, KindMemberLock, KindFidoDevice,
-	KindInstanceProfile, KindAccountAlias,
+	KindInstanceProfile, KindAccountAlias, KindAccountAliasClaim,
 }
 
 // Meta is the resource envelope every API resource carries.

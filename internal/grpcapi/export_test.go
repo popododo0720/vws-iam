@@ -217,3 +217,9 @@ func (s *Server) ListAccountAliases(
 func (s *Server) DeleteAccountAlias(ctx context.Context, project, alias string) error {
 	return s.deleteAccountAlias(ctx, project, alias)
 }
+
+// CreateAccountAlias is IAM CreateAccountAlias, which vws-proto does not
+// carry yet (#88).
+func (s *Server) CreateAccountAlias(ctx context.Context, project, alias string) error {
+	return s.createAccountAlias(ctx, project, alias)
+}
