@@ -287,6 +287,9 @@ func (s Statement) applies(r Request, vars bool) bool {
 type Named struct {
 	Name string
 	Doc  *Document
+	// ID and Type name the policy in simulator results (AWS
+	// SourcePolicyId and SourcePolicyType); evaluation ignores them.
+	ID, Type string
 }
 
 // Decision is the result of an evaluation.
