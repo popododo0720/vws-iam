@@ -18,8 +18,7 @@ import (
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
 )
 
-// aliasClaimLease outlasts grpcapi.aliasClaimLease (60s).
-const aliasClaimLease = 61 * time.Second
+const alias = "example-corp"
 
 // listedAliases returns the aliases ListAccountAliases lists for pid.
 func listedAliases(t *testing.T, e *env, pid string) []string {
@@ -31,20 +30,61 @@ func listedAliases(t *testing.T, e *env, pid string) []string {
 	return pg.Aliases
 }
 
-// storedClaim returns the claim of alias, failing unless it is stored.
-func storedClaim(t *testing.T, b store.Backend, alias string) store.Versioned[iam.AccountAliasClaim] {
+// wantHolder fails unless the claim of name names pid and, of projects
+// pids, exactly pid lists name.
+func wantHolder(t *testing.T, e *env, b store.Backend, name, pid string, pids ...string) {
 	t.Helper()
-	v, err := store.Get[iam.AccountAliasClaim](t.Context(), b, alias)
-	if err != nil {
-		t.Fatalf("claim of %s: %v, want stored", alias, err)
+	c, err := store.Get[iam.AccountAliasClaim](t.Context(), b, name)
+	if err != nil || c.Object.Project != pid {
+		t.Fatalf("claim of %s: %+v, %v, want held by %s", name, c.Object, err, pid)
 	}
-	return v
+	for _, p := range pids {
+		if got := listedAliases(t, e, p); slices.Contains(got, name) != (p == pid) {
+			t.Fatalf("%s lists %q; only %s should list %s", p, got, pid, name)
+		}
+	}
+}
+
+// stepStore calls at before every Get, Create, Update and DeleteIf, so a
+// test can run another request at an exact step or fail the step.
+type stepStore struct {
+	store.Backend
+	at func(op string, k iam.Kind, key string) error
+}
+
+func (s stepStore) Get(ctx context.Context, k iam.Kind, key string) (store.Entry, error) {
+	if err := s.at("get", k, key); err != nil {
+		return store.Entry{}, err
+	}
+	return s.Backend.Get(ctx, k, key)
+}
+
+func (s stepStore) Create(ctx context.Context, k iam.Kind, key string, spec []byte) (string, error) {
+	if err := s.at("create", k, key); err != nil {
+		return "", err
+	}
+	return s.Backend.Create(ctx, k, key, spec)
+}
+
+func (s stepStore) Update(ctx context.Context, k iam.Kind, key string, spec []byte, version string) (string, error) {
+	if err := s.at("update", k, key); err != nil {
+		return "", err
+	}
+	return s.Backend.Update(ctx, k, key, spec, version)
+}
+
+func (s stepStore) DeleteIf(ctx context.Context, k iam.Kind, key, version string, pre store.Pre) error {
+	if err := s.at("deleteIf", k, key); err != nil {
+		return err
+	}
+	return s.Backend.DeleteIf(ctx, k, key, version, pre)
 }
 
 // TestCreateAccountAlias: the alias is stored with the request time and
 // claimed for the project, every replica lists it, a repeat is
-// EntityAlreadyExists and changes nothing, and another project creating
-// it is EntityAlreadyExists and gets no alias. On both store backends.
+// EntityAlreadyExists and keeps the alias, and another project creating
+// it is EntityAlreadyExists, keeps its own alias and stores none. On both
+// store backends.
 func TestCreateAccountAlias(t *testing.T) {
 	for _, bk := range renameBackends {
 		t.Run(bk.name, func(t *testing.T) {
@@ -52,22 +92,16 @@ func TestCreateAccountAlias(t *testing.T) {
 			now := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
 			e, other := newEnvOn(t, b, &now), newEnvOn(t, b, &now)
 			ctx := t.Context()
-			if err := e.api.CreateAccountAlias(ctx, proj, "example-corporation"); err != nil {
-				t.Fatal(err)
+			for pid, name := range map[string]string{proj: "example-corporation", "other": "other-corp"} {
+				if err := e.api.CreateAccountAlias(ctx, pid, name); err != nil {
+					t.Fatal(err)
+				}
 			}
 			a := storedAlias(t, b, proj, "example-corporation")
 			if a.Object.UID == "" || a.Object.Generation != 1 || !a.Object.Created.Equal(now) {
 				t.Fatalf("stored %+v, want a UID, generation 1, created now", a.Object)
 			}
-			c := storedClaim(t, b, "example-corporation")
-			if c.Object.Project != proj || !c.Object.Claimed.Equal(now) {
-				t.Fatalf("claim %+v, want held by %s since now", c.Object, proj)
-			}
-			for _, replica := range []*env{e, other} {
-				if got := listedAliases(t, replica, proj); !slices.Equal(got, []string{"example-corporation"}) {
-					t.Fatalf("listed %q, want the created alias", got)
-				}
-			}
+			wantHolder(t, other, b, "example-corporation", proj, proj, "other")
 			err := other.api.CreateAccountAlias(ctx, proj, "example-corporation")
 			wantAWS(t, err, codes.AlreadyExists, "EntityAlreadyExists")
 			if !strings.Contains(err.Error(), "The account alias example-corporation already exists.") {
@@ -78,11 +112,9 @@ func TestCreateAccountAlias(t *testing.T) {
 			if got := storedAlias(t, b, proj, "example-corporation"); got.Version != a.Version {
 				t.Fatalf("a refused create changed the alias: version %q, want %q", got.Version, a.Version)
 			}
-			if got := storedClaim(t, b, "example-corporation"); got.Version != c.Version {
-				t.Fatalf("a refused create changed the claim: %+v", got.Object)
-			}
-			if got := listedAliases(t, e, "other"); len(got) != 0 {
-				t.Fatalf("other project lists %q, want none", got)
+			aliasGone(t, b, "other", "example-corporation")
+			if got := listedAliases(t, e, "other"); !slices.Equal(got, []string{"other-corp"}) {
+				t.Fatalf("other lists %q, want its own alias kept", got)
 			}
 		})
 	}
@@ -90,79 +122,44 @@ func TestCreateAccountAlias(t *testing.T) {
 
 // TestCreateAccountAliasReplaces: a second alias overwrites the first,
 // as in AWS, so the project lists only the new one and LimitExceeded
-// never applies. The old alias stays claimed for the lease, so another
-// project gets it only after the lease, while the project itself may
-// take it back at once, renewing its claim. On both store backends.
+// never applies, also from a replica whose clock is behind (the latest
+// create wins, not the latest clock), and a replaced or deleted alias is
+// free for any project at once, while a held one is never taken. On both
+// store backends.
 func TestCreateAccountAliasReplaces(t *testing.T) {
 	for _, bk := range renameBackends {
 		t.Run(bk.name, func(t *testing.T) {
 			b := bk.open()
 			now := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
-			e := newEnvOn(t, b, &now)
+			behind := now.Add(-time.Second)
+			e, slow := newEnvOn(t, b, &now), newEnvOn(t, b, &behind)
 			ctx := t.Context()
-			for i, alias := range []string{"first-corp", "second-corp", "third-corp"} {
-				now = now.Add(time.Second)
-				if err := e.api.CreateAccountAlias(ctx, proj, alias); err != nil {
-					t.Fatalf("create %d (%s): %v", i, alias, err)
+			for i, name := range []string{"zzz-corp", "second-corp", "first-corp"} {
+				if err := []*env{e, e, slow}[i].api.CreateAccountAlias(ctx, proj, name); err != nil {
+					t.Fatalf("create %s: %v", name, err)
 				}
-				if got := listedAliases(t, e, proj); !slices.Equal(got, []string{alias}) {
-					t.Fatalf("after creating %s the project lists %q, want only it", alias, got)
+				if got := listedAliases(t, e, proj); !slices.Equal(got, []string{name}) {
+					t.Fatalf("after creating %s the project lists %q, want only it", name, got)
 				}
 			}
-			aliasGone(t, b, proj, "first-corp")
+			aliasGone(t, b, proj, "zzz-corp")
+			if err := e.api.CreateAccountAlias(ctx, "other", "zzz-corp"); err != nil {
+				t.Fatalf("a replaced alias for another project: %v, want created", err)
+			}
+			wantHolder(t, e, b, "zzz-corp", "other", proj, "other")
 			wantAWS(t, e.api.CreateAccountAlias(ctx, "other", "first-corp"), codes.AlreadyExists, "EntityAlreadyExists")
-			now = now.Add(aliasClaimLease / 3) // past a quarter lease: the claim is renewed
 			if err := e.api.CreateAccountAlias(ctx, proj, "second-corp"); err != nil {
 				t.Fatalf("taking back the project's own old alias: %v", err)
 			}
-			if c := storedClaim(t, b, "second-corp"); c.Object.Project != proj || !c.Object.Claimed.Equal(now) {
-				t.Fatalf("claim %+v, want renewed by %s now", c.Object, proj)
+			if err := e.api.DeleteAccountAlias(ctx, proj, "second-corp"); err != nil {
+				t.Fatal(err)
 			}
-			if got := listedAliases(t, e, proj); !slices.Equal(got, []string{"second-corp"}) {
-				t.Fatalf("project lists %q, want second-corp", got)
+			if err := e.api.CreateAccountAlias(ctx, "other", "second-corp"); err != nil {
+				t.Fatalf("a deleted alias for another project: %v, want created", err)
 			}
-			now = now.Add(aliasClaimLease)
-			if err := e.api.CreateAccountAlias(ctx, "other", "first-corp"); err != nil {
-				t.Fatalf("another project after the lease: %v, want the stale claim taken over", err)
-			}
-			if c := storedClaim(t, b, "first-corp"); c.Object.Project != "other" {
-				t.Fatalf("claim %+v, want held by other", c.Object)
-			}
-			if got := listedAliases(t, e, "other"); !slices.Equal(got, []string{"first-corp"}) {
-				t.Fatalf("other lists %q, want first-corp", got)
-			}
+			wantHolder(t, e, b, "second-corp", "other", proj, "other")
 		})
 	}
-}
-
-// TestCreateAccountAliasAfterDelete: a deleted alias stays claimed for
-// the lease: another project is refused within it and takes it after.
-// A claim older than the lease whose project still holds the alias is
-// never taken over.
-func TestCreateAccountAliasAfterDelete(t *testing.T) {
-	b := memstore.New()
-	now := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
-	e := newEnvOn(t, b, &now)
-	ctx := t.Context()
-	for _, alias := range []string{"kept-corp", "freed-corp"} {
-		if err := e.api.CreateAccountAlias(ctx, "owner-"+alias, alias); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := e.api.DeleteAccountAlias(ctx, "owner-freed-corp", "freed-corp"); err != nil {
-		t.Fatal(err)
-	}
-	wantAWS(t, e.api.CreateAccountAlias(ctx, proj, "freed-corp"), codes.AlreadyExists, "EntityAlreadyExists")
-	now = now.Add(aliasClaimLease)
-	wantAWS(t, e.api.CreateAccountAlias(ctx, proj, "kept-corp"), codes.AlreadyExists, "EntityAlreadyExists")
-	if c := storedClaim(t, b, "kept-corp"); c.Object.Project != "owner-kept-corp" {
-		t.Fatalf("claim of a held alias moved: %+v", c.Object)
-	}
-	aliasGone(t, b, proj, "kept-corp")
-	if err := e.api.CreateAccountAlias(ctx, proj, "freed-corp"); err != nil {
-		t.Fatalf("deleted alias after the lease: %v, want created", err)
-	}
-	storedAlias(t, b, proj, "freed-corp")
 }
 
 // TestCreateAccountAliasConcurrent: of creates of one alias racing on
@@ -181,13 +178,13 @@ func TestCreateAccountAliasConcurrent(t *testing.T) {
 				var wg sync.WaitGroup
 				errs := make([]error, 16)
 				for i := range errs {
-					wg.Go(func() {
-						errs[i] = replicas[i%2].api.CreateAccountAlias(t.Context(), pid(i), "example-corp")
-					})
+					wg.Go(func() { errs[i] = replicas[i%2].api.CreateAccountAlias(t.Context(), pid(i), alias) })
 				}
 				wg.Wait()
 				winner := ""
+				var pids []string
 				for i, err := range errs {
+					pids = append(pids, pid(i))
 					if err == nil {
 						if winner != "" {
 							t.Fatalf("creates by %s and %s both succeeded, want exactly one", winner, pid(i))
@@ -200,15 +197,7 @@ func TestCreateAccountAliasConcurrent(t *testing.T) {
 				if winner == "" {
 					t.Fatal("no create succeeded, want exactly one")
 				}
-				for i := range projects {
-					got := listedAliases(t, replicas[0], pid(i))
-					if want := pid(i) == winner; want != slices.Equal(got, []string{"example-corp"}) || !want && len(got) != 0 {
-						t.Fatalf("%s lists %q (winner %s)", pid(i), got, winner)
-					}
-				}
-				if c := storedClaim(t, b, "example-corp"); c.Object.Project != winner {
-					t.Fatalf("claim %+v, want held by %s", c.Object, winner)
-				}
+				wantHolder(t, replicas[0], b, alias, winner, pids...)
 			})
 		}
 	}
@@ -243,32 +232,156 @@ func TestCreateAccountAliasConcurrentReplace(t *testing.T) {
 	}
 }
 
-// TestCreateAccountAliasSkewedClock: a create on a replica whose clock is
-// behind still replaces the alias an earlier create stored, as AWS
-// overwrites the previous alias: the latest create wins, not the latest
-// clock. On both store backends.
-func TestCreateAccountAliasSkewedClock(t *testing.T) {
+// TestCreateAccountAliasTakeoverRace: a project re-creating its freed
+// alias races another project taking the claim over, at the two orders
+// that matter: the takeover swap commits before the re-create's own
+// claim write, or after it. Exactly one project wins and holds the alias;
+// the other is EntityAlreadyExists and stores none. On both store
+// backends.
+func TestCreateAccountAliasTakeoverRace(t *testing.T) {
 	for _, bk := range renameBackends {
-		t.Run(bk.name, func(t *testing.T) {
-			b := bk.open()
-			now := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
-			behind := now.Add(-time.Second)
-			e, slow := newEnvOn(t, b, &now), newEnvOn(t, b, &behind)
-			if err := e.api.CreateAccountAlias(t.Context(), proj, "zzz-corp"); err != nil {
-				t.Fatal(err)
-			}
-			if err := slow.api.CreateAccountAlias(t.Context(), proj, "aaa-corp"); err != nil {
-				t.Fatal(err)
-			}
-			if got := listedAliases(t, e, proj); !slices.Equal(got, []string{"aaa-corp"}) {
-				t.Fatalf("project lists %q, want the later create aaa-corp", got)
-			}
-		})
+		for _, swapFirst := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/swapFirst=%v", bk.name, swapFirst), func(t *testing.T) {
+				b := bk.open()
+				now := time.Now().UTC()
+				ctx := t.Context()
+				e := newEnvOn(t, b, &now)
+				seedAlias(t, b, proj, alias)
+				if err := e.api.DeleteAccountAlias(ctx, proj, alias); err != nil {
+					t.Fatal(err)
+				}
+				// other reads the claim (proj) and finds no alias of proj,
+				// then stops before its swap.
+				paused, release := make(chan struct{}), make(chan struct{})
+				var once sync.Once
+				taker := newEnvOn(t, stepStore{b, func(op string, k iam.Kind, _ string) error {
+					if op == "update" && k == iam.KindAccountAliasClaim {
+						once.Do(func() { close(paused); <-release })
+					}
+					return nil
+				}}, &now)
+				done := make(chan error, 1)
+				go func() { done <- taker.api.CreateAccountAlias(ctx, "other", alias) }()
+				<-paused
+				var otherErr error
+				otherDone := false
+				creator := e
+				if swapFirst {
+					// proj stores its alias and reads the claim; the swap
+					// commits before proj's claim write.
+					creator = newEnvOn(t, stepStore{b, func(op string, k iam.Kind, _ string) error {
+						if op == "update" && k == iam.KindAccountAliasClaim && !otherDone {
+							otherDone = true
+							close(release)
+							otherErr = <-done
+						}
+						return nil
+					}}, &now)
+				}
+				projErr := creator.api.CreateAccountAlias(ctx, proj, alias)
+				if !otherDone {
+					close(release)
+					otherErr = <-done
+				}
+				winner, loser, winErr, lostErr := proj, "other", projErr, otherErr
+				if swapFirst {
+					winner, loser, winErr, lostErr = loser, winner, lostErr, winErr
+				}
+				if winErr != nil {
+					t.Fatalf("winner %s: %v, want success", winner, winErr)
+				}
+				wantAWS(t, lostErr, codes.AlreadyExists, "EntityAlreadyExists")
+				wantHolder(t, e, b, alias, winner, proj, "other")
+				aliasGone(t, b, loser, alias)
+			})
+		}
 	}
 }
 
-// TestCreateAccountAliasRepairs: a repeat of a create that stopped before
-// deleting the alias it replaced deletes it and is EntityAlreadyExists.
+// TestCreateAccountAliasRetryDuringCreate: a retry that runs while the
+// first request of a new alias is between storing the alias and reading
+// the claim claims it, so it succeeds and replaces the old alias; the
+// first request's failing claim read then deletes nothing, so the project
+// keeps exactly the new alias.
+func TestCreateAccountAliasRetryDuringCreate(t *testing.T) {
+	b := memstore.New()
+	now := time.Now().UTC()
+	ctx := t.Context()
+	e := newEnvOn(t, b, &now)
+	if err := e.api.CreateAccountAlias(ctx, proj, "old-corp"); err != nil {
+		t.Fatal(err)
+	}
+	var retryErr error
+	first := newEnvOn(t, stepStore{b, func(op string, k iam.Kind, _ string) error {
+		if op == "get" && k == iam.KindAccountAliasClaim {
+			retryErr = e.api.CreateAccountAlias(ctx, proj, "new-corp")
+			return errors.New("backend down")
+		}
+		return nil
+	}}, &now)
+	wantAWS(t, first.api.CreateAccountAlias(ctx, proj, "new-corp"), codes.Internal, "InternalFailure")
+	if retryErr != nil {
+		t.Fatalf("retry: %v, want success", retryErr)
+	}
+	if got := listedAliases(t, e, proj); !slices.Equal(got, []string{"new-corp"}) {
+		t.Fatalf("project lists %q, want exactly new-corp", got)
+	}
+	aliasGone(t, b, proj, "old-corp")
+}
+
+// lostCreate stores every alias create, then reports ErrUnavailable, as a
+// write whose response is lost.
+type lostCreate struct{ store.Backend }
+
+func (l lostCreate) Create(ctx context.Context, k iam.Kind, key string, spec []byte) (string, error) {
+	v, err := l.Backend.Create(ctx, k, key, spec)
+	if err == nil && k == iam.KindAccountAlias {
+		return "", store.ErrUnavailable
+	}
+	return v, err
+}
+
+// TestCreateAccountAliasUnknownOutcome: an alias write whose response is
+// lost is resolved by reading the alias back: retried by the store, it is
+// this request's and the create succeeds; failed, the alias is stored
+// but unclaimed, so no project lists it, another project may take the
+// alias, and the retry is then EntityAlreadyExists and deletes the
+// leftover. An alias stored under a claim another project holds is never
+// listed or deletable and a create of it deletes it.
+func TestCreateAccountAliasUnknownOutcome(t *testing.T) {
+	now := time.Now().UTC()
+	ctx := t.Context()
+	b := memstore.New()
+	retrying := newEnvOn(t, store.WithRetry(lostCreate{b}, 2, 0), &now)
+	if err := retrying.api.CreateAccountAlias(ctx, proj, alias); err != nil {
+		t.Fatalf("create retried after a lost response: %v, want success", err)
+	}
+	e := newEnvOn(t, b, &now)
+	wantHolder(t, e, b, alias, proj, proj)
+
+	b = memstore.New()
+	e = newEnvOn(t, b, &now)
+	lost := newEnvOn(t, lostCreate{b}, &now)
+	if err := lost.api.CreateAccountAlias(ctx, proj, alias); status.Code(err) != codes.Unavailable {
+		t.Fatalf("create with a lost response: %v, want Unavailable", err)
+	}
+	storedAlias(t, b, proj, alias)
+	if got := listedAliases(t, e, proj); len(got) != 0 {
+		t.Fatalf("an unclaimed alias is listed: %q", got)
+	}
+	if err := e.api.CreateAccountAlias(ctx, "other", alias); err != nil {
+		t.Fatalf("an alias stored but never claimed: %v, want created for another project", err)
+	}
+	wantAWS(t, e.api.DeleteAccountAlias(ctx, proj, alias), codes.NotFound, "NoSuchEntity")
+	wantAWS(t, e.api.CreateAccountAlias(ctx, proj, alias), codes.AlreadyExists, "EntityAlreadyExists")
+	aliasGone(t, b, proj, alias)
+	wantHolder(t, e, b, alias, "other", proj, "other")
+}
+
+// TestCreateAccountAliasRepairs: a repeat of a create that stored its
+// alias but stopped before the claim claims it, succeeds and deletes the
+// alias it replaced; a repeat of a claimed alias that stopped before
+// deleting the old one deletes it and is EntityAlreadyExists.
 func TestCreateAccountAliasRepairs(t *testing.T) {
 	b := memstore.New()
 	now := time.Now().UTC()
@@ -278,22 +391,27 @@ func TestCreateAccountAliasRepairs(t *testing.T) {
 	if _, err := store.Create(t.Context(), store.Scoped(b, proj), a); err != nil {
 		t.Fatal(err)
 	}
-	wantAWS(t, e.api.CreateAccountAlias(t.Context(), proj, "new-corp"), codes.AlreadyExists, "EntityAlreadyExists")
+	if err := e.api.CreateAccountAlias(t.Context(), proj, "new-corp"); err != nil {
+		t.Fatalf("repeat of an unclaimed alias: %v, want success", err)
+	}
 	if got := listedAliases(t, e, proj); !slices.Equal(got, []string{"new-corp"}) {
 		t.Fatalf("project lists %q, want only new-corp", got)
 	}
+	aliasGone(t, b, proj, "old-corp")
+	seedAlias(t, b, proj, "zzz-corp") // Seq 0: before new-corp
+	wantAWS(t, e.api.CreateAccountAlias(t.Context(), proj, "new-corp"), codes.AlreadyExists, "EntityAlreadyExists")
+	aliasGone(t, b, proj, "zzz-corp")
 }
 
 // TestCreateAccountAliasErrors: a bad project or AccountAlias is
 // ValidationError before any store access, the AWS length and pattern
 // bounds are accepted, and a store failure on any read or write is
-// InternalFailure without backend detail, never success.
+// InternalFailure without backend detail and lists no alias.
 func TestCreateAccountAliasErrors(t *testing.T) {
 	now := time.Now().UTC()
 	ctx := t.Context()
 	boom := errors.New("backend down")
-	noAlias := failingGet{memstore.New(), iam.KindAccountAlias, boom}
-	e := newEnvOn(t, failingGet{noAlias, iam.KindAccountAliasClaim, boom}, &now) // any store read fails
+	e := newEnvOn(t, stepStore{memstore.New(), func(string, iam.Kind, string) error { return boom }}, &now)
 	bad := []string{
 		"", "ab", strings.Repeat("a", iam.MaxAccountAliasLen+1),
 		"ExampleCorp", "-abc", "abc-", "a--b", "a_b", "a.b", "a b", "ab\x00", "é12",
@@ -301,7 +419,7 @@ func TestCreateAccountAliasErrors(t *testing.T) {
 	for _, n := range bad {
 		wantAWS(t, e.api.CreateAccountAlias(ctx, proj, n), codes.InvalidArgument, "ValidationError")
 	}
-	wantAWS(t, e.api.CreateAccountAlias(ctx, "Bad_Project", "example-corp"), codes.InvalidArgument, "ValidationError")
+	wantAWS(t, e.api.CreateAccountAlias(ctx, "Bad_Project", alias), codes.InvalidArgument, "ValidationError")
 
 	ok := newEnvOn(t, memstore.New(), &now)
 	for _, n := range []string{"abc", "a-b", "0-9", "a-b-c-1", strings.Repeat("z", iam.MaxAccountAliasLen)} {
@@ -310,19 +428,32 @@ func TestCreateAccountAliasErrors(t *testing.T) {
 		}
 	}
 
-	for _, fail := range []func(store.Backend) store.Backend{
-		func(m store.Backend) store.Backend { return failingGet{m, iam.KindAccountAlias, boom} },
-		func(m store.Backend) store.Backend { return failingGet{m, iam.KindAccountAliasClaim, boom} },
-		func(m store.Backend) store.Backend { return failingCreate{m, iam.KindAccountAliasClaim, boom} },
-		func(m store.Backend) store.Backend { return failingCreate{m, iam.KindAccountAlias, boom} },
-	} {
-		m := memstore.New()
-		err := newEnvOn(t, fail(m), &now).api.CreateAccountAlias(ctx, proj, "example-corp")
-		wantAWS(t, err, codes.Internal, "InternalFailure")
-		if strings.Contains(err.Error(), "backend down") {
-			t.Fatalf("error %v leaks backend detail", err)
+	for _, op := range []string{"get", "create", "update", "deleteIf"} {
+		for _, k := range []iam.Kind{iam.KindAccountAlias, iam.KindAccountAliasClaim} {
+			m := memstore.New()
+			seedAlias(t, m, proj, "old-corp")
+			seedAlias(t, m, "other", "taken-corp")
+			fail := newEnvOn(t, stepStore{m, func(o string, kk iam.Kind, _ string) error {
+				if o == op && kk == k {
+					return boom
+				}
+				return nil
+			}}, &now)
+			// A new alias, one another project holds, and a repeat.
+			for _, name := range []string{alias, "taken-corp", "old-corp"} {
+				err := fail.api.CreateAccountAlias(ctx, proj, name)
+				if err == nil || status.Code(err) == codes.AlreadyExists {
+					continue // this create never reaches the failing step
+				}
+				wantAWS(t, err, codes.Internal, "InternalFailure")
+				if strings.Contains(err.Error(), "backend down") {
+					t.Fatalf("error %v leaks backend detail", err)
+				}
+			}
+			if got := listedAliases(t, newEnvOn(t, m, &now), proj); len(got) != 1 {
+				t.Fatalf("%s %s failing: project lists %q, want exactly one alias", op, k, got)
+			}
 		}
-		aliasGone(t, m, proj, "example-corp")
 	}
 }
 
@@ -334,126 +465,30 @@ func TestCreateAccountAliasCanceled(t *testing.T) {
 	e := newEnvOn(t, b, &now)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	err := e.api.CreateAccountAlias(ctx, proj, "example-corp")
+	err := e.api.CreateAccountAlias(ctx, proj, alias)
 	if status.Code(err) != codes.Canceled {
 		t.Fatalf("canceled request: %v, want Canceled", err)
 	}
-	aliasGone(t, b, proj, "example-corp")
-	if _, err := store.Get[iam.AccountAliasClaim](t.Context(), b, "example-corp"); !errors.Is(err, store.ErrNotFound) {
+	aliasGone(t, b, proj, alias)
+	if _, err := store.Get[iam.AccountAliasClaim](t.Context(), b, alias); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("claim after a canceled create: %v, want none", err)
 	}
 }
 
-// conflictingClaim refuses every claim write with ErrConflict, as a
-// claim that keeps changing would.
-type conflictingClaim struct{ store.Backend }
-
-func (c conflictingClaim) Create(ctx context.Context, k iam.Kind, key string, spec []byte) (string, error) {
-	if k == iam.KindAccountAliasClaim {
-		return "", store.ErrExists
-	}
-	return c.Backend.Create(ctx, k, key, spec)
-}
-
 // TestCreateAccountAliasContention: a claim that keeps changing is
-// ConcurrentModification and no alias is written.
+// ConcurrentModification and no alias is listed.
 func TestCreateAccountAliasContention(t *testing.T) {
 	b := memstore.New()
 	now := time.Now().UTC()
-	err := newEnvOn(t, conflictingClaim{b}, &now).api.CreateAccountAlias(t.Context(), proj, "example-corp")
-	wantAWS(t, err, codes.Aborted, "ConcurrentModification")
-	aliasGone(t, b, proj, "example-corp")
-}
-
-// aliasHooks delays claim reads by delay and runs write once before the
-// first create or update of kind k (a slow store, a racing replica).
-type aliasHooks struct {
-	store.Backend
-	k        iam.Kind
-	delay    time.Duration
-	write    func()
-	once     sync.Once
-	deadline time.Time // of the last create or update of kind k
-}
-
-func (h *aliasHooks) Get(ctx context.Context, k iam.Kind, key string) (store.Entry, error) {
-	if k == iam.KindAccountAliasClaim {
-		time.Sleep(h.delay)
-	}
-	return h.Backend.Get(ctx, k, key)
-}
-
-func (h *aliasHooks) hook(ctx context.Context, k iam.Kind) {
-	if k == h.k {
-		h.deadline, _ = ctx.Deadline()
-		h.once.Do(h.write)
-	}
-}
-
-func (h *aliasHooks) Create(ctx context.Context, k iam.Kind, key string, spec []byte) (string, error) {
-	h.hook(ctx, k)
-	return h.Backend.Create(ctx, k, key, spec)
-}
-
-func (h *aliasHooks) Update(ctx context.Context, k iam.Kind, key string, spec []byte, version string) (string, error) {
-	h.hook(ctx, k)
-	return h.Backend.Update(ctx, k, key, spec, version)
-}
-
-// TestCreateAccountAliasSlowClaimRead: a slow read of the project's own
-// fresh claim shortens the alias write window, which still ends half a
-// lease after the claim was written, measured from before the read.
-func TestCreateAccountAliasSlowClaimRead(t *testing.T) {
-	b := memstore.New()
-	now := time.Now().UTC()
-	own := iam.AccountAliasClaim{Name: "example-corp", Project: proj, Claimed: now.Add(-time.Second)}
-	if _, err := store.Create(t.Context(), b, own); err != nil {
-		t.Fatal(err)
-	}
-	h := &aliasHooks{Backend: b, k: iam.KindAccountAlias, delay: 200 * time.Millisecond, write: func() {}}
-	e := newEnvOn(t, h, &now)
-	start := time.Now()
-	if err := e.api.CreateAccountAlias(t.Context(), proj, "example-corp"); err != nil {
-		t.Fatal(err)
-	}
-	// Half of grpcapi.aliasClaimLease (60s) after the claim, plus slack.
-	if latest := start.Add(29*time.Second + h.delay/2); h.deadline.After(latest) {
-		t.Fatalf("alias write deadline %v after %v: the claim read extended it", h.deadline, latest)
-	}
-}
-
-// TestCreateAccountAliasClaimTakenDuringWrite: a claim taken over during
-// the alias write deletes the alias again: EntityAlreadyExists.
-func TestCreateAccountAliasClaimTakenDuringWrite(t *testing.T) {
-	b := memstore.New()
-	now := time.Now().UTC()
-	h := &aliasHooks{Backend: b, k: iam.KindAccountAlias, write: func() {
-		if _, err := store.Mutate(t.Context(), b, "example-corp", func(c *iam.AccountAliasClaim) error {
-			c.Project = "other"
-			return nil
-		}); err != nil {
-			t.Error(err)
+	busy := stepStore{b, func(op string, k iam.Kind, _ string) error {
+		if op == "create" && k == iam.KindAccountAliasClaim {
+			return store.ErrExists
 		}
+		return nil
 	}}
-	err := newEnvOn(t, h, &now).api.CreateAccountAlias(t.Context(), proj, "example-corp")
-	wantAWS(t, err, codes.AlreadyExists, "EntityAlreadyExists")
-	aliasGone(t, b, proj, "example-corp")
-}
-
-// TestCreateAccountAliasTakeoverRace: an alias stored during a takeover of
-// its stale claim gets the claim handed back: EntityAlreadyExists.
-func TestCreateAccountAliasTakeoverRace(t *testing.T) {
-	b := memstore.New()
-	now := time.Now().UTC()
-	stale := iam.AccountAliasClaim{Name: "example-corp", Project: proj, Claimed: now.Add(-aliasClaimLease)}
-	if _, err := store.Create(t.Context(), b, stale); err != nil {
-		t.Fatal(err)
-	}
-	h := &aliasHooks{Backend: b, k: iam.KindAccountAliasClaim, write: func() { seedAlias(t, b, proj, "example-corp") }}
-	err := newEnvOn(t, h, &now).api.CreateAccountAlias(t.Context(), "other", "example-corp")
-	wantAWS(t, err, codes.AlreadyExists, "EntityAlreadyExists")
-	aliasGone(t, b, "other", "example-corp")
-	if c := storedClaim(t, b, "example-corp"); c.Object.Project != proj {
-		t.Fatalf("claim %+v, want handed back to %s", c.Object, proj)
+	err := newEnvOn(t, busy, &now).api.CreateAccountAlias(t.Context(), proj, alias)
+	wantAWS(t, err, codes.Aborted, "ConcurrentModification")
+	if got := listedAliases(t, newEnvOn(t, b, &now), proj); len(got) != 0 {
+		t.Fatalf("project lists %q, want none", got)
 	}
 }

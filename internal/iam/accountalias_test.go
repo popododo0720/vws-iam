@@ -4,7 +4,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
 )
@@ -42,14 +41,13 @@ func TestAccountAliasValidate(t *testing.T) {
 }
 
 func TestAccountAliasClaimValidate(t *testing.T) {
-	now := time.Now()
-	if err := (iam.AccountAliasClaim{Name: "example-corp", Project: "proj-a", Claimed: now}).Validate(); err != nil {
+	if err := (iam.AccountAliasClaim{Name: "example-corp", Project: "proj-a", UID: "a-1"}).Validate(); err != nil {
 		t.Errorf("Validate: %v", err)
 	}
 	for _, c := range []iam.AccountAliasClaim{
-		{Name: "a--b", Project: "proj-a", Claimed: now},
-		{Name: "example-corp", Project: "Bad_Project", Claimed: now},
-		{Name: "example-corp", Project: "", Claimed: now},
+		{Name: "a--b", Project: "proj-a", UID: "a-1"},
+		{Name: "example-corp", Project: "Bad_Project", UID: "a-1"},
+		{Name: "example-corp", Project: "", UID: "a-1"},
 		{Name: "example-corp", Project: "proj-a"},
 	} {
 		if err := c.Validate(); !errors.Is(err, iam.ErrInvalid) {

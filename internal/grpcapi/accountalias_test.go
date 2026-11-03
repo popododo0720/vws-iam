@@ -17,12 +17,15 @@ import (
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
 )
 
-// seedAlias stores account alias name in project pid, as
-// CreateAccountAlias (#88) will.
+// seedAlias stores account alias name in project pid and points its
+// claim at it, as CreateAccountAlias does.
 func seedAlias(t *testing.T, b store.Backend, pid, name string) {
 	t.Helper()
 	a := iam.AccountAlias{Meta: iam.Meta{UID: iam.NewUID(), Generation: 1}, Name: name, Created: time.Now().UTC()}
 	if _, err := store.Create(t.Context(), store.Scoped(b, pid), a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(t.Context(), b, iam.AccountAliasClaim{Name: name, Project: pid, UID: a.UID}); err != nil {
 		t.Fatal(err)
 	}
 }

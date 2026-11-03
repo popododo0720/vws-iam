@@ -38,11 +38,9 @@ func ValidAccountAlias(s string) bool {
 }
 
 // AccountAlias is the alias of an account (a VWS project), keyed by the
-// alias. A project holds at most MaxAccountAliases of them: creating one
-// (#88) replaces the one the project had, and an AccountAliasClaim keeps
-// it unique across projects, as AWS keeps it unique across accounts.
-// Deleting one is #89. Seq orders creates without clocks (one past the
-// greatest Seq stored in the project).
+// alias. A project holds at most MaxAccountAliases of them: a create
+// (#88) replaces the previous one, ordered by Seq (no clocks), and an
+// AccountAliasClaim keeps it unique across projects; deleting is #89.
 type AccountAlias struct {
 	Meta
 	Name    string    `json:"name"`
@@ -60,24 +58,23 @@ func (a AccountAlias) Validate() error {
 	return nil
 }
 
-// AccountAliasClaim reserves account alias Name for Project across every
-// project. It is stored outside any project, keyed by the alias, so of
-// two projects creating one alias exactly one store create succeeds.
-// Claimed is when Project last wrote the claim: CreateAccountAlias writes
-// the project's AccountAlias only shortly after that, so a claim older
-// than the lease whose project holds no such alias is stale and another
-// project may take it over. A claim holds no secret.
+// AccountAliasClaim points account alias Name, across every project, at
+// the one stored AccountAlias of Project with UID: a project holds an
+// alias only while its claim points at it. It is stored outside any
+// project, keyed by the alias, and never deleted; CreateAccountAlias
+// writes it by compare-and-swap, and repoints it only when it no longer
+// points at a stored alias. A claim holds no secret.
 type AccountAliasClaim struct {
-	Name    string    `json:"name"`
-	Project string    `json:"project"`
-	Claimed time.Time `json:"claimed"`
+	Name    string `json:"name"`
+	Project string `json:"project"`
+	UID     string `json:"uid"`
 }
 
 func (AccountAliasClaim) Kind() Kind    { return KindAccountAliasClaim }
 func (c AccountAliasClaim) Key() string { return c.Name }
 
 func (c AccountAliasClaim) Validate() error {
-	if !ValidAccountAlias(c.Name) || !ValidProject(c.Project) || c.Claimed.IsZero() {
+	if !ValidAccountAlias(c.Name) || !ValidProject(c.Project) || c.UID == "" {
 		return invalid("account alias claim %q", c.Name)
 	}
 	return nil

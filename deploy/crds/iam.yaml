@@ -409,7 +409,7 @@ spec:
           type: object
           properties:
             spec:
-              description: The project that holds an account alias across all projects (no secret). Written only by vws-iam.
+              description: Points an account alias at the one project alias that holds it, across all projects (no secret). Written only by vws-iam.
               type: object
               x-kubernetes-preserve-unknown-fields: true
           required: [spec]
