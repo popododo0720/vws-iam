@@ -323,6 +323,10 @@ type Role struct {
 	// role's permissions boundary (PutRolePermissionsBoundary, #100);
 	// empty when the role has none (DeleteRolePermissionsBoundary, #101).
 	PermissionsBoundary string `json:"permissionsBoundary,omitempty"`
+	// Tags are the AWS role tags (ListRoleTags, #73). They are not envelope
+	// labels: AWS tag keys and values allow characters and lengths the label
+	// grammar rejects.
+	Tags map[string]string `json:"tags,omitempty"`
 }
 
 func (Role) Kind() Kind    { return KindRole }
@@ -342,6 +346,12 @@ func (r Role) Validate() error {
 	}
 	if b := r.PermissionsBoundary; b != "" && !ValidPolicyARN(b) {
 		return invalid("role %q permissions boundary %q is not a policy ARN", r.Name, b)
+	}
+	if len(r.Tags) > MaxRoleTags {
+		return invalid("role %q has %d tags", r.Name, len(r.Tags))
+	}
+	if err := CheckTags(r.Tags); err != nil {
+		return invalid("role %q tag: %v", r.Name, err)
 	}
 	if err := checkAttached(r.AttachedPolicies); err != nil {
 		return err

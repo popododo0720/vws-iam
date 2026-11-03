@@ -13,6 +13,8 @@ const (
 	MaxPolicyTags = 50
 	// MaxMFADeviceTags is the AWS limit of tags per IAM virtual MFA device.
 	MaxMFADeviceTags = 50
+	// MaxRoleTags is the AWS limit of tags per IAM role.
+	MaxRoleTags = 50
 	// MaxTagKeyLen is the AWS limit of a tag key, in characters.
 	MaxTagKeyLen = 128
 	// MaxTagValueLen is the AWS limit of a tag value, in characters.
