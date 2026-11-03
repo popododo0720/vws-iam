@@ -196,8 +196,7 @@ func (s *Server) createAccountAlias(ctx context.Context, pid, alias string) erro
 	v, err := store.Create(wctx, p.b, a)
 	if errors.Is(err, store.ErrExists) {
 		return taken
-	}
-	if err != nil {
+	} else if err != nil {
 		return toStatus(ctx, err)
 	}
 	if err := s.fenceAccountAlias(ctx, p, alias, v, taken); err != nil {
