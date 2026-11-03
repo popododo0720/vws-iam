@@ -223,3 +223,20 @@ func (s *Server) DeleteAccountAlias(ctx context.Context, project, alias string) 
 func (s *Server) CreateAccountAlias(ctx context.Context, project, alias string) error {
 	return s.createAccountAlias(ctx, project, alias)
 }
+
+// SimulateInput, ContextEntry and SimulationPage are the
+// SimulatePrincipalPolicy request and result types.
+type (
+	SimulateInput    = simulateInput
+	ContextEntry     = contextEntry
+	SimulationPage   = simulationPage
+	EvaluationResult = evaluationResult
+)
+
+// SimulatePrincipalPolicy is IAM SimulatePrincipalPolicy, which vws-proto
+// does not carry yet (#86).
+func (s *Server) SimulatePrincipalPolicy(
+	ctx context.Context, project string, in SimulateInput,
+) (SimulationPage, error) {
+	return s.simulatePrincipalPolicy(ctx, project, in)
+}
