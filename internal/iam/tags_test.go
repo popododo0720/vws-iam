@@ -119,3 +119,55 @@ func TestCheckTag(t *testing.T) {
 		t.Fatalf("invalid value error %v is not a TagError", err)
 	}
 }
+
+func roleWithTags(tags map[string]string) Role {
+	return Role{
+		Name: "app", ID: "AROA1", Created: time.Now(),
+		AssumeRolePolicy: `{"Version":"2012-10-17","Statement":[]}`,
+		Tags:             tags,
+	}
+}
+
+func TestRoleTagValidation(t *testing.T) {
+	valid := map[string]string{
+		"Team":                            "Platform / SRE: a=b + c @x",
+		"lower_case-1":                    "",
+		"unicode":                         "Ünïcode",
+		strings.Repeat("k", MaxTagKeyLen): "v",
+		"maxvalue":                        strings.Repeat("v", MaxTagValueLen),
+	}
+	if err := roleWithTags(valid).Validate(); err != nil {
+		t.Fatalf("valid tags rejected: %v", err)
+	}
+	if err := roleWithTags(nil).Validate(); err != nil {
+		t.Fatalf("untagged role rejected: %v", err)
+	}
+	for _, tc := range []struct {
+		name string
+		tags map[string]string
+	}{
+		{"empty key", map[string]string{"": "v"}},
+		{"key too long", map[string]string{strings.Repeat("k", MaxTagKeyLen+1): "v"}},
+		{"value too long", map[string]string{"k": strings.Repeat("v", MaxTagValueLen+1)}},
+		{"bad key character", map[string]string{"bad#key": "v"}},
+		{"reserved key prefix", map[string]string{"AWS:team": "v"}},
+		{"reserved value prefix", map[string]string{"k": "aws:value"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := roleWithTags(tc.tags).Validate(); err == nil {
+				t.Fatalf("%v accepted", tc.tags)
+			}
+		})
+	}
+	most := make(map[string]string, MaxRoleTags+1)
+	for i := range MaxRoleTags {
+		most[strings.Repeat("k", i+1)] = "v"
+	}
+	if err := roleWithTags(most).Validate(); err != nil {
+		t.Fatalf("50 tags rejected: %v", err)
+	}
+	most["one-more"] = "v"
+	if err := roleWithTags(most).Validate(); err == nil {
+		t.Fatal("51 tags accepted")
+	}
+}
