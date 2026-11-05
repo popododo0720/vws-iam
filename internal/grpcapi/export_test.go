@@ -58,7 +58,25 @@ func (s *Server) UpdateGroupRename(
 func (s *Server) AuthorizeEncoded(
 	ctx context.Context, req *iamv1.AuthorizeRequest,
 ) (*iamv1.AuthorizeResponse, string, error) {
-	return s.authorize(ctx, req, true)
+	return s.authorize(ctx, req, "", true)
+}
+
+// AuthenticateRef is Authenticate that also returns the session reference
+// of an STS session, which vws-proto's Principal does not carry yet (#20).
+// It is "" for a long-term key.
+func (s *Server) AuthenticateRef(
+	ctx context.Context, req *iamv1.AuthenticateRequest,
+) (*iamv1.AuthenticateResponse, string, error) {
+	return s.authenticate(ctx, req, true)
+}
+
+// AuthorizeRef is Authorize with the session reference of the STS session
+// behind the principal, which vws-proto does not carry yet (#20).
+func (s *Server) AuthorizeRef(
+	ctx context.Context, req *iamv1.AuthorizeRequest, ref string,
+) (*iamv1.AuthorizeResponse, error) {
+	resp, _, err := s.authorize(ctx, req, ref, false)
+	return resp, err
 }
 
 // DecodeAuthorizationMessage is STS DecodeAuthorizationMessage, which
