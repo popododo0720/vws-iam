@@ -97,6 +97,11 @@ func accessDenied(msg string) error {
 	return fail(codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied", msg)
 }
 
+// lockedMsg is the wire message of a locked MFA device. The mfa sentinel
+// text (MFADeviceLocked) is not an AWS error code and never reaches the
+// wire (#12).
+const lockedMsg = "MFA device is locked after too many failed attempts; try again later."
+
 // mapping is the domain error table. Order matters only for wrapped errors
 // that match several sentinels; the first match wins.
 var mapping = []struct {
@@ -158,7 +163,10 @@ func toStatus(ctx context.Context, err error) error {
 	for _, m := range mapping {
 		if errors.Is(err, m.err) {
 			msg := err.Error()
-			if m.code == codes.Unauthenticated || m.code == codes.Unavailable {
+			switch {
+			case errors.Is(m.err, mfa.ErrLocked):
+				msg = lockedMsg
+			case m.code == codes.Unauthenticated || m.code == codes.Unavailable:
 				msg = m.aws // never echo key ids, tokens, or backend detail
 			}
 			return (&apiError{code: m.code, reason: m.reason, aws: m.aws, msg: msg}).GRPCStatus().Err()

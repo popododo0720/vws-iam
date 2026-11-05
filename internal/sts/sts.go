@@ -370,6 +370,9 @@ func (s *Service) Resolve(ctx context.Context, cred Credential) (Caller, error) 
 
 // verifyMFA checks an MFA code for a long-term or session user caller.
 // It returns whether the new session carries MFA.
+// mfaFailed is the AWS STS message for a TokenCode that does not verify.
+const mfaFailed = "MultiFactorAuthentication failed with invalid MFA one time pass code."
+
 func (s *Service) verifyMFA(ctx context.Context, c Caller, m MFA) (bool, error) {
 	switch {
 	case m.SerialNumber == "" && m.TokenCode == "":
@@ -385,7 +388,10 @@ func (s *Service) verifyMFA(ctx context.Context, c Caller, m MFA) (bool, error) 
 		if errors.Is(err, ErrThrottling) {
 			return false, err
 		}
-		return false, fmt.Errorf("%w: MultiFactorAuthentication failed (%s)", ErrAccessDenied, err.Error())
+		// One AWS message for a wrong code, an unknown serial and a locked
+		// device: the mfa error text (MFADeviceLocked, device names) never
+		// reaches the wire, and a caller cannot tell a lock from a miss (#12).
+		return false, fmt.Errorf("%w: %s", ErrAccessDenied, mfaFailed)
 	}
 	return true, nil
 }
