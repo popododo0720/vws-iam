@@ -142,8 +142,8 @@ func TestResyncNotAssociated(t *testing.T) {
 			t.Errorf("%s: %v, want NoSuchEntity", tc.name, err)
 		}
 	}
-	if err := svc.Resync(ctx, "alice", "arn:vws:iam::"+acct+":mfa/nope", c1, c2); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("unknown device: %v, want not found", err)
+	if err := svc.Resync(ctx, "alice", "arn:vws:iam::"+acct+":mfa/nope", c1, c2); !errors.Is(err, mfa.ErrNotAssociated) {
+		t.Errorf("unknown device: %v, want NoSuchEntity", err)
 	}
 	if d := device(t, b, "alice-phone"); d.Drift != 0 || d.FailedAttempts != 0 {
 		t.Fatalf("device changed: %+v", d)
