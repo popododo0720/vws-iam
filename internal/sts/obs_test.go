@@ -22,6 +22,8 @@ import (
 	"github.com/popododo0720/vws-iam/internal/accesskey"
 	"github.com/popododo0720/vws-iam/internal/authz"
 	"github.com/popododo0720/vws-iam/internal/iam"
+	"github.com/popododo0720/vws-iam/internal/policy"
+	"github.com/popododo0720/vws-iam/internal/secret"
 	"github.com/popododo0720/vws-iam/internal/store"
 	"github.com/popododo0720/vws-iam/internal/sts"
 	"github.com/popododo0720/vws-iam/internal/sts/samltest"
@@ -466,6 +468,9 @@ func TestSTSOutcomeLabelsEverySentinel(t *testing.T) {
 		sts.ErrInvalidAuthorizationMessage: "invalid_authorization_message",
 		sts.ErrPackedPolicyTooLarge:        "packed_policy_too_large",
 		authz.ErrNoSuchEntity:              "no_such_entity",
+		policy.ErrMalformed:                "malformed_policy",
+		secret.ErrUnknownKEK:               "unknown_kek",
+		secret.ErrOpen:                     "open_failed",
 		store.ErrNotFound:                  "not_found",
 		store.ErrConflict:                  "conflict",
 		store.ErrUnavailable:               "unavailable",
