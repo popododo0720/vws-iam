@@ -63,7 +63,7 @@ func New(b, index store.Backend, project string, keys *secret.Keyring, now func(
 func ProjectOf(ctx context.Context, index store.Backend, id string) (string, error) {
 	x, err := store.Get[iam.KeyIndex](ctx, index, id)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("access key index %s: %w", id, err)
 	}
 	return x.Object.Project, nil
 }
@@ -77,7 +77,7 @@ func ProjectOf(ctx context.Context, index store.Backend, id string) (string, err
 func AccountOf(ctx context.Context, index store.Backend, id string) (string, error) {
 	pid, err := ProjectOf(ctx, index, id)
 	if err != nil {
-		return "", fmt.Errorf("access key index: %w", err)
+		return "", err
 	}
 	k, err := store.Get[iam.AccessKey](ctx, store.Scoped(index, pid), id)
 	if err != nil {
@@ -114,7 +114,9 @@ func NewSecret() (string, error) {
 // Create makes an active key for user and returns its secret, once. It
 // does not hold the AccessKeysPerUser count against concurrent creates;
 // CreateAccessKey uses CreatePending and Activate under a quota lock.
-func (s *Service) Create(ctx context.Context, user string) (Credential, error) {
+func (s *Service) Create(ctx context.Context, user string) (_ Credential, err error) {
+	ctx, end := start(ctx, "Create")
+	defer end(&err)
 	name, err := s.checkLimit(ctx, user)
 	if err != nil {
 		return Credential{}, err
@@ -126,7 +128,9 @@ func (s *Service) Create(ctx context.Context, user string) (Credential, error) {
 // authenticates nothing and is not counted until Activate commits it. It
 // returns the key's version for Activate. requestID, when not empty, is
 // stored with the key for ByRequestID.
-func (s *Service) CreatePending(ctx context.Context, user, requestID string) (Credential, string, error) {
+func (s *Service) CreatePending(ctx context.Context, user, requestID string) (_ Credential, _ string, err error) {
+	ctx, end := start(ctx, "CreatePending")
+	defer end(&err)
 	name, err := s.checkLimit(ctx, user)
 	if err != nil {
 		return Credential{}, "", err
@@ -141,7 +145,7 @@ func (s *Service) CreatePending(ctx context.Context, user, requestID string) (Cr
 func (s *Service) ByRequestID(ctx context.Context, user, requestID string) (string, bool, error) {
 	all, err := store.List[iam.AccessKey](ctx, s.b)
 	if err != nil {
-		return "", false, err
+		return "", false, fmt.Errorf("list access keys: %w", err)
 	}
 	for _, k := range all {
 		o := k.Object
@@ -155,34 +159,44 @@ func (s *Service) ByRequestID(ctx context.Context, user, requestID string) (stri
 // Activate makes the pending key id, still at version, active only while
 // pre holds (store.UpdateIf). If pre moved, the key stays pending and the
 // error is store.ErrConflict.
-func (s *Service) Activate(ctx context.Context, id, version string, pre store.Pre) error {
+func (s *Service) Activate(ctx context.Context, id, version string, pre store.Pre) (err error) {
+	ctx, end := start(ctx, "Activate")
+	defer end(&err)
 	k, err := store.Get[iam.AccessKey](ctx, s.b, id)
 	if err != nil {
-		return err
+		return fmt.Errorf("activate access key %s: %w", id, err)
 	}
 	if k.Version != version || k.Object.Status != iam.KeyPending {
-		return store.ErrConflict
+		return fmt.Errorf("activate access key %s: not pending at version %s: %w", id, version, store.ErrConflict)
 	}
 	k.Object.Status = iam.KeyActive
 	k.Object.Reserved = false
-	_, err = store.UpdateIf(ctx, s.b, k.Object, k.Version, pre)
-	return err
+	if _, err = store.UpdateIf(ctx, s.b, k.Object, k.Version, pre); err != nil {
+		return fmt.Errorf("activate access key %s: %w", id, err)
+	}
+	return nil
 }
 
 // Reserve marks the pending key id, still at version, reserved while pre
 // holds (store.UpdateIf) and returns its new version. The key stays
 // pending, so Activate can then commit it under another precondition. If
 // pre moved, the key is unchanged and the error is store.ErrConflict.
-func (s *Service) Reserve(ctx context.Context, id, version string, pre store.Pre) (string, error) {
+func (s *Service) Reserve(ctx context.Context, id, version string, pre store.Pre) (_ string, err error) {
+	ctx, end := start(ctx, "Reserve")
+	defer end(&err)
 	k, err := store.Get[iam.AccessKey](ctx, s.b, id)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("reserve access key %s: %w", id, err)
 	}
 	if k.Version != version || k.Object.Status != iam.KeyPending {
-		return "", store.ErrConflict
+		return "", fmt.Errorf("reserve access key %s: not pending at version %s: %w", id, version, store.ErrConflict)
 	}
 	k.Object.Reserved = true
-	return store.UpdateIf(ctx, s.b, k.Object, k.Version, pre)
+	v, err := store.UpdateIf(ctx, s.b, k.Object, k.Version, pre)
+	if err != nil {
+		return "", fmt.Errorf("reserve access key %s: %w", id, err)
+	}
+	return v, nil
 }
 
 // SweepPending removes user's pending keys and their index entries while
@@ -192,10 +206,12 @@ func (s *Service) Reserve(ctx context.Context, id, version string, pre store.Pre
 // may count and create only once every pending key is gone. Any failure
 // to remove one is returned, store.ErrConflict when pre moved; a key
 // already gone is not a failure.
-func (s *Service) SweepPending(ctx context.Context, user string, pre store.Pre) error {
+func (s *Service) SweepPending(ctx context.Context, user string, pre store.Pre) (err error) {
+	ctx, end := start(ctx, "SweepPending")
+	defer end(&err)
 	all, err := store.List[iam.AccessKey](ctx, s.b)
 	if err != nil {
-		return err
+		return fmt.Errorf("list access keys: %w", err)
 	}
 	for _, k := range all {
 		if k.Object.Status != iam.KeyPending || k.Object.Root || store.Fold(k.Object.UserName) != store.Fold(user) {
@@ -211,18 +227,19 @@ func (s *Service) SweepPending(ctx context.Context, user string, pre store.Pre) 
 // DeletePending removes the pending key id at version and its index
 // entry; with pre, only while pre holds. A key already gone is not an
 // error.
-func (s *Service) DeletePending(ctx context.Context, id, version string, pre *store.Pre) error {
-	var err error
+func (s *Service) DeletePending(ctx context.Context, id, version string, pre *store.Pre) (err error) {
+	ctx, end := start(ctx, "DeletePending")
+	defer end(&err)
 	if pre != nil {
 		err = store.DeleteIf[iam.AccessKey](ctx, s.b, id, version, *pre)
 	} else {
 		err = store.Delete[iam.AccessKey](ctx, s.b, id, version)
 	}
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return fmt.Errorf("remove pending key: %w", err)
+		return fmt.Errorf("remove pending key %s: %w", id, err)
 	}
 	if err := store.Delete[iam.KeyIndex](ctx, s.index, id, ""); err != nil && !errors.Is(err, store.ErrNotFound) {
-		return fmt.Errorf("remove pending key index: %w", err)
+		return fmt.Errorf("remove pending key index %s: %w", id, err)
 	}
 	return nil
 }
@@ -235,7 +252,7 @@ func (s *Service) checkLimit(ctx context.Context, user string) (string, error) {
 		return "", fmt.Errorf("%q: %w", user, ErrNoSuchUser)
 	}
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("user %q: %w", user, err)
 	}
 	if u.Object.Renaming() {
 		// A key made now could name the old user after the rename moved
@@ -244,7 +261,7 @@ func (s *Service) checkLimit(ctx context.Context, user string) (string, error) {
 	}
 	n, err := s.count(ctx, u.Object.Name)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("count access keys of %q: %w", user, err)
 	}
 	if n >= MaxPerUser {
 		return "", ErrLimitExceeded
@@ -256,7 +273,9 @@ func (s *Service) checkLimit(ctx context.Context, user string) (string, error) {
 // existing console-api credential), or generates both when empty. A root
 // key has no user. The index entry is written first, so a crash leaves at
 // worst an index entry without a key, which authenticates nothing.
-func (s *Service) Import(ctx context.Context, user, id, sec string, root bool) (Credential, error) {
+func (s *Service) Import(ctx context.Context, user, id, sec string, root bool) (_ Credential, err error) {
+	ctx, end := start(ctx, "Import")
+	defer end(&err)
 	cred, _, err := s.put(ctx, user, id, sec, root, iam.KeyActive, "")
 	return cred, err
 }
@@ -277,21 +296,21 @@ func (s *Service) put(
 	}
 	sealed, err := s.keys.Seal([]byte(sec), aad(id))
 	if err != nil {
-		return Credential{}, "", err
+		return Credential{}, "", fmt.Errorf("seal access key %s: %w", id, err)
 	}
 	k := iam.AccessKey{
 		Meta: iam.Meta{UID: iam.NewUID(), Generation: 1, RequestID: requestID}, ID: id, UserName: user, Root: root,
 		Status: st, Created: s.now().UTC(), Secret: sealed,
 	}
 	if err := k.Validate(); err != nil {
-		return Credential{}, "", err
+		return Credential{}, "", fmt.Errorf("access key %s: %w", id, err)
 	}
 	if _, err := store.Create(ctx, s.index, iam.KeyIndex{ID: id, Project: s.project}); err != nil {
-		return Credential{}, "", err
+		return Credential{}, "", fmt.Errorf("create access key index %s: %w", id, err)
 	}
 	v, err := store.Create(ctx, s.b, k)
 	if err != nil {
-		return Credential{}, "", err
+		return Credential{}, "", fmt.Errorf("create access key %s: %w", id, err)
 	}
 	return Credential{AccessKeyID: id, Secret: sec, UserName: user}, v, nil
 }
@@ -306,7 +325,7 @@ func (s *Service) count(ctx context.Context, user string) (int, error) {
 func (s *Service) List(ctx context.Context, user string) ([]iam.AccessKey, error) {
 	all, err := store.List[iam.AccessKey](ctx, s.b)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list access keys: %w", err)
 	}
 	var out []iam.AccessKey
 	for _, k := range all {
@@ -321,20 +340,23 @@ func (s *Service) List(ctx context.Context, user string) ([]iam.AccessKey, error
 func (s *Service) owned(ctx context.Context, user, id string) (store.Versioned[iam.AccessKey], error) {
 	k, err := store.Get[iam.AccessKey](ctx, s.b, id)
 	if err != nil {
-		return k, err
+		return k, fmt.Errorf("access key %s: %w", id, err)
 	}
 	if k.Object.Root || k.Object.Status == iam.KeyPending || store.Fold(k.Object.UserName) != store.Fold(user) {
-		return k, store.ErrNotFound
+		// The same answer as a missing key, so it reveals no other owner's key.
+		return k, fmt.Errorf("access key %s: %w", id, store.ErrNotFound)
 	}
 	return k, nil
 }
 
 // SetStatus makes a key Active or Inactive.
-func (s *Service) SetStatus(ctx context.Context, user, id string, st iam.KeyStatus) error {
+func (s *Service) SetStatus(ctx context.Context, user, id string, st iam.KeyStatus) (err error) {
+	ctx, end := start(ctx, "SetStatus")
+	defer end(&err)
 	if _, err := s.owned(ctx, user, id); err != nil {
 		return err
 	}
-	_, err := store.Mutate(ctx, s.b, id, func(k *iam.AccessKey) error {
+	_, err = store.Mutate(ctx, s.b, id, func(k *iam.AccessKey) error {
 		if k.Status != st {
 			k.Status = st
 			k.Generation++
@@ -342,7 +364,10 @@ func (s *Service) SetStatus(ctx context.Context, user, id string, st iam.KeyStat
 		}
 		return nil
 	})
-	return err
+	if err != nil {
+		return fmt.Errorf("set access key %s status: %w", id, err)
+	}
+	return nil
 }
 
 // Delete removes a key of user.
@@ -357,7 +382,9 @@ func (s *Service) Delete(ctx context.Context, user, id string) error {
 // between.
 func (s *Service) DeleteChecked(
 	ctx context.Context, user, id string, check func(iam.AccessKey) (pre store.Pre, ok bool, err error),
-) error {
+) (err error) {
+	ctx, end := start(ctx, "Delete")
+	defer end(&err)
 	k, err := s.owned(ctx, user, id)
 	if err != nil {
 		return err
@@ -377,10 +404,10 @@ func (s *Service) DeleteChecked(
 		err = store.Delete[iam.AccessKey](ctx, s.b, id, k.Version)
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("delete access key %s: %w", id, err)
 	}
 	if err := store.Delete[iam.KeyIndex](ctx, s.index, id, ""); err != nil && !errors.Is(err, store.ErrNotFound) {
-		return err
+		return fmt.Errorf("delete access key index %s: %w", id, err)
 	}
 	return nil
 }
@@ -393,37 +420,61 @@ func (s *Service) Get(ctx context.Context, user, id string) (store.Versioned[iam
 }
 
 // MarkUsed records the last use of a key. Errors are not fatal to callers.
-func (s *Service) MarkUsed(ctx context.Context, id, service, region string) error {
-	_, err := store.Mutate(ctx, s.b, id, func(k *iam.AccessKey) error {
+func (s *Service) MarkUsed(ctx context.Context, id, service, region string) (err error) {
+	ctx, end := start(ctx, "MarkUsed")
+	defer end(&err)
+	_, err = store.Mutate(ctx, s.b, id, func(k *iam.AccessKey) error {
 		k.LastUsed, k.LastUsedService, k.LastUsedRegion = s.now().UTC().Truncate(time.Second), service, region
 		return nil
 	})
-	return err
+	if err != nil {
+		return fmt.Errorf("mark access key %s used: %w", id, err)
+	}
+	return nil
 }
 
 // GetSigningCredential returns the secret for SigV4 verification. An
 // unknown or inactive key is refused. A key sealed under an older KEK is
 // resealed with the active one.
-func (s *Service) GetSigningCredential(ctx context.Context, id string) (Credential, error) {
+func (s *Service) GetSigningCredential(ctx context.Context, id string) (_ Credential, err error) {
+	ctx, end := start(ctx, "GetSigningCredential")
+	defer end(&err)
 	k, err := store.Get[iam.AccessKey](ctx, s.b, id)
 	if err != nil {
-		return Credential{}, err
+		return Credential{}, fmt.Errorf("access key %s: %w", id, err)
 	}
 	if k.Object.Status != iam.KeyActive {
-		return Credential{}, ErrInactive
+		return Credential{}, fmt.Errorf("access key %s: %w", id, ErrInactive)
 	}
 	plain, err := s.keys.Open(k.Object.Secret, aad(k.Object.ID))
 	if err != nil {
-		return Credential{}, err
+		return Credential{}, fmt.Errorf("open access key %s: %w", id, err)
 	}
 	if s.keys.NeedsRewrap(k.Object.Secret) {
-		if sealed, err := s.keys.Seal(plain, aad(k.Object.ID)); err == nil {
-			k.Object.Secret = sealed
-			// A lost race only delays the rewrap to the next read.
-			if _, err := store.Update(ctx, s.b, k.Object, k.Version); err != nil && !errors.Is(err, store.ErrConflict) {
-				return Credential{}, err
-			}
+		// A failed seal only delays the rewrap to the next read.
+		if sealed, serr := s.keys.Seal(plain, aad(k.Object.ID)); serr != nil {
+			countRewrap(ctx, "seal_failed")
+		} else if err := s.rewrap(ctx, k, sealed); err != nil {
+			return Credential{}, err
 		}
 	}
 	return Credential{AccessKeyID: k.Object.ID, Secret: string(plain), UserName: k.Object.UserName, Root: k.Object.Root}, nil
+}
+
+// rewrap stores k with its secret resealed under the active KEK. A lost
+// race only delays the rewrap to the next read; a store failure is
+// returned.
+func (s *Service) rewrap(ctx context.Context, k store.Versioned[iam.AccessKey], sealed iam.Sealed) error {
+	k.Object.Secret = sealed
+	_, err := store.Update(ctx, s.b, k.Object, k.Version)
+	switch {
+	case err == nil:
+		countRewrap(ctx, "ok")
+	case errors.Is(err, store.ErrConflict):
+		countRewrap(ctx, "conflict")
+	default:
+		countRewrap(ctx, "error")
+		return fmt.Errorf("rewrap access key %s: %w", k.Object.ID, err)
+	}
+	return nil
 }
