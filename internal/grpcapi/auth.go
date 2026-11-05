@@ -129,6 +129,12 @@ func (s *Server) authTemporary(
 		// restore them from the session token (sts callerContext).
 		return nil, badCredentials()
 	}
+	if strings.EqualFold(sr.Service, "iam") && sess.Principal.SessionToken && !sess.Principal.SessionMFA {
+		// The Principal the gateway passes to Authorize cannot say it is a
+		// GetSessionToken session, so its IAM calls are refused here, with
+		// the error AWS returns for them (#233).
+		return nil, badCredentials()
+	}
 	pr, err := s.sessionPrincipal(ctx, sess)
 	if err != nil {
 		return nil, toStatus(ctx, err)
