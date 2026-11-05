@@ -47,6 +47,14 @@ func WithKeyIndex(index store.Backend) Option { return func(s *Service) { s.inde
 // for now (popododo0720/vws-iam#188).
 func (s *Service) GetAccessKeyInfo(
 	ctx context.Context, c Caller, reqCtx map[string][]string, accessKeyID string,
+) (account string, err error) {
+	ctx, end := start(ctx, "get_access_key_info")
+	defer end(&err)
+	return s.getAccessKeyInfo(ctx, c, reqCtx, accessKeyID)
+}
+
+func (s *Service) getAccessKeyInfo(
+	ctx context.Context, c Caller, reqCtx map[string][]string, accessKeyID string,
 ) (string, error) {
 	if c.principalID == "" {
 		return "", fmt.Errorf("%w: unresolved caller", ErrAccessDenied)
@@ -60,7 +68,7 @@ func (s *Service) GetAccessKeyInfo(
 	}
 	d, err := s.authz.Authorize(ctx, c.principal, KeyInfoAction, "*", s.callerContext(c, reqCtx))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("authorize %s: %w", KeyInfoAction, err)
 	}
 	if !d.Allowed {
 		return "", fmt.Errorf("%w: not authorized to perform %s", ErrAccessDenied, KeyInfoAction)
@@ -73,7 +81,7 @@ func (s *Service) GetAccessKeyInfo(
 		return "", fmt.Errorf("%w: the access key id does not exist", ErrNoSuchAccessKey)
 	}
 	if err != nil {
-		return "", fmt.Errorf("get access key info: %w", err)
+		return "", fmt.Errorf("look up access key: %w", err)
 	}
 	return pid, nil
 }

@@ -160,7 +160,7 @@ func (s *Service) seal(env envelope) (string, error) {
 	}
 	sealed, err := s.keys.Seal(b, authMessageAAD+"/"+s.account)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("seal authorization message: %w", err)
 	}
 	return sealed.KeyID + "." + base64.RawURLEncoding.EncodeToString(sealed.Ciphertext), nil
 }
@@ -172,6 +172,14 @@ func (s *Service) seal(env envelope) (string, error) {
 // valid. It only reads, so a repeat returns the same JSON.
 func (s *Service) DecodeAuthorizationMessage(
 	ctx context.Context, c Caller, reqCtx map[string][]string, encoded string,
+) (decoded string, err error) {
+	ctx, end := start(ctx, "decode_authorization_message")
+	defer end(&err)
+	return s.decodeAuthorizationMessage(ctx, c, reqCtx, encoded)
+}
+
+func (s *Service) decodeAuthorizationMessage(
+	ctx context.Context, c Caller, reqCtx map[string][]string, encoded string,
 ) (string, error) {
 	if c.principalID == "" {
 		return "", fmt.Errorf("%w: unresolved caller", ErrAccessDenied)
@@ -181,7 +189,7 @@ func (s *Service) DecodeAuthorizationMessage(
 	}
 	d, err := s.authz.Authorize(ctx, c.principal, DecodeAction, "*", s.callerContext(c, reqCtx))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("authorize %s: %w", DecodeAction, err)
 	}
 	if !d.Allowed {
 		return "", fmt.Errorf("%w: not authorized to perform %s", ErrAccessDenied, DecodeAction)

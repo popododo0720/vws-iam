@@ -19,7 +19,11 @@ import (
 // is written after the bump, so it cannot stop a racing duplicate. An
 // empty requestID always bumps. Lost CAS races are retried while ctx
 // lives, so a burst of revocations of one principal is not refused.
-func (s *Service) RevokeSessionsOnce(ctx context.Context, kind authz.PrincipalKind, name, requestID string) error {
+func (s *Service) RevokeSessionsOnce(
+	ctx context.Context, kind authz.PrincipalKind, name, requestID string,
+) (err error) {
+	ctx, end := start(ctx, "revoke_sessions_once")
+	defer end(&err)
 	now := s.now().UTC()
 	apply := func(revoked *time.Time, gen *uint64, reqs *[]string) {
 		if requestID != "" && slices.Contains(*reqs, requestID) {
@@ -35,7 +39,6 @@ func (s *Service) RevokeSessionsOnce(ctx context.Context, kind authz.PrincipalKi
 		}
 	}
 	for {
-		var err error
 		switch kind {
 		case authz.User:
 			_, err = store.Mutate(ctx, s.b, name, func(u *iam.User) error {

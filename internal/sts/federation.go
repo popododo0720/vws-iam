@@ -82,6 +82,14 @@ type FederationRequest struct {
 // plaintext.
 func (s *Service) GetFederationToken(
 	ctx context.Context, c Caller, reqCtx map[string][]string, req FederationRequest,
+) (ft FederationToken, err error) {
+	ctx, end := start(ctx, "get_federation_token")
+	defer end(&err)
+	return s.getFederationToken(ctx, c, reqCtx, req)
+}
+
+func (s *Service) getFederationToken(
+	ctx context.Context, c Caller, reqCtx map[string][]string, req FederationRequest,
 ) (FederationToken, error) {
 	if c.principalID == "" {
 		return FederationToken{}, fmt.Errorf("%w: unresolved caller", ErrAccessDenied)
@@ -99,7 +107,7 @@ func (s *Service) GetFederationToken(
 	for _, arn := range req.PolicyARNs {
 		ok, err := s.authz.ManagedPolicyExists(ctx, arn)
 		if err != nil {
-			return FederationToken{}, fmt.Errorf("get federation token: %w", err)
+			return FederationToken{}, fmt.Errorf("check managed session policy: %w", err)
 		}
 		if !ok {
 			return FederationToken{}, fmt.Errorf("%w: policy %s does not exist or is not attachable", policy.ErrMalformed, arn)
@@ -108,7 +116,7 @@ func (s *Service) GetFederationToken(
 	arn := iam.ARN("sts", "", s.account, "federated-user/"+req.Name)
 	dec, err := s.authz.Authorize(ctx, c.principal, FederationAction, arn, s.callerContext(c, reqCtx))
 	if err != nil {
-		return FederationToken{}, fmt.Errorf("get federation token: %w", err)
+		return FederationToken{}, fmt.Errorf("authorize %s: %w", FederationAction, err)
 	}
 	if !dec.Allowed {
 		return FederationToken{}, fmt.Errorf("%w: not authorized to perform %s on %s", ErrAccessDenied, FederationAction, arn)
@@ -124,7 +132,7 @@ func (s *Service) GetFederationToken(
 	}
 	creds, err := s.issue(ctx, sess, d)
 	if err != nil {
-		return FederationToken{}, fmt.Errorf("get federation token: %w", err)
+		return FederationToken{}, fmt.Errorf("issue federation session: %w", err)
 	}
 	return FederationToken{
 		Credentials: creds, FederatedUserID: s.account + ":" + req.Name, ARN: arn,
