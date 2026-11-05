@@ -48,13 +48,13 @@ func points(ctx context.Context, t *testing.T) (evals, durs map[string]int64) {
 			case metricdata.Sum[int64]:
 				if m.Name == "vws.iam.authz.evaluations" {
 					for _, dp := range data.DataPoints {
-						evals[key(dp.Attributes)] += dp.Value
+						evals[key(t, dp.Attributes)] += dp.Value
 					}
 				}
 			case metricdata.Histogram[float64]:
 				if m.Name == "vws.iam.authz.duration" {
 					for _, dp := range data.DataPoints {
-						durs[key(dp.Attributes)] += int64(dp.Count)
+						durs[key(t, dp.Attributes)] += int64(dp.Count)
 					}
 				}
 			}
@@ -65,7 +65,15 @@ func points(ctx context.Context, t *testing.T) (evals, durs map[string]int64) {
 
 func labels(decision, result string) string { return decision + "/" + result }
 
-func key(set attribute.Set) string {
+// key is the decision/result of a metric point, which may carry no other
+// label.
+func key(t *testing.T, set attribute.Set) string {
+	t.Helper()
+	for _, kv := range set.ToSlice() {
+		if kv.Key != "decision" && kv.Key != "result" {
+			t.Errorf("metric point labelled %s=%s", kv.Key, kv.Value.String())
+		}
+	}
 	d, _ := set.Value("decision")
 	r, _ := set.Value("result")
 	return labels(d.AsString(), r.AsString())
