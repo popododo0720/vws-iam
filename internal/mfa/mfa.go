@@ -49,22 +49,28 @@ const (
 
 // attempt runs check on device name under the lockout policy and persists
 // the outcome: a failure counts (and may lock), a success resets. op names
-// the operation in the lockout metric. A missing device is
-// ErrNotAssociated, as a device of another user is, so the answer does not
-// tell them apart.
-func (s *Service) attempt(ctx context.Context, op, name string, check func(d *iam.MfaDevice) (bool, error)) error {
-	return s.attemptIf(ctx, op, name, nil, check)
+// the operation in the lockout metric. owns, when set, runs before the
+// lock is read, so a missing device, a device of another user and a locked
+// device of another user all answer ErrNotAssociated alike.
+func (s *Service) attempt(
+	ctx context.Context, op, name string, owns func(iam.MfaDevice) bool, check func(d *iam.MfaDevice) (bool, error),
+) error {
+	return s.attemptIf(ctx, op, name, nil, owns, check)
 }
 
 // attemptIf is attempt whose device write commits only while pre is
 // unchanged when pre is set; then a conflict is returned, not retried.
 func (s *Service) attemptIf(
-	ctx context.Context, op, name string, pre *store.Pre, check func(d *iam.MfaDevice) (bool, error),
+	ctx context.Context, op, name string, pre *store.Pre,
+	owns func(iam.MfaDevice) bool, check func(d *iam.MfaDevice) (bool, error),
 ) error {
 	var verr error
 	locked := false
 	err := mutateIf(ctx, s.b, name, pre, func(d *iam.MfaDevice) error {
 		verr, locked = nil, false
+		if owns != nil && !owns(*d) {
+			return ErrNotAssociated
+		}
 		now := s.now().UTC()
 		if now.Before(d.LockedUntil) {
 			verr = ErrLocked
@@ -247,7 +253,7 @@ func (s *Service) checkEnabledFor(ctx context.Context, user, uid, name string) e
 func (s *Service) enable(ctx context.Context, user, name, code1, code2 string, pre *store.Pre) error {
 	// Both codes must lie within ±Skew of now: code1 at step cur-1 or cur,
 	// code2 at the next step.
-	return s.attemptIf(ctx, "Enable", name, pre, func(d *iam.MfaDevice) (bool, error) {
+	return s.attemptIf(ctx, "Enable", name, pre, nil, func(d *iam.MfaDevice) (bool, error) {
 		if d.Enabled {
 			return false, ErrEntityInUse
 		}
@@ -331,8 +337,8 @@ func (s *Service) list(ctx context.Context, user string) ([]iam.MfaDevice, error
 func (s *Service) Verify(ctx context.Context, user, name, code string) (err error) {
 	ctx, end := start(ctx, "Verify")
 	defer end(&err)
-	return s.attempt(ctx, "Verify", name, func(d *iam.MfaDevice) (bool, error) {
-		return s.verifyCode(user, code, d)
+	return s.attempt(ctx, "Verify", name, s.enabledFor(user, ""), func(d *iam.MfaDevice) (bool, error) {
+		return s.verifyCode(code, d)
 	})
 }
 
@@ -345,18 +351,20 @@ func (s *Service) VerifySerial(ctx context.Context, user, serial, code string) (
 	if !ok {
 		return fmt.Errorf("mfa device %q: %w", serial, ErrNotAssociated)
 	}
-	return s.attempt(ctx, "VerifySerial", name, func(d *iam.MfaDevice) (bool, error) {
-		if s.Serial(*d) != serial {
-			return false, ErrNotAssociated
-		}
-		return s.verifyCode(user, code, d)
+	return s.attempt(ctx, "VerifySerial", name, s.enabledFor(user, serial), func(d *iam.MfaDevice) (bool, error) {
+		return s.verifyCode(code, d)
 	})
 }
 
-func (s *Service) verifyCode(user, code string, d *iam.MfaDevice) (bool, error) {
-	if !d.Enabled || store.Fold(d.UserName) != store.Fold(user) {
-		return false, ErrNotAssociated
+// enabledFor reports whether a device is enabled for user and, when serial
+// is set, has exactly that serial number.
+func (s *Service) enabledFor(user, serial string) func(iam.MfaDevice) bool {
+	return func(d iam.MfaDevice) bool {
+		return d.Enabled && store.Fold(d.UserName) == store.Fold(user) && (serial == "" || s.Serial(d) == serial)
 	}
+}
+
+func (s *Service) verifyCode(code string, d *iam.MfaDevice) (bool, error) {
 	seed, err := s.seed(*d)
 	if err != nil {
 		return false, err
@@ -387,10 +395,7 @@ func (s *Service) Resync(ctx context.Context, user, serial, code1, code2 string)
 	if !ok {
 		return fmt.Errorf("mfa device %q: %w", serial, ErrNotAssociated)
 	}
-	return s.attempt(ctx, "Resync", name, func(d *iam.MfaDevice) (bool, error) {
-		if s.Serial(*d) != serial || !d.Enabled || store.Fold(d.UserName) != store.Fold(user) {
-			return false, ErrNotAssociated
-		}
+	return s.attempt(ctx, "Resync", name, s.enabledFor(user, serial), func(d *iam.MfaDevice) (bool, error) {
 		seed, err := s.seed(*d)
 		if err != nil {
 			return false, err

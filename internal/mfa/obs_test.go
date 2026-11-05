@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -185,12 +186,29 @@ func TestOperationsAreMeasuredAndTraced(t *testing.T) {
 	}
 }
 
+// conflictOnce answers the next MFA device Update with ErrConflict once
+// armed, so store.Mutate runs its function again.
+type conflictOnce struct {
+	store.Backend
+	armed *atomic.Bool
+}
+
+func (c conflictOnce) Update(
+	ctx context.Context, kind iam.Kind, key string, spec []byte, version string,
+) (string, error) {
+	if kind == iam.KindMfaDevice && c.armed.CompareAndSwap(true, false) {
+		return "", store.ErrConflict
+	}
+	return c.Backend.Update(ctx, kind, key, spec, version)
+}
+
 // TestLockoutsAreCounted: the wrong code that locks a device counts one
-// started lockout; a renewal that extends a running lock counts one
-// renewed; a renewal of an unlocked device and a refusal while locked
-// count none.
+// started lockout, also when its write lost a race and was retried; a
+// renewal that extends a running lock counts one renewed; a renewal of an
+// unlocked device and a refusal while locked count none.
 func TestLockoutsAreCounted(t *testing.T) {
-	svc, _, clk := setup(t)
+	armed := &atomic.Bool{}
+	svc, _, clk := setupOn(t, func(b store.Backend) store.Backend { return conflictOnce{b, armed} })
 	ctx := context.Background()
 	seed := enroll(t, svc, clk, "alice", "d1")
 	before := counts(t, "vws.iam.mfa.lockouts")
@@ -198,9 +216,13 @@ func TestLockoutsAreCounted(t *testing.T) {
 		t.Fatalf("renewal of an unlocked device: %v %v", renewed, err)
 	}
 	for i := 1; i <= mfa.MaxFailedAttempts; i++ {
+		armed.Store(i == mfa.MaxFailedAttempts)
 		if err := svc.Verify(ctx, "alice", "d1", wrongCode(seed, clk.t)); err == nil {
 			t.Fatalf("wrong code %d accepted", i)
 		}
+	}
+	if armed.Load() {
+		t.Fatal("the locking write never met its conflict")
 	}
 	if err := svc.Verify(ctx, "alice", "d1", wrongCode(seed, clk.t)); !errors.Is(err, mfa.ErrLocked) {
 		t.Fatalf("locked device: %v", err)
@@ -246,14 +268,36 @@ func TestErrorsCarryContext(t *testing.T) {
 	svc, b, clk := setup(t)
 	ctx := context.Background()
 	seed := enroll(t, svc, clk, "alice", "alice-phone")
+	bobSeed := enroll(t, svc, clk, "bob", "bob-key")
 	clk.t = clk.t.Add(time.Minute)
-	good := code(seed, clk.t, 0)
-
-	otherErr := svc.Verify(ctx, "bob", "alice-phone", good)
-	missingErr := svc.Verify(ctx, "bob", "nope", good)
-	if strings.Replace(otherErr.Error(), "alice-phone", "nope", 1) != missingErr.Error() {
-		t.Errorf("another user's device answers %q, a missing one %q: the message tells them apart", otherErr, missingErr)
+	good, bad := code(seed, clk.t, 0), wrongCode(seed, clk.t)
+	for range mfa.MaxFailedAttempts {
+		if err := svc.Verify(ctx, "bob", "bob-key", wrongCode(bobSeed, clk.t)); err == nil {
+			t.Fatal("wrong code accepted")
+		}
 	}
+
+	missingErr := svc.Verify(ctx, "carol", "nope", good)
+	for _, tc := range []struct{ device, user string }{
+		{"alice-phone", "bob"},
+		{"bob-key", "alice"}, // locked
+	} {
+		err := svc.Verify(ctx, tc.user, tc.device, good)
+		if strings.Replace(err.Error(), tc.device, "nope", 1) != missingErr.Error() {
+			t.Errorf("another user's device %s answers %q, a missing one %q: the message tells them apart",
+				tc.device, err, missingErr)
+		}
+	}
+	lockedSerial := "arn:vws:iam::" + acct + ":mfa/bob-key"
+	for _, err := range []error{
+		svc.VerifySerial(ctx, "alice", lockedSerial, good),
+		svc.Resync(ctx, "alice", lockedSerial, good, bad),
+	} {
+		if !errors.Is(err, mfa.ErrNotAssociated) {
+			t.Errorf("another user's locked device by serial: %v, want NoSuchEntity", err)
+		}
+	}
+	otherErr := svc.Verify(ctx, "bob", "alice-phone", good)
 	down := mfa.New(listFails{b, store.ErrUnavailable}, nil, acct, clk.now)
 	_, listErr := down.List(ctx, "alice")
 	_, requiredErr := down.Required(ctx, "alice")
@@ -264,8 +308,8 @@ func TestErrorsCarryContext(t *testing.T) {
 	}{
 		{otherErr, mfa.ErrNotAssociated, "mfa device alice-phone"},
 		{missingErr, mfa.ErrNotAssociated, "mfa device nope"},
-		{svc.Verify(ctx, "alice", "alice-phone", wrongCode(seed, clk.t)), mfa.ErrInvalidCode, "mfa device alice-phone"},
-		{svc.Resync(ctx, "alice", "alice-phone", good, good), mfa.ErrNotAssociated, `mfa device "alice-phone"`},
+		{svc.Verify(ctx, "alice", "alice-phone", bad), mfa.ErrInvalidCode, "mfa device alice-phone"},
+		{svc.Resync(ctx, "alice", "alice-phone", good, bad), mfa.ErrNotAssociated, `mfa device "alice-phone"`},
 		{
 			svc.Enable(ctx, "carol", "alice-phone", good, good),
 			store.ErrNotFound, `enable mfa device alice-phone: user "carol"`,
@@ -279,8 +323,10 @@ func TestErrorsCarryContext(t *testing.T) {
 		if !errors.Is(tc.err, tc.sentinel) || !strings.Contains(tc.err.Error(), tc.context) {
 			t.Errorf("error %v, want %v with %q", tc.err, tc.sentinel, tc.context)
 		}
-		if strings.Contains(tc.err.Error(), good) {
-			t.Errorf("error %v carries the code", tc.err)
+		for _, c := range []string{good, bad} {
+			if strings.Contains(tc.err.Error(), c) {
+				t.Errorf("error %v carries a code", tc.err)
+			}
 		}
 	}
 }
