@@ -47,13 +47,31 @@ type Principal struct {
 	// call IAM or any STS action except sts:GetCallerIdentity; a root
 	// caller's federated session is bounded by its session policies too.
 	Federated bool
+	// SessionToken marks a GetSessionToken session and SessionMFA says
+	// whether MFA was verified when it was issued. Such a session cannot
+	// call IAM without that MFA, nor any STS action except
+	// sts:AssumeRole and sts:GetCallerIdentity, as in AWS (#233).
+	SessionToken bool
+	SessionMFA   bool
 }
 
-// federatedDenied reports whether a federated user session is refused
-// action whatever its policies say, as in AWS.
-func federatedDenied(action string) bool {
+// sessionDenied returns why p's session is refused action whatever its
+// policies say, as in AWS, or "" when its policies decide.
+// iam:PassRole is a permission, not an IAM API operation, so a
+// GetSessionToken session keeps it.
+func sessionDenied(p Principal, action string) string {
 	a := strings.ToLower(action)
-	return strings.HasPrefix(a, "iam:") || (strings.HasPrefix(a, "sts:") && a != "sts:getcalleridentity")
+	iamAPI := strings.HasPrefix(a, "iam:")
+	stsAPI := strings.HasPrefix(a, "sts:")
+	switch {
+	case p.Federated && (iamAPI || stsAPI && a != "sts:getcalleridentity"):
+		return "a federated user session cannot call " + action
+	case p.SessionToken && iamAPI && !p.SessionMFA && a != "iam:passrole":
+		return "a GetSessionToken session issued without MFA cannot call " + action
+	case p.SessionToken && stsAPI && a != "sts:assumerole" && a != "sts:getcalleridentity":
+		return "a GetSessionToken session cannot call " + action
+	}
+	return ""
 }
 
 // allowAll is the identity side of a root user's federated session,
@@ -224,8 +242,8 @@ func (a *Authorizer) ManagedPolicy(ctx context.Context, arn string) (policy.Name
 // carries request keys such as aws:SourceIp and aws:MultiFactorAuthPresent;
 // aws:username, aws:PrincipalArn, aws:userid and aws:CurrentTime are set here.
 func (a *Authorizer) Authorize(ctx context.Context, p Principal, action, resource string, reqCtx map[string][]string) (policy.Decision, error) {
-	if p.Federated && federatedDenied(action) {
-		return policy.Decision{Reason: "a federated user session cannot call " + action}, nil
+	if why := sessionDenied(p, action); why != "" {
+		return policy.Decision{Reason: why}, nil
 	}
 	if p.Kind == Root && !p.Federated {
 		return policy.Decision{Allowed: true, Reason: "root user"}, nil

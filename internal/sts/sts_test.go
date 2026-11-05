@@ -422,3 +422,57 @@ func TestMFAThrottlingPassesThrough(t *testing.T) {
 		t.Fatalf("err = %v, want Throttling only", err)
 	}
 }
+
+// TestGetSessionTokenSessionIsMarked: Validate marks a GetSessionToken
+// session, with the MFA verified at issue, also on a restarted service,
+// so Authorize refuses IAM without that MFA (#233); such a session still
+// assumes a role, and the role session is not marked.
+func TestGetSessionTokenSessionIsMarked(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	alice := e.caller(t, "alice")
+	restarted := sts.New(e.b, e.keys, authz.New(e.b, acct, e.clk.now), acct, e.clk.now)
+	for _, mfa := range []bool{false, true} {
+		m := sts.MFA{}
+		if mfa {
+			m = goodMFA("alice")
+		}
+		st, err := e.svc.GetSessionToken(ctx, alice, 0, m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, svc := range []*sts.Service{e.svc, restarted} {
+			sess, err := svc.Validate(ctx, st.AccessKeyID, st.SessionToken)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p := sess.Principal; !p.SessionToken || p.SessionMFA != mfa {
+				t.Fatalf("mfa %v: principal %+v not marked", mfa, p)
+			}
+			d, err := e.az.Authorize(ctx, sess.Principal, "iam:ListUsers", "*", sess.Context())
+			if err != nil || d.Allowed {
+				t.Fatalf("mfa %v: iam:ListUsers %+v, %v; alice has no IAM policy", mfa, d, err)
+			}
+			d, err = e.az.Authorize(ctx, sess.Principal, "sts:DecodeAuthorizationMessage", "*", sess.Context())
+			if err != nil || d.Allowed || !strings.Contains(d.Reason, "GetSessionToken") {
+				t.Fatalf("mfa %v: sts:DecodeAuthorizationMessage %+v, %v", mfa, d, err)
+			}
+		}
+		c, err := e.svc.Resolve(ctx, sts.Credential{AccessKeyID: st.AccessKeyID, SessionToken: st.SessionToken})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ar, err := e.svc.AssumeRole(ctx, c, nil, adminARN, "session", 0, "", sts.MFA{})
+		if err != nil {
+			t.Fatalf("mfa %v: AssumeRole from the session: %v", mfa, err)
+		}
+		rs, err := e.svc.Validate(ctx, ar.AccessKeyID, ar.SessionToken)
+		if err != nil || rs.Principal.SessionToken {
+			t.Fatalf("role session %+v, %v is marked", rs.Principal, err)
+		}
+		d, err := e.az.Authorize(ctx, rs.Principal, "iam:ListUsers", "*", rs.Context())
+		if err != nil || !d.Allowed {
+			t.Fatalf("mfa %v: role session iam:ListUsers %+v, %v", mfa, d, err)
+		}
+	}
+}

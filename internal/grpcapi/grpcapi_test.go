@@ -288,14 +288,20 @@ func TestAccessKeysAndQuota(t *testing.T) {
 }
 
 func (e *env) sign(id, secretKey, token string) *iamv1.AuthenticateRequest {
+	return e.signFor("s3", id, secretKey, token)
+}
+
+// signFor signs a gateway request for service.
+func (e *env) signFor(service, id, secretKey, token string) *iamv1.AuthenticateRequest {
 	date := e.now.Format("20060102")
 	amz := e.now.Format("20060102T150405Z")
-	canonical := "GET\n/\n\nhost:s3.vws.local\nx-amz-date:" + amz + "\n\nhost;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	const emptyHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	canonical := "GET\n/\n\nhost:" + service + ".vws.local\nx-amz-date:" + amz + "\n\nhost;x-amz-date\n" + emptyHash
 	h := sha256.Sum256([]byte(canonical))
-	sts := "AWS4-HMAC-SHA256\n" + amz + "\n" + date + "/kr-1/s3/aws4_request\n" + hex.EncodeToString(h[:])
+	sts := "AWS4-HMAC-SHA256\n" + amz + "\n" + date + "/kr-1/" + service + "/aws4_request\n" + hex.EncodeToString(h[:])
 	return &iamv1.AuthenticateRequest{
-		AccessKeyId: id, Date: date, Region: "kr-1", Service: "s3", CanonicalRequest: canonical,
-		StringToSign: sts, Signature: sigv4.Sign([]byte(secretKey), date, "kr-1", "s3", sts), SessionToken: token,
+		AccessKeyId: id, Date: date, Region: "kr-1", Service: service, CanonicalRequest: canonical,
+		StringToSign: sts, Signature: sigv4.Sign([]byte(secretKey), date, "kr-1", service, sts), SessionToken: token,
 	}
 }
 

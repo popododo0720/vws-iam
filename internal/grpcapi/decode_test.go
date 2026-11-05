@@ -302,7 +302,9 @@ func TestDecodeAuthorizationMessageConsoleRequestIP(t *testing.T) {
 // TestDecodeAuthorizationMessageMFAAgeDeny: the decode permission is
 // evaluated with the trusted keys Authorize builds (aws:MultiFactorAuthAge,
 // aws:userid, aws:PrincipalAccount), so a Deny on MFA age refuses the
-// decode once the age passes the limit, on the SigV4 and console paths.
+// decode once the age passes the limit, on the SigV4 path (a role session
+// assumed with MFA; a GetSessionToken session cannot decode, #233) and the
+// console path.
 func TestDecodeAuthorizationMessageMFAAgeDeny(t *testing.T) {
 	for _, bk := range renameBackends {
 		t.Run(bk.name, func(t *testing.T) {
@@ -312,10 +314,20 @@ func TestDecodeAuthorizationMessageMFAAgeDeny(t *testing.T) {
 			bob := e.keyedUser(t, "bob", `{"Version":"2012-10-17","Statement":[
 				{"Sid":"NoDelete","Effect":"Deny","Action":"s3:DeleteObject","Resource":"*"}]}`)
 			auditor := e.keyedUser(t, "auditor", `{"Version":"2012-10-17","Statement":[
+				{"Effect":"Allow","Action":"sts:AssumeRole","Resource":"*"},
 				{"Effect":"Allow","Action":"sts:DecodeAuthorizationMessage","Resource":"*",
 				 "Condition":{"StringEquals":{"aws:PrincipalAccount":"`+proj+`"},"StringLike":{"aws:userid":"?*"}}},
 				{"Effect":"Deny","Action":"sts:DecodeAuthorizationMessage","Resource":"*",
 				 "Condition":{"NumericGreaterThan":{"aws:MultiFactorAuthAge":"300"}}}]}`)
+			trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"` +
+				auditor.user.GetStatus().GetArn() + `"},"Action":"sts:AssumeRole"}]}`
+			op, err := e.roles.CreateRole(ctx, &iamv1.CreateRoleRequest{Parent: parentName, RoleId: "decoder", Role: &iamv1.Role{
+				Spec: &iamv1.RoleSpec{AssumeRolePolicy: trust, AttachedPolicies: []string{parentName + "/policies/auditor-policy"}},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			role := unpack(t, op, &iamv1.Role{})
 			pair := strings.SplitN(enableMFA(t, e, ctx, "auditor"), "|", 2)
 			seed, serial := pair[0], pair[1]
 			a, err := e.auth.Authenticate(ctx, e.sign(bob.id, bob.secretKey, ""))
@@ -335,7 +347,15 @@ func TestDecodeAuthorizationMessageMFAAgeDeny(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			c := st.GetCredentials()
+			gst := st.GetCredentials()
+			assume := e.stsSign(gst.GetAccessKeyId(), gst.GetSecretAccessKey(), gst.GetSessionToken(), "AssumeRole")
+			ar, err := e.token.AssumeRole(ctx, &iamv1.AssumeRoleRequest{
+				Authentication: arSig(assume), Role: role.GetName(), RoleSessionName: "decode",
+			})
+			if err != nil || !ar.GetAssumedRoleUser().GetMfaAuthenticated() {
+				t.Fatalf("assume with MFA: %v %v", ar, err)
+			}
+			c := ar.GetCredentials()
 			const pw = "correct horse battery"
 			lp := &iamv1.SetLoginProfileRequest{Name: auditor.user.GetName(), Password: pw}
 			if _, err := e.users.SetLoginProfile(ctx, lp); err != nil {

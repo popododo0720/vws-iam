@@ -662,6 +662,7 @@ func (s *Service) Validate(ctx context.Context, accessKeyID, token string) (Sess
 	}
 	if p.Kind != authz.Role && !p.Federated {
 		p.ARN = "" // a GetSessionToken session acts as the user (or root) itself
+		p.SessionToken, p.SessionMFA = true, sess.MFA
 	}
 	return Session{
 		AccessKeyID: sess.AccessKeyID, Secret: sess.Secret, Project: sess.Project, AuthTime: sess.AuthTime,
