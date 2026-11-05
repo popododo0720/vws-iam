@@ -151,7 +151,13 @@ func (r SAMLRoleSession) String() string {
 // sts:AssumeRoleWithSAML (and sts:SetSourceIdentity with a SourceIdentity
 // attribute) for the provider with the SAML:* keys of the assertion,
 // including its mapped attributes (samlContextAttrs). Session policies narrow the session. Nothing is stored.
-func (s *Service) AssumeRoleWithSAML(ctx context.Context, req SAMLRequest) (SAMLRoleSession, error) {
+func (s *Service) AssumeRoleWithSAML(ctx context.Context, req SAMLRequest) (rs SAMLRoleSession, err error) {
+	ctx, end := start(ctx, "assume_role_with_saml")
+	defer end(&err)
+	return s.assumeRoleWithSAML(ctx, req)
+}
+
+func (s *Service) assumeRoleWithSAML(ctx context.Context, req SAMLRequest) (SAMLRoleSession, error) {
 	packed, err := validateSAMLRequest(req)
 	if err != nil {
 		return SAMLRoleSession{}, err
@@ -169,7 +175,7 @@ func (s *Service) AssumeRoleWithSAML(ctx context.Context, req SAMLRequest) (SAML
 		return SAMLRoleSession{}, fmt.Errorf("%w: SAML provider %s does not exist", ErrInvalidIdentityToken, req.PrincipalARN)
 	}
 	if err != nil {
-		return SAMLRoleSession{}, fmt.Errorf("assume role with saml: %w", err)
+		return SAMLRoleSession{}, fmt.Errorf("get saml provider: %w", err)
 	}
 	now := s.now().UTC()
 	if prov.ARN != req.PrincipalARN || prov.EntityID == "" || len(prov.Certificates) == 0 ||
@@ -230,7 +236,7 @@ func (s *Service) AssumeRoleWithSAML(ctx context.Context, req SAMLRequest) (SAML
 	for _, arn := range req.PolicyARNs {
 		ok, err := s.authz.ManagedPolicyExists(ctx, arn)
 		if err != nil {
-			return SAMLRoleSession{}, fmt.Errorf("assume role with saml: %w", err)
+			return SAMLRoleSession{}, fmt.Errorf("check managed session policy: %w", err)
 		}
 		if !ok {
 			return SAMLRoleSession{}, fmt.Errorf("%w: policy %s does not exist or is not attachable", policy.ErrMalformed, arn)
@@ -249,7 +255,7 @@ func (s *Service) AssumeRoleWithSAML(ctx context.Context, req SAMLRequest) (SAML
 		SAML: &SAMLIdentity{Subject: cl.subject, SubjectType: cl.subjectType, NameQualifier: nameQualifier},
 	}, d, cl.sessionNotOnOrAfter) // SessionNotOnOrAfter stays an absolute cap
 	if err != nil {
-		return SAMLRoleSession{}, fmt.Errorf("assume role with saml: %w", err)
+		return SAMLRoleSession{}, fmt.Errorf("issue saml session: %w", err)
 	}
 	creds.AssumedRoleARN = arn
 	return SAMLRoleSession{
@@ -348,7 +354,7 @@ func (s *Service) samlRole(ctx context.Context, roleARN string) (store.Versioned
 		return store.Versioned[iam.Role]{}, denied
 	}
 	if err != nil {
-		return store.Versioned[iam.Role]{}, fmt.Errorf("assume role with saml: %w", err)
+		return store.Versioned[iam.Role]{}, fmt.Errorf("get role: %w", err)
 	}
 	return r, nil
 }

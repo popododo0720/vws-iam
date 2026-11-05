@@ -97,7 +97,11 @@ const rootID = "root"
 // ConsoleCaller is the IAM user of a console session that the server has
 // already validated (grpcapi ValidateSession); mfa and authTime come from
 // that stored session. The user must still exist.
-func (s *Service) ConsoleCaller(ctx context.Context, userName string, mfa bool, authTime time.Time) (Caller, error) {
+func (s *Service) ConsoleCaller(
+	ctx context.Context, userName string, mfa bool, authTime time.Time,
+) (c Caller, err error) {
+	ctx, end := start(ctx, "console_caller")
+	defer end(&err)
 	u, err := store.Get[iam.User](ctx, s.b, userName)
 	if errors.Is(err, store.ErrNotFound) {
 		return Caller{}, ErrInvalidToken
@@ -334,7 +338,9 @@ func (s *Service) userID(c Caller) string {
 
 // Resolve derives the caller from its credential: a session token is
 // opened and checked here; a long-term key must exist and be active.
-func (s *Service) Resolve(ctx context.Context, cred Credential) (Caller, error) {
+func (s *Service) Resolve(ctx context.Context, cred Credential) (c Caller, err error) {
+	ctx, end := start(ctx, "resolve")
+	defer end(&err)
 	if cred.SessionToken != "" {
 		sess, err := s.Validate(ctx, cred.AccessKeyID, cred.SessionToken)
 		if err != nil {
@@ -393,13 +399,14 @@ func (s *Service) verifyMFA(ctx context.Context, c Caller, m MFA) (bool, error) 
 // RevokeSessions invalidates every session issued so far for a user
 // (GetSessionToken) or a role (AssumeRole), like the AWS console's
 // "Revoke active sessions". Later sessions are unaffected.
-func (s *Service) RevokeSessions(ctx context.Context, kind authz.PrincipalKind, name string) error {
+func (s *Service) RevokeSessions(ctx context.Context, kind authz.PrincipalKind, name string) (err error) {
+	ctx, end := start(ctx, "revoke_sessions")
+	defer end(&err)
 	now := s.now().UTC()
 	// The generation is bumped inside the store's compare-and-swap, so the
 	// store's write order, not any replica's clock, decides which sessions
 	// came before the revocation. The reported time never moves backwards
 	// even if this replica's clock is behind the previous revoker's.
-	var err error
 	switch kind {
 	case authz.User:
 		_, err = store.Mutate(ctx, s.b, name, func(u *iam.User) error {
@@ -452,7 +459,19 @@ func (s *Service) revokeGen(ctx context.Context, kind authz.PrincipalKind, name 
 // AssumeRole returns credentials for roleARN if the role's trust policy
 // trusts the caller and the caller's own policies allow sts:AssumeRole on
 // it. sessionPolicy, if set, narrows the session.
-func (s *Service) AssumeRole(ctx context.Context, c Caller, reqCtx map[string][]string, roleARN, sessionName string, duration time.Duration, sessionPolicy string, m MFA) (Credentials, error) {
+func (s *Service) AssumeRole(
+	ctx context.Context, c Caller, reqCtx map[string][]string, roleARN, sessionName string,
+	duration time.Duration, sessionPolicy string, m MFA,
+) (creds Credentials, err error) {
+	ctx, end := start(ctx, "assume_role")
+	defer end(&err)
+	return s.assumeRole(ctx, c, reqCtx, roleARN, sessionName, duration, sessionPolicy, m)
+}
+
+func (s *Service) assumeRole(
+	ctx context.Context, c Caller, reqCtx map[string][]string, roleARN, sessionName string,
+	duration time.Duration, sessionPolicy string, m MFA,
+) (Credentials, error) {
 	if c.principalID == "" {
 		return Credentials{}, fmt.Errorf("%w: unresolved caller", ErrAccessDenied)
 	}
@@ -469,7 +488,7 @@ func (s *Service) AssumeRole(ctx context.Context, c Caller, reqCtx map[string][]
 		return Credentials{}, fmt.Errorf("%w: not authorized to assume %s", ErrAccessDenied, roleARN)
 	}
 	if err != nil {
-		return Credentials{}, err
+		return Credentials{}, fmt.Errorf("get role: %w", err)
 	}
 	mfa, err := s.verifyMFA(ctx, c, m)
 	if err != nil {
@@ -493,7 +512,7 @@ func (s *Service) AssumeRole(ctx context.Context, c Caller, reqCtx map[string][]
 	var policies []string
 	if sessionPolicy != "" {
 		if _, err := policy.ParseIdentity(sessionPolicy); err != nil {
-			return Credentials{}, err
+			return Credentials{}, fmt.Errorf("session policy: %w", err)
 		}
 		policies = []string{sessionPolicy}
 	}
@@ -501,7 +520,7 @@ func (s *Service) AssumeRole(ctx context.Context, c Caller, reqCtx map[string][]
 	// The caller's own permissions must allow sts:AssumeRole on the role.
 	d, err := s.authz.Authorize(ctx, c.principal, "sts:AssumeRole", roleARN, s.callerContext(c, reqCtx))
 	if err != nil {
-		return Credentials{}, err
+		return Credentials{}, fmt.Errorf("authorize sts:AssumeRole: %w", err)
 	}
 	if !d.Allowed {
 		return Credentials{}, fmt.Errorf("%w: %s", ErrAccessDenied, d.Reason)
@@ -518,7 +537,7 @@ func (s *Service) AssumeRole(ctx context.Context, c Caller, reqCtx map[string][]
 	if callerARN == "" {
 		_, callerARN, err = s.authz.IdentityPolicies(ctx, c.principal)
 		if err != nil {
-			return Credentials{}, err
+			return Credentials{}, fmt.Errorf("caller identity: %w", err)
 		}
 	}
 	tctx := s.callerContext(c, reqCtx)
@@ -540,7 +559,15 @@ func (s *Service) AssumeRole(ctx context.Context, c Caller, reqCtx map[string][]
 // GetSessionToken returns credentials for a user, typically to carry MFA.
 // SerialNumber and TokenCode, when given, are verified here; only then does
 // the session carry MFA (or the root caller authenticated with MFA).
-func (s *Service) GetSessionToken(ctx context.Context, c Caller, duration time.Duration, m MFA) (Credentials, error) {
+func (s *Service) GetSessionToken(
+	ctx context.Context, c Caller, duration time.Duration, m MFA,
+) (creds Credentials, err error) {
+	ctx, end := start(ctx, "get_session_token")
+	defer end(&err)
+	return s.getSessionToken(ctx, c, duration, m)
+}
+
+func (s *Service) getSessionToken(ctx context.Context, c Caller, duration time.Duration, m MFA) (Credentials, error) {
 	if (c.principal.Kind != authz.User && c.principal.Kind != authz.Root) || c.temporary || c.principalID == "" {
 		return Credentials{}, fmt.Errorf("%w: GetSessionToken needs long-term user credentials", ErrAccessDenied)
 	}
@@ -557,7 +584,7 @@ func (s *Service) GetSessionToken(ctx context.Context, c Caller, duration time.D
 	arn := iam.ARN("iam", "", s.account, "root")
 	if c.principal.Kind == authz.User {
 		if _, arn, err = s.authz.IdentityPolicies(ctx, c.principal); err != nil {
-			return Credentials{}, err
+			return Credentials{}, fmt.Errorf("caller identity: %w", err)
 		}
 	}
 	return s.issue(ctx, session{Kind: int(c.principal.Kind), Name: c.principal.Name, ARN: arn, MFA: mfa, PrincipalID: c.principalID, AuthTime: c.authTime}, duration)
@@ -575,16 +602,16 @@ func (s *Service) issueBy(ctx context.Context, sess session, d time.Duration, no
 	// commits after this read bumps it and rejects the token.
 	gen, err := s.revokeGen(ctx, authz.PrincipalKind(sess.Kind), sess.Name)
 	if err != nil {
-		return Credentials{}, err
+		return Credentials{}, fmt.Errorf("revocation generation: %w", err)
 	}
 	sess.RevokeGen = &gen
 	id, err := accesskey.NewKeyID("ASIA")
 	if err != nil {
-		return Credentials{}, err
+		return Credentials{}, fmt.Errorf("new key id: %w", err)
 	}
 	sec, err := accesskey.NewSecret()
 	if err != nil {
-		return Credentials{}, err
+		return Credentials{}, fmt.Errorf("new secret: %w", err)
 	}
 	now := s.now().UTC()
 	sess.AccessKeyID, sess.Secret, sess.IssuedAt, sess.Project = id, sec, now, s.account
@@ -605,7 +632,7 @@ func (s *Service) issueBy(ctx context.Context, sess session, d time.Duration, no
 	}
 	sealed, err := s.keys.Seal(b, tokenAAD+"/"+id)
 	if err != nil {
-		return Credentials{}, err
+		return Credentials{}, fmt.Errorf("seal session: %w", err)
 	}
 	token := sealed.KeyID + "." + base64.RawURLEncoding.EncodeToString(sealed.Ciphertext)
 	return Credentials{AccessKeyID: id, Secret: sec, SessionToken: token, Expiration: sess.Expires}, nil
@@ -624,7 +651,13 @@ func SessionProject(keys *secret.Keyring, accessKeyID, token string, now func() 
 // Validate opens a session token presented with accessKeyID. A tampered,
 // foreign, mismatched, expired or revoked token is rejected, as is one
 // whose user or role was deleted or recreated.
-func (s *Service) Validate(ctx context.Context, accessKeyID, token string) (Session, error) {
+func (s *Service) Validate(ctx context.Context, accessKeyID, token string) (sess Session, err error) {
+	ctx, end := start(ctx, "validate")
+	defer end(&err)
+	return s.validate(ctx, accessKeyID, token)
+}
+
+func (s *Service) validate(ctx context.Context, accessKeyID, token string) (Session, error) {
 	sess, err := s.open(accessKeyID, token)
 	if err != nil {
 		return Session{}, err
