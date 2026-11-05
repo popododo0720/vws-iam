@@ -2,6 +2,7 @@ package kubestore_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -18,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/store"
@@ -65,6 +67,9 @@ func (p telemetryProbe) durations(t *testing.T) map[string]uint64 {
 			}
 			for _, dp := range h.DataPoints {
 				kv := dp.Attributes.ToSlice()
+				if len(kv) != 3 {
+					t.Errorf("duration point has attributes %v, want only op, kind and result", kv)
+				}
 				key := attr(kv, "vws.iam.store.op") + "/" + attr(kv, "vws.iam.store.kind") + "/" + attr(kv, "vws.iam.store.result")
 				out[key] += dp.Count
 			}
@@ -139,6 +144,9 @@ func TestStoreFailuresCarryContextAndFailTheSpan(t *testing.T) {
 		List: func(context.Context, client.WithWatch, client.ObjectList, ...client.ListOption) error {
 			return broken
 		},
+		Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
+			return context.Canceled
+		},
 	}).Build()
 	b, p := newProbedStore(t, c)
 	ctx := context.Background()
@@ -158,9 +166,19 @@ func TestStoreFailuresCarryContextAndFailTheSpan(t *testing.T) {
 		t.Errorf("list error %q does not name the call and kind", err)
 	}
 
+	if _, err := store.Create(ctx, b, iam.User{Name: "alice", ID: "1"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("create: %v", err)
+	}
+
 	results := map[string]string{}
 	for _, s := range p.spans.Ended() {
 		results[s.Name()] = attr(s.Attributes(), "vws.iam.store.result")
+		if s.Name() == "kubestore.create" {
+			if s.Status().Code == codes.Error {
+				t.Errorf("a canceled call marked the span failed")
+			}
+			continue
+		}
 		if s.Status().Code != codes.Error {
 			t.Errorf("%s: a failure left the span unset", s.Name())
 		}
@@ -168,7 +186,8 @@ func TestStoreFailuresCarryContextAndFailTheSpan(t *testing.T) {
 			t.Errorf("%s: no error event", s.Name())
 		}
 	}
-	if results["kubestore.get"] != "unavailable" || results["kubestore.list"] != "error" {
+	if results["kubestore.get"] != "unavailable" || results["kubestore.list"] != "error" ||
+		results["kubestore.create"] != "canceled" {
 		t.Errorf("results %v", results)
 	}
 	d := p.durations(t)
@@ -200,5 +219,66 @@ func TestSentinelErrorsStayBare(t *testing.T) {
 	_, err = store.Update(ctx, b, iam.User{Name: "alice", ID: "1"}, u)
 	if err == nil || err.Error() != store.ErrConflict.Error() {
 		t.Errorf("conflict text %v", err)
+	}
+}
+
+func TestEveryBackendCallIsTraced(t *testing.T) {
+	b, p := newProbedStore(t, newFake())
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(p.spans))
+	ctx, parent := tp.Tracer("test").Start(context.Background(), "rpc")
+	u := iam.User{Name: "alice", ID: "1"}
+	uv, err := store.Create(ctx, b, u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := iam.Group{Name: "devs"}
+	gv, err := store.Create(ctx, b, g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uv, err = store.Update(ctx, b, u, uv); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := b.ListPage(ctx, iam.KindUser, 10, ""); err != nil {
+		t.Fatal(err)
+	}
+	pre := store.Pre{Kind: iam.KindUser, Key: "alice", Version: uv}
+	spec, err := json.Marshal(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gv, err = b.UpdateIf(ctx, iam.KindGroup, "devs", spec, gv, pre); err != nil {
+		t.Fatal(err)
+	}
+	cur, err := b.Get(ctx, iam.KindUser, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pre.Version = cur.Version
+	if err := b.DeleteIf(ctx, iam.KindGroup, "devs", gv, pre); err != nil {
+		t.Fatal(err)
+	}
+	parent.End()
+
+	names := map[string]string{}
+	for _, s := range p.spans.Ended() {
+		if s.Name() == "rpc" {
+			continue
+		}
+		if s.SpanKind() != trace.SpanKindClient {
+			t.Errorf("%s: kind %v", s.Name(), s.SpanKind())
+		}
+		if s.SpanContext().TraceID() != parent.SpanContext().TraceID() {
+			t.Errorf("%s is not in the caller's trace", s.Name())
+		}
+		names[s.Name()] = attr(s.Attributes(), "vws.iam.store.result")
+	}
+	for _, n := range []string{
+		"kubestore.create", "kubestore.update", "kubestore.get", "kubestore.list_page",
+		"kubestore.update_if", "kubestore.delete_if", "kubestore.delete",
+	} {
+		if names[n] != "ok" {
+			t.Errorf("%s: result %q (spans %v)", n, names[n], names)
+		}
 	}
 }
