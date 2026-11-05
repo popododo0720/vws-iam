@@ -48,19 +48,29 @@ const (
 )
 
 // attempt runs check on device name under the lockout policy and persists
-// the outcome: a failure counts (and may lock), a success resets.
-func (s *Service) attempt(ctx context.Context, name string, check func(d *iam.MfaDevice) (bool, error)) error {
-	return s.attemptIf(ctx, name, nil, check)
+// the outcome: a failure counts (and may lock), a success resets. op names
+// the operation in the lockout metric. owns, when set, runs before the
+// lock is read, so a missing device, a device of another user and a locked
+// device of another user all answer ErrNotAssociated alike.
+func (s *Service) attempt(
+	ctx context.Context, op, name string, owns func(iam.MfaDevice) bool, check func(d *iam.MfaDevice) (bool, error),
+) error {
+	return s.attemptIf(ctx, op, name, nil, owns, check)
 }
 
 // attemptIf is attempt whose device write commits only while pre is
 // unchanged when pre is set; then a conflict is returned, not retried.
 func (s *Service) attemptIf(
-	ctx context.Context, name string, pre *store.Pre, check func(d *iam.MfaDevice) (bool, error),
+	ctx context.Context, op, name string, pre *store.Pre,
+	owns func(iam.MfaDevice) bool, check func(d *iam.MfaDevice) (bool, error),
 ) error {
 	var verr error
+	locked := false
 	err := mutateIf(ctx, s.b, name, pre, func(d *iam.MfaDevice) error {
-		verr = nil
+		verr, locked = nil, false
+		if owns != nil && !owns(*d) {
+			return ErrNotAssociated
+		}
 		now := s.now().UTC()
 		if now.Before(d.LockedUntil) {
 			verr = ErrLocked
@@ -81,17 +91,24 @@ func (s *Service) attemptIf(
 		verr = ErrInvalidCode
 		if d.FailedAttempts >= MaxFailedAttempts {
 			d.LockedUntil, d.LockedSince, d.FailedAttempts = now.Add(LockoutDuration), now, 0
-			verr = ErrLocked
+			verr, locked = ErrLocked, true
 		}
 		return nil
 	})
-	if errors.Is(err, errNoWrite) {
-		err = nil
-	}
-	if err != nil {
+	switch {
+	case errors.Is(err, errNoWrite):
+	case errors.Is(err, store.ErrNotFound):
+		return fmt.Errorf("mfa device %s: %w", name, ErrNotAssociated)
+	case err != nil:
 		return fmt.Errorf("mfa device %s: %w", name, err)
 	}
-	return verr
+	if locked {
+		countLockout(ctx, op, lockStarted)
+	}
+	if verr != nil {
+		return fmt.Errorf("mfa device %s: %w", name, verr)
+	}
+	return nil
 }
 
 // errNoWrite ends a Mutate without writing.
@@ -150,25 +167,33 @@ var b32 = base32.StdEncoding.WithPadding(base32.NoPadding)
 
 // CreateVirtual makes an unassigned device at path and returns its seed,
 // once. Path is part of the serial number and must be empty or end in "/".
-func (s *Service) CreateVirtual(ctx context.Context, name, path string) (Enrollment, error) {
+func (s *Service) CreateVirtual(ctx context.Context, name, path string) (_ Enrollment, err error) {
+	ctx, end := start(ctx, "CreateVirtual")
+	defer end(&err)
 	seed := make([]byte, 20)
 	if _, err := rand.Read(seed); err != nil {
-		return Enrollment{}, fmt.Errorf("seed: %w", err)
+		return Enrollment{}, fmt.Errorf("create mfa device %s: seed: %w", name, err)
 	}
 	sealed, err := s.keys.Seal(seed, aad(name))
 	if err != nil {
-		return Enrollment{}, err
+		return Enrollment{}, fmt.Errorf("create mfa device %s: seal seed: %w", name, err)
 	}
 	d := iam.MfaDevice{Name: name, Path: path, Created: s.now().UTC(), Seed: sealed}
 	if _, err := store.Create(ctx, s.b, d); err != nil {
-		return Enrollment{}, err
+		return Enrollment{}, fmt.Errorf("create mfa device %s: %w", name, err)
 	}
 	enc := b32.EncodeToString(seed)
 	u := url.URL{Scheme: "otpauth", Host: "totp", Path: "/VWS:" + name, RawQuery: url.Values{"secret": {enc}, "issuer": {"VWS"}, "period": {"30"}, "digits": {"6"}}.Encode()}
 	return Enrollment{SerialNumber: s.Serial(d), Base32Seed: enc, URI: u.String()}, nil
 }
 
-func (s *Service) seed(d iam.MfaDevice) ([]byte, error) { return s.keys.Open(d.Seed, aad(d.Name)) }
+func (s *Service) seed(d iam.MfaDevice) ([]byte, error) {
+	seed, err := s.keys.Open(d.Seed, aad(d.Name))
+	if err != nil {
+		return nil, fmt.Errorf("open seed: %w", err)
+	}
+	return seed, nil
+}
 
 // maxEnableAttempts bounds how often Enable reads the user again after
 // an unrelated change of the user beat its device write.
@@ -179,12 +204,14 @@ const maxEnableAttempts = 8
 // read (store.UpdateIf), so it never lands after a rename or delete of
 // that user (#134): the user gone is NotFound, renaming or replaced by
 // another user under the name is ErrRenaming or ErrConflict.
-func (s *Service) Enable(ctx context.Context, user, name, code1, code2 string) error {
+func (s *Service) Enable(ctx context.Context, user, name, code1, code2 string) (err error) {
+	ctx, end := start(ctx, "Enable")
+	defer end(&err)
 	uid := ""
 	for attempt := 0; ; attempt++ {
 		u, err := store.Get[iam.User](ctx, s.b, user)
 		if err != nil {
-			return err
+			return fmt.Errorf("enable mfa device %s: user %q: %w", name, user, err)
 		}
 		if u.Object.Renaming() {
 			return fmt.Errorf("user %q: %w", user, store.ErrRenaming)
@@ -215,9 +242,9 @@ func (s *Service) checkEnabledFor(ctx context.Context, user, uid, name string) e
 		return nil
 	}
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return err
+		return fmt.Errorf("enable mfa device %s: recheck user %q: %w", name, user, err)
 	}
-	if derr := s.Deactivate(context.WithoutCancel(ctx), user, name); derr != nil && !errors.Is(derr, ErrNotAssociated) {
+	if derr := s.deactivate(context.WithoutCancel(ctx), user, name); derr != nil && !errors.Is(derr, ErrNotAssociated) {
 		return errors.Join(fmt.Errorf("user %q changed: %w", user, store.ErrConflict), derr)
 	}
 	return fmt.Errorf("user %q changed: %w", user, store.ErrConflict)
@@ -226,7 +253,7 @@ func (s *Service) checkEnabledFor(ctx context.Context, user, uid, name string) e
 func (s *Service) enable(ctx context.Context, user, name, code1, code2 string, pre *store.Pre) error {
 	// Both codes must lie within ±Skew of now: code1 at step cur-1 or cur,
 	// code2 at the next step.
-	return s.attemptIf(ctx, name, pre, func(d *iam.MfaDevice) (bool, error) {
+	return s.attemptIf(ctx, "Enable", name, pre, nil, func(d *iam.MfaDevice) (bool, error) {
 		if d.Enabled {
 			return false, ErrEntityInUse
 		}
@@ -245,7 +272,13 @@ func (s *Service) enable(ctx context.Context, user, name, code1, code2 string, p
 }
 
 // Deactivate unassigns an enabled device from user.
-func (s *Service) Deactivate(ctx context.Context, user, name string) error {
+func (s *Service) Deactivate(ctx context.Context, user, name string) (err error) {
+	ctx, end := start(ctx, "Deactivate")
+	defer end(&err)
+	return s.deactivate(ctx, user, name)
+}
+
+func (s *Service) deactivate(ctx context.Context, user, name string) error {
 	_, err := store.Mutate(ctx, s.b, name, func(d *iam.MfaDevice) error {
 		if !d.Enabled || store.Fold(d.UserName) != store.Fold(user) {
 			return ErrNotAssociated
@@ -253,27 +286,41 @@ func (s *Service) Deactivate(ctx context.Context, user, name string) error {
 		d.Enabled, d.UserName, d.EnableTime = false, "", time.Time{}
 		return nil
 	})
-	return err
+	if err != nil {
+		return fmt.Errorf("deactivate mfa device %s: %w", name, err)
+	}
+	return nil
 }
 
 // Delete removes an unassigned device.
-func (s *Service) Delete(ctx context.Context, name string) error {
+func (s *Service) Delete(ctx context.Context, name string) (err error) {
+	ctx, end := start(ctx, "Delete")
+	defer end(&err)
 	d, err := store.Get[iam.MfaDevice](ctx, s.b, name)
 	if err != nil {
-		return err
+		return fmt.Errorf("delete mfa device %s: %w", name, err)
 	}
 	if d.Object.Enabled {
-		return ErrEntityInUse
+		return fmt.Errorf("delete mfa device %s: %w", name, ErrEntityInUse)
 	}
-	return store.Delete[iam.MfaDevice](ctx, s.b, name, d.Version)
+	if err := store.Delete[iam.MfaDevice](ctx, s.b, name, d.Version); err != nil {
+		return fmt.Errorf("delete mfa device %s: %w", name, err)
+	}
+	return nil
 }
 
 // List returns user's enabled devices, or every device when user is "".
 // Seeds are stripped.
-func (s *Service) List(ctx context.Context, user string) ([]iam.MfaDevice, error) {
+func (s *Service) List(ctx context.Context, user string) (_ []iam.MfaDevice, err error) {
+	ctx, end := start(ctx, "List")
+	defer end(&err)
+	return s.list(ctx, user)
+}
+
+func (s *Service) list(ctx context.Context, user string) ([]iam.MfaDevice, error) {
 	all, err := store.List[iam.MfaDevice](ctx, s.b)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list mfa devices: %w", err)
 	}
 	var out []iam.MfaDevice
 	for _, d := range all {
@@ -287,31 +334,37 @@ func (s *Service) List(ctx context.Context, user string) ([]iam.MfaDevice, error
 
 // Verify checks code for user's enabled device and consumes its step. On
 // success the request carries aws:MultiFactorAuthPresent=true.
-func (s *Service) Verify(ctx context.Context, user, name, code string) error {
-	return s.attempt(ctx, name, func(d *iam.MfaDevice) (bool, error) {
-		return s.verifyCode(user, code, d)
+func (s *Service) Verify(ctx context.Context, user, name, code string) (err error) {
+	ctx, end := start(ctx, "Verify")
+	defer end(&err)
+	return s.attempt(ctx, "Verify", name, s.enabledFor(user, ""), func(d *iam.MfaDevice) (bool, error) {
+		return s.verifyCode(code, d)
 	})
 }
 
 // VerifySerial checks code for the device named by serial. serial must be
 // exactly the device's ARN, including its path.
-func (s *Service) VerifySerial(ctx context.Context, user, serial, code string) error {
+func (s *Service) VerifySerial(ctx context.Context, user, serial, code string) (err error) {
+	ctx, end := start(ctx, "VerifySerial")
+	defer end(&err)
 	name, _, ok := iam.SplitMfaDeviceARN(s.account, serial)
 	if !ok {
-		return ErrNotAssociated
+		return fmt.Errorf("mfa device %q: %w", serial, ErrNotAssociated)
 	}
-	return s.attempt(ctx, name, func(d *iam.MfaDevice) (bool, error) {
-		if s.Serial(*d) != serial {
-			return false, ErrNotAssociated
-		}
-		return s.verifyCode(user, code, d)
+	return s.attempt(ctx, "VerifySerial", name, s.enabledFor(user, serial), func(d *iam.MfaDevice) (bool, error) {
+		return s.verifyCode(code, d)
 	})
 }
 
-func (s *Service) verifyCode(user, code string, d *iam.MfaDevice) (bool, error) {
-	if !d.Enabled || store.Fold(d.UserName) != store.Fold(user) {
-		return false, ErrNotAssociated
+// enabledFor reports whether a device is enabled for user and, when serial
+// is set, has exactly that serial number.
+func (s *Service) enabledFor(user, serial string) func(iam.MfaDevice) bool {
+	return func(d iam.MfaDevice) bool {
+		return d.Enabled && store.Fold(d.UserName) == store.Fold(user) && (serial == "" || s.Serial(d) == serial)
 	}
+}
+
+func (s *Service) verifyCode(code string, d *iam.MfaDevice) (bool, error) {
 	seed, err := s.seed(*d)
 	if err != nil {
 		return false, err
@@ -335,15 +388,14 @@ func (s *Service) verifyCode(user, code string, d *iam.MfaDevice) (bool, error) 
 // of a request that succeeded is ErrInvalidCode, and of racing requests
 // with the same codes only one succeeds. A wrong pair counts towards the
 // lockout like a wrong Verify code. Never log the codes.
-func (s *Service) Resync(ctx context.Context, user, serial, code1, code2 string) error {
+func (s *Service) Resync(ctx context.Context, user, serial, code1, code2 string) (err error) {
+	ctx, end := start(ctx, "Resync")
+	defer end(&err)
 	name, _, ok := iam.SplitMfaDeviceARN(s.account, serial)
 	if !ok {
-		return ErrNotAssociated
+		return fmt.Errorf("mfa device %q: %w", serial, ErrNotAssociated)
 	}
-	return s.attempt(ctx, name, func(d *iam.MfaDevice) (bool, error) {
-		if s.Serial(*d) != serial || !d.Enabled || store.Fold(d.UserName) != store.Fold(user) {
-			return false, ErrNotAssociated
-		}
+	return s.attempt(ctx, "Resync", name, s.enabledFor(user, serial), func(d *iam.MfaDevice) (bool, error) {
 		seed, err := s.seed(*d)
 		if err != nil {
 			return false, err
@@ -359,7 +411,9 @@ func (s *Service) Resync(ctx context.Context, user, serial, code1, code2 string)
 }
 
 // Required reports whether user has an enabled device (login needs a code).
-func (s *Service) Required(ctx context.Context, user string) (bool, error) {
-	ds, err := s.List(ctx, user)
+func (s *Service) Required(ctx context.Context, user string) (_ bool, err error) {
+	ctx, end := start(ctx, "Required")
+	defer end(&err)
+	ds, err := s.list(ctx, user)
 	return len(ds) > 0, err
 }

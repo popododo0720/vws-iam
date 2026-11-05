@@ -27,6 +27,12 @@ type clock struct{ t time.Time }
 func (c *clock) now() time.Time { return c.t }
 
 func setup(t *testing.T) (*mfa.Service, store.Backend, *clock) {
+	return setupOn(t, func(b store.Backend) store.Backend { return b })
+}
+
+// setupOn is setup whose service runs on wrap of the store; the returned
+// backend is the unwrapped one.
+func setupOn(t *testing.T, wrap func(store.Backend) store.Backend) (*mfa.Service, store.Backend, *clock) {
 	k := make([]byte, 32)
 	if _, err := rand.Read(k); err != nil {
 		t.Fatal(err)
@@ -43,7 +49,7 @@ func setup(t *testing.T) (*mfa.Service, store.Backend, *clock) {
 		}
 	}
 	clk := &clock{t: time.Unix(1_800_000_000, 0)}
-	return mfa.New(b, keys, acct, clk.now), b, clk
+	return mfa.New(wrap(b), keys, acct, clk.now), b, clk
 }
 
 func seedOf(t *testing.T, e mfa.Enrollment) []byte {

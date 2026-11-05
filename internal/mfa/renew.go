@@ -25,7 +25,13 @@ const MaxLockout = time.Hour
 // user's limit (a leaked key, or only a user name on console Login) must
 // not be able to lock or keep locked a device without wrong codes. It
 // reports whether it wrote.
-func (s *Service) RenewLock(ctx context.Context, user, name string) (bool, error) {
+func (s *Service) RenewLock(ctx context.Context, user, name string) (_ bool, err error) {
+	ctx, end := start(ctx, "RenewLock")
+	defer end(&err)
+	return s.renewLock(ctx, "RenewLock", user, name)
+}
+
+func (s *Service) renewLock(ctx context.Context, op, user, name string) (bool, error) {
 	_, err := store.Mutate(ctx, s.b, name, func(d *iam.MfaDevice) error {
 		if !d.Enabled || store.Fold(d.UserName) != store.Fold(user) {
 			return errNoWrite
@@ -52,15 +58,18 @@ func (s *Service) RenewLock(ctx context.Context, user, name string) (bool, error
 	case errors.Is(err, errNoWrite), errors.Is(err, store.ErrNotFound):
 		return false, nil
 	case err != nil:
-		return false, fmt.Errorf("mfa device %s: %w", name, err)
+		return false, fmt.Errorf("renew mfa device lock %s: %w", name, err)
 	}
+	countLockout(ctx, op, lockRenewed)
 	return true, nil
 }
 
 // RenewLockSerial is RenewLock for the device named by serial. It renews
 // only when serial is exactly that device's ARN, so a wrong path cannot
 // extend another device's lock.
-func (s *Service) RenewLockSerial(ctx context.Context, user, serial string) (bool, error) {
+func (s *Service) RenewLockSerial(ctx context.Context, user, serial string) (_ bool, err error) {
+	ctx, end := start(ctx, "RenewLockSerial")
+	defer end(&err)
 	name, _, ok := iam.SplitMfaDeviceARN(s.account, serial)
 	if !ok {
 		return false, nil
@@ -70,10 +79,10 @@ func (s *Service) RenewLockSerial(ctx context.Context, user, serial string) (boo
 	case errors.Is(err, store.ErrNotFound):
 		return false, nil
 	case err != nil:
-		return false, fmt.Errorf("mfa device %s: %w", name, err)
+		return false, fmt.Errorf("renew mfa device lock %s: %w", name, err)
 	}
 	if s.Serial(d.Object) != serial {
 		return false, nil
 	}
-	return s.RenewLock(ctx, user, name)
+	return s.renewLock(ctx, "RenewLockSerial", user, name)
 }

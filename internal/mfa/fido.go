@@ -36,7 +36,11 @@ func (s *Service) FidoSerial(d iam.FidoDevice) string { return iam.FidoDeviceARN
 // removed again and the call is ErrNotAssociated. A device left by a
 // crash in that window belongs to nobody (see owned). A missing user is
 // ErrNotAssociated; invalid input is iam.ErrInvalid and stores nothing.
-func (s *Service) RegisterFido(ctx context.Context, user, label string, c FidoCredential) (iam.FidoDevice, error) {
+func (s *Service) RegisterFido(
+	ctx context.Context, user, label string, c FidoCredential,
+) (_ iam.FidoDevice, err error) {
+	ctx, end := start(ctx, "RegisterFido")
+	defer end(&err)
 	u, err := store.Get[iam.User](ctx, s.b, user)
 	if errors.Is(err, store.ErrNotFound) {
 		return iam.FidoDevice{}, fmt.Errorf("user %q: %w", user, ErrNotAssociated)
@@ -54,7 +58,7 @@ func (s *Service) RegisterFido(ctx context.Context, user, label string, c FidoCr
 	}
 	d.UID, d.Generation = iam.NewUID(), 1
 	if err := d.Validate(); err != nil {
-		return iam.FidoDevice{}, err
+		return iam.FidoDevice{}, fmt.Errorf("register fido device: %w", err)
 	}
 	v, err := s.createFido(ctx, d)
 	if err != nil {
@@ -161,7 +165,9 @@ func (s *Service) owned(ctx context.Context, d iam.FidoDevice) (bool, error) {
 // empty the device must be registered to that user (names compare case
 // insensitively, as IAM names do). Every miss, a malformed or virtual
 // (mfa/) serial included, is ErrNotAssociated (AWS NoSuchEntity).
-func (s *Service) GetFido(ctx context.Context, serial, user string) (iam.FidoDevice, error) {
+func (s *Service) GetFido(ctx context.Context, serial, user string) (_ iam.FidoDevice, err error) {
+	ctx, end := start(ctx, "GetFido")
+	defer end(&err)
 	owner, id, ok := iam.SplitFidoDeviceARN(s.account, serial)
 	if !ok || (user != "" && store.Fold(user) != store.Fold(owner)) {
 		return iam.FidoDevice{}, fmt.Errorf("mfa device %q: %w", serial, ErrNotAssociated)
@@ -183,7 +189,9 @@ func (s *Service) GetFido(ctx context.Context, serial, user string) (iam.FidoDev
 
 // ListFido returns user's FIDO devices, or every one when user is "".
 // Devices that belong to nobody (see owned) are skipped.
-func (s *Service) ListFido(ctx context.Context, user string) ([]iam.FidoDevice, error) {
+func (s *Service) ListFido(ctx context.Context, user string) (_ []iam.FidoDevice, err error) {
+	ctx, end := start(ctx, "ListFido")
+	defer end(&err)
 	all, err := store.List[iam.FidoDevice](ctx, s.b)
 	if err != nil {
 		return nil, fmt.Errorf("list fido devices: %w", err)
@@ -217,7 +225,9 @@ func (s *Service) ListFido(ctx context.Context, user string) ([]iam.FidoDevice, 
 // DeactivateMFADevice does for a security key: it is deleted, not kept
 // unassigned. A device of another user or a missing one is
 // ErrNotAssociated; a stale read is store.ErrConflict and deletes nothing.
-func (s *Service) DeactivateFido(ctx context.Context, user, serial string) error {
+func (s *Service) DeactivateFido(ctx context.Context, user, serial string) (err error) {
+	ctx, end := start(ctx, "DeactivateFido")
+	defer end(&err)
 	owner, id, ok := iam.SplitFidoDeviceARN(s.account, serial)
 	if !ok || store.Fold(user) != store.Fold(owner) {
 		return fmt.Errorf("mfa device %q: %w", serial, ErrNotAssociated)
