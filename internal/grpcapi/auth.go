@@ -130,9 +130,9 @@ func (s *Server) authTemporary(
 		return nil, badCredentials()
 	}
 	if strings.EqualFold(sr.Service, "iam") && sess.Principal.SessionToken && !sess.Principal.SessionMFA {
-		// The Principal the gateway passes to Authorize cannot say it is a
-		// GetSessionToken session, so its IAM calls are refused here, with
-		// the error AWS returns for them (#233).
+		// TODO(#233): the Principal the gateway passes to Authorize cannot
+		// say it is a GetSessionToken session (popododo0720/vws-proto#140),
+		// so its IAM calls are refused here, with the error AWS returns.
 		return nil, badCredentials()
 	}
 	pr, err := s.sessionPrincipal(ctx, sess)
