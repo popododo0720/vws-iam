@@ -112,7 +112,7 @@ func (a *Authorizer) managed(ctx context.Context, arn string) (policy.Named, err
 		return policy.Named{}, fmt.Errorf("policy %q: %w", arn, ErrNoSuchEntity)
 	}
 	if err != nil {
-		return policy.Named{}, err
+		return policy.Named{}, fmt.Errorf("get policy %q: %w", arn, err)
 	}
 	if iam.PolicyARN(a.account, p.Object) != arn {
 		return policy.Named{}, fmt.Errorf("policy %q: %w", arn, ErrNoSuchEntity)
@@ -163,7 +163,7 @@ func (a *Authorizer) IdentityPolicies(ctx context.Context, p Principal) ([]polic
 			return nil, "", fmt.Errorf("user %q: %w", p.Name, ErrNoSuchEntity)
 		}
 		if err != nil {
-			return nil, "", err
+			return nil, "", fmt.Errorf("get user %q: %w", p.Name, err)
 		}
 		arn := iam.UserARN(a.account, u.Object)
 		src := source{"user", u.Object.Name, arn}
@@ -206,7 +206,7 @@ func (a *Authorizer) IdentityPolicies(ctx context.Context, p Principal) ([]polic
 			return nil, "", fmt.Errorf("role %q: %w", p.Name, ErrNoSuchEntity)
 		}
 		if err != nil {
-			return nil, "", err
+			return nil, "", fmt.Errorf("get role %q: %w", p.Name, err)
 		}
 		arn := iam.RoleARN(a.account, r.Object)
 		out, err = a.collect(ctx, source{"role", r.Object.Name, arn}, r.Object.AttachedPolicies, r.Object.InlinePolicies, out)
@@ -224,7 +224,7 @@ func (a *Authorizer) GroupPolicies(ctx context.Context, name string) ([]policy.N
 		return nil, "", fmt.Errorf("group %q: %w", name, ErrNoSuchEntity)
 	}
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("get group %q: %w", name, err)
 	}
 	arn := iam.GroupARN(a.account, g.Object)
 	src := source{"group", g.Object.Name, arn}
@@ -241,7 +241,17 @@ func (a *Authorizer) ManagedPolicy(ctx context.Context, arn string) (policy.Name
 // Authorize decides whether p may perform action on resource. reqCtx
 // carries request keys such as aws:SourceIp and aws:MultiFactorAuthPresent;
 // aws:username, aws:PrincipalArn, aws:userid and aws:CurrentTime are set here.
-func (a *Authorizer) Authorize(ctx context.Context, p Principal, action, resource string, reqCtx map[string][]string) (policy.Decision, error) {
+func (a *Authorizer) Authorize(
+	ctx context.Context, p Principal, action, resource string, reqCtx map[string][]string,
+) (d policy.Decision, err error) {
+	ctx, end := observe(ctx)
+	defer func() { end(d, err) }()
+	return a.authorize(ctx, p, action, resource, reqCtx)
+}
+
+func (a *Authorizer) authorize(
+	ctx context.Context, p Principal, action, resource string, reqCtx map[string][]string,
+) (policy.Decision, error) {
 	if why := sessionDenied(p, action); why != "" {
 		return policy.Decision{Reason: why}, nil
 	}
@@ -332,7 +342,7 @@ func RenamePartner(ctx context.Context, b store.Backend, u iam.User) (string, er
 		return "", nil
 	}
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("get rename partner %q of user %q: %w", other, u.Name, err)
 	}
 	back := v.Object.RenameTo
 	if u.RenameTo != "" {
@@ -350,7 +360,7 @@ func RenamePartner(ctx context.Context, b store.Backend, u iam.User) (string, er
 func GroupsOf(ctx context.Context, b store.Backend, names ...string) ([]iam.Group, error) {
 	all, err := store.List[iam.Group](ctx, b)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list groups: %w", err)
 	}
 	want := map[string]bool{}
 	for _, n := range names {

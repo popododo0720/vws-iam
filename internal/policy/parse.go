@@ -267,7 +267,7 @@ func statement(r rawStatement) (Statement, error) {
 		return s, err
 	}
 	if s.Actions, err = stringOrList(act); err != nil {
-		return s, err
+		return s, fmt.Errorf("action: %w", err)
 	}
 	if len(s.Actions) == 0 {
 		return s, malformed("no Action")
@@ -283,7 +283,7 @@ func statement(r rawStatement) (Statement, error) {
 		return s, err
 	}
 	if s.Resources, err = stringOrList(res); err != nil {
-		return s, err
+		return s, fmt.Errorf("resource: %w", err)
 	}
 	s.NotRes = notRes
 	for _, x := range s.Resources {
@@ -315,10 +315,10 @@ func statement(r rawStatement) (Statement, error) {
 		for k, raw := range keys {
 			vals, err := stringOrList(raw)
 			if err != nil {
-				return s, err
+				return s, fmt.Errorf("condition %s key %q: %w", op, k, err)
 			}
 			if err := checkValues(base, vals); err != nil {
-				return s, err
+				return s, fmt.Errorf("condition %s key %q: %w", op, k, err)
 			}
 			s.Conditions = append(s.Conditions, Condition{Op: base, IfExists: ifExists, Key: strings.ToLower(k), Values: vals})
 		}
@@ -346,7 +346,7 @@ func principals(b json.RawMessage) (map[string][]string, error) {
 		}
 		vals, err := stringOrList(raw)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("principal %s: %w", typ, err)
 		}
 		out[typ] = vals
 	}
