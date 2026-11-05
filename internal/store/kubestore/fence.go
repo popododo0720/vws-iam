@@ -68,9 +68,11 @@ const unfenceTimeout = 5 * time.Second
 // UpdateIf implements store.Backend with a fence on pre's object.
 func (s *Store) UpdateIf(
 	ctx context.Context, kind iam.Kind, key string, spec []byte, version string, pre store.Pre,
-) (string, error) {
+) (_ string, err error) {
+	ctx, end := s.tel.start(ctx, "update_if", kind)
+	defer func() { end(err) }()
 	var out string
-	err := s.fenced(ctx, kind, key, version, pre, func() error {
+	err = s.fenced(ctx, kind, key, version, pre, func() error {
 		v, err := s.Update(ctx, kind, key, spec, version)
 		out = v
 		return err
@@ -79,7 +81,9 @@ func (s *Store) UpdateIf(
 }
 
 // DeleteIf implements store.Backend with a fence on pre's object.
-func (s *Store) DeleteIf(ctx context.Context, kind iam.Kind, key, version string, pre store.Pre) error {
+func (s *Store) DeleteIf(ctx context.Context, kind iam.Kind, key, version string, pre store.Pre) (err error) {
+	ctx, end := s.tel.start(ctx, "delete_if", kind)
+	defer func() { end(err) }()
 	if version == "" {
 		return store.ErrNoVersion
 	}
@@ -142,7 +146,7 @@ func (s *Store) fence(ctx context.Context, pre store.Pre, f fence) (string, erro
 	ann[fencePrefix+id] = string(val)
 	u.SetAnnotations(ann)
 	if err := s.c.Update(ctx, u); err != nil {
-		return "", translate(err)
+		return "", translate("fence", pre.Kind, err)
 	}
 	return id, nil
 }
@@ -164,7 +168,7 @@ func (s *Store) unfence(ctx context.Context, pre store.Pre, id string) error {
 		}
 		delete(ann, fencePrefix+id)
 		u.SetAnnotations(ann)
-		err = translate(s.c.Update(ctx, u))
+		err = translate("unfence", pre.Kind, s.c.Update(ctx, u))
 		if errors.Is(err, store.ErrConflict) && attempt < 8 {
 			continue
 		}
@@ -198,7 +202,7 @@ func (s *Store) void(ctx context.Context, id string, f fence) error {
 	for attempt := 0; ; attempt++ {
 		u := &unstructured.Unstructured{}
 		u.SetGroupVersionKind(GVK(f.Kind))
-		err := translate(s.c.Get(ctx, client.ObjectKey{Namespace: s.ns, Name: f.Name}, u))
+		err := translate("void get", f.Kind, s.c.Get(ctx, client.ObjectKey{Namespace: s.ns, Name: f.Name}, u))
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
 		}
@@ -214,7 +218,7 @@ func (s *Store) void(ctx context.Context, id string, f fence) error {
 		}
 		ann[voidAnno] = id
 		u.SetAnnotations(ann)
-		err = translate(s.c.Update(ctx, u))
+		err = translate("void", f.Kind, s.c.Update(ctx, u))
 		if errors.Is(err, store.ErrConflict) && attempt < 8 {
 			continue
 		}
