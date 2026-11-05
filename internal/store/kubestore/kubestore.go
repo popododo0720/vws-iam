@@ -58,12 +58,16 @@ func objectName(key string) string {
 
 // Store is a store.Backend on a controller-runtime client.
 type Store struct {
-	c  client.Client
-	ns string
+	c   client.Client
+	ns  string
+	tel telemetry
 }
 
-// New wraps a client. Tests pass a fake client.
-func New(c client.Client, namespace string) *Store { return &Store{c: c, ns: namespace} }
+// New wraps a client. Tests pass a fake client. Spans and metrics go to
+// the global OTel providers.
+func New(c client.Client, namespace string) *Store {
+	return &Store{c: c, ns: namespace, tel: globalTelemetry()}
+}
 
 // Open builds a client from kubeconfig (empty: in-cluster).
 func Open(kubeconfig, namespace string) (*Store, error) {
@@ -80,7 +84,10 @@ func Open(kubeconfig, namespace string) (*Store, error) {
 	return New(c, namespace), nil
 }
 
-func translate(err error) error {
+// translate maps an API error to the store sentinels. Not found, exists
+// and conflict stay bare: their text reaches clients and must match
+// memstore. Any other failure names the call and kind it came from.
+func translate(op string, kind iam.Kind, err error) error {
 	switch {
 	case err == nil:
 		return nil
@@ -91,9 +98,9 @@ func translate(err error) error {
 	case apierrors.IsConflict(err):
 		return store.ErrConflict
 	case apierrors.IsServerTimeout(err), apierrors.IsTimeout(err), apierrors.IsTooManyRequests(err), apierrors.IsServiceUnavailable(err), apierrors.IsInternalError(err):
-		return fmt.Errorf("%w: %w", store.ErrUnavailable, err)
+		return fmt.Errorf("%w: kube %s %s: %w", store.ErrUnavailable, op, kind, err)
 	}
-	return fmt.Errorf("kube: %w", err)
+	return fmt.Errorf("kube %s %s: %w", op, kind, err)
 }
 
 func (s *Store) object(kind iam.Kind, key string, spec []byte) (*unstructured.Unstructured, error) {
@@ -119,13 +126,15 @@ func entry(u *unstructured.Unstructured) (store.Entry, error) {
 }
 
 // Create implements store.Backend.
-func (s *Store) Create(ctx context.Context, kind iam.Kind, key string, spec []byte) (string, error) {
+func (s *Store) Create(ctx context.Context, kind iam.Kind, key string, spec []byte) (_ string, err error) {
+	ctx, end := s.tel.start(ctx, "create", kind)
+	defer func() { end(err) }()
 	u, err := s.object(kind, key, spec)
 	if err != nil {
 		return "", err
 	}
 	if err := s.c.Create(ctx, u); err != nil {
-		return "", translate(err)
+		return "", translate("create", kind, err)
 	}
 	return u.GetResourceVersion(), nil
 }
@@ -133,7 +142,11 @@ func (s *Store) Create(ctx context.Context, kind iam.Kind, key string, spec []by
 // Update implements store.Backend. Before the write it voids every
 // conditional write still fenced on this object (see UpdateIf); the new
 // object carries no fence.
-func (s *Store) Update(ctx context.Context, kind iam.Kind, key string, spec []byte, version string) (string, error) {
+func (s *Store) Update(
+	ctx context.Context, kind iam.Kind, key string, spec []byte, version string,
+) (_ string, err error) {
+	ctx, end := s.tel.start(ctx, "update", kind)
+	defer func() { end(err) }()
 	cur, err := s.get(ctx, kind, key)
 	if err != nil {
 		return "", err
@@ -149,7 +162,7 @@ func (s *Store) Update(ctx context.Context, kind iam.Kind, key string, spec []by
 	}
 	u.SetResourceVersion(version)
 	if err := s.c.Update(ctx, u); err != nil {
-		return "", translate(err)
+		return "", translate("update", kind, err)
 	}
 	return u.GetResourceVersion(), nil
 }
@@ -158,13 +171,15 @@ func (s *Store) get(ctx context.Context, kind iam.Kind, key string) (*unstructur
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(GVK(kind))
 	if err := s.c.Get(ctx, client.ObjectKey{Namespace: s.ns, Name: objectName(key)}, u); err != nil {
-		return nil, translate(err)
+		return nil, translate("get", kind, err)
 	}
 	return u, nil
 }
 
 // Get implements store.Backend.
-func (s *Store) Get(ctx context.Context, kind iam.Kind, key string) (store.Entry, error) {
+func (s *Store) Get(ctx context.Context, kind iam.Kind, key string) (_ store.Entry, err error) {
+	ctx, end := s.tel.start(ctx, "get", kind)
+	defer func() { end(err) }()
 	u, err := s.get(ctx, kind, key)
 	if err != nil {
 		return store.Entry{}, err
@@ -173,13 +188,15 @@ func (s *Store) Get(ctx context.Context, kind iam.Kind, key string) (store.Entry
 }
 
 // List implements store.Backend.
-func (s *Store) List(ctx context.Context, kind iam.Kind) ([]store.Entry, error) {
+func (s *Store) List(ctx context.Context, kind iam.Kind) (_ []store.Entry, err error) {
+	ctx, end := s.tel.start(ctx, "list", kind)
+	defer func() { end(err) }()
 	l := &unstructured.UnstructuredList{}
 	gvk := GVK(kind)
 	gvk.Kind += "List"
 	l.SetGroupVersionKind(gvk)
 	if err := s.c.List(ctx, l, client.InNamespace(s.ns)); err != nil {
-		return nil, translate(err)
+		return nil, translate("list", kind, err)
 	}
 	out := make([]store.Entry, 0, len(l.Items))
 	for i := range l.Items {
@@ -195,7 +212,11 @@ func (s *Store) List(ctx context.Context, kind iam.Kind) ([]store.Entry, error) 
 
 // ListPage implements store.Pager with the API server's limit and
 // continue token.
-func (s *Store) ListPage(ctx context.Context, kind iam.Kind, limit int64, cont string) ([]store.Entry, string, error) {
+func (s *Store) ListPage(
+	ctx context.Context, kind iam.Kind, limit int64, cont string,
+) (_ []store.Entry, _ string, err error) {
+	ctx, end := s.tel.start(ctx, "list_page", kind)
+	defer func() { end(err) }()
 	l := &unstructured.UnstructuredList{}
 	gvk := GVK(kind)
 	gvk.Kind += "List"
@@ -205,7 +226,7 @@ func (s *Store) ListPage(ctx context.Context, kind iam.Kind, limit int64, cont s
 		opts = append(opts, client.Continue(cont))
 	}
 	if err := s.c.List(ctx, l, opts...); err != nil {
-		return nil, "", translate(err)
+		return nil, "", translate("list", kind, err)
 	}
 	out := make([]store.Entry, 0, len(l.Items))
 	for i := range l.Items {
@@ -220,7 +241,9 @@ func (s *Store) ListPage(ctx context.Context, kind iam.Kind, limit int64, cont s
 
 // Delete implements store.Backend. Like Update, it voids the conditional
 // writes fenced on the object first, then deletes it at the version it read.
-func (s *Store) Delete(ctx context.Context, kind iam.Kind, key, version string) error {
+func (s *Store) Delete(ctx context.Context, kind iam.Kind, key, version string) (err error) {
+	ctx, end := s.tel.start(ctx, "delete", kind)
+	defer func() { end(err) }()
 	for attempt := 0; ; attempt++ {
 		cur, err := s.get(ctx, kind, key)
 		if err != nil {
@@ -234,7 +257,7 @@ func (s *Store) Delete(ctx context.Context, kind iam.Kind, key, version string) 
 			return err
 		}
 		pre := client.Preconditions(metav1.Preconditions{ResourceVersion: &rv})
-		err = translate(s.c.Delete(ctx, cur, pre))
+		err = translate("delete", kind, s.c.Delete(ctx, cur, pre))
 		if errors.Is(err, store.ErrConflict) && version == "" && attempt < 8 {
 			continue
 		}
