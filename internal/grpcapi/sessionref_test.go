@@ -10,7 +10,6 @@ import (
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
@@ -219,7 +218,7 @@ func testSessionRef(t *testing.T, b store.Backend) {
 		if !ok {
 			t.Fatal("clone")
 		}
-		claim.MfaAuthenticated, claim.AuthTime = true, timestamppb.New(*s.a.now)
+		claim.MfaAuthenticated = true
 		ref := s.userRef
 		if pr == s.rolePr {
 			ref = s.roleRef

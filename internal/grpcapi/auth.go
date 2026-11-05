@@ -302,8 +302,9 @@ func (s *Server) recheck(ctx context.Context, pr *iamv1.Principal, ref string) (
 // checkSessionRef refuses a session that was revoked, expired or whose
 // principal is gone (the same check Validate makes, from the reference), and
 // a reference that does not describe the principal the gateway sent, so one
-// session's reference cannot vouch for another principal. A store failure is
-// returned as is, which fails closed.
+// session's reference cannot vouch for another principal or auth_time (and so
+// aws:MultiFactorAuthAge). A store failure is returned as is, which fails
+// closed.
 func checkSessionRef(ctx context.Context, p project, pr *iamv1.Principal, c checked, ref string) error {
 	sr, err := p.sts.CheckSessionRef(ctx, ref)
 	switch {
@@ -311,7 +312,8 @@ func checkSessionRef(ctx context.Context, p project, pr *iamv1.Principal, c chec
 		return accessDenied("principal rejected: session revoked or invalid")
 	case err != nil:
 		return err
-	case sr.Principal.Kind != c.az.Kind || sr.Principal.Name != c.az.Name || sr.UniqueID() != pr.GetUniqueId():
+	case sr.Principal.Kind != c.az.Kind || sr.Principal.Name != c.az.Name || sr.UniqueID() != pr.GetUniqueId(),
+		!c.authTime.Equal(sr.AuthTime):
 		return accessDenied("principal rejected: session reference does not match the principal")
 	case c.mfa && !sr.MFA:
 		return accessDenied("principal rejected: MFA claim but the session was issued without MFA")
