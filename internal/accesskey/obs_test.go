@@ -228,18 +228,22 @@ func TestErrorsCarryContext(t *testing.T) {
 	other := accesskey.New(b, b, "proj-a", ring(t, "kek-9", map[string][]byte{"kek-9": kek(t)}), nil)
 	_, openErr := other.GetSigningCredential(ctx, cred.AccessKeyID)
 	_, ownErr := svc.Get(ctx, "mallory", cred.AccessKeyID)
+	_, missingErr := svc.Get(ctx, "mallory", "AKIAUNKNOWNUNKNOWN00")
+	if strings.Replace(ownErr.Error(), cred.AccessKeyID, "AKIAUNKNOWNUNKNOWN00", 1) != missingErr.Error() {
+		t.Errorf("another user's key answers %q, a missing key %q: the message tells them apart", ownErr, missingErr)
+	}
 	for _, tc := range []struct {
 		err      error
 		sentinel error
 		context  string
 	}{
 		{openErr, secret.ErrUnknownKEK, "open access key " + cred.AccessKeyID},
-		{ownErr, store.ErrNotFound, "access key " + cred.AccessKeyID + ` of user "mallory"`},
+		{ownErr, store.ErrNotFound, "access key " + cred.AccessKeyID},
 		{
 			svc.SetStatus(ctx, "erin", "AKIAUNKNOWNUNKNOWN00", iam.KeyInactive),
 			store.ErrNotFound, "access key AKIAUNKNOWNUNKNOWN00",
 		},
-		{svc.Delete(ctx, "mallory", cred.AccessKeyID), store.ErrNotFound, `of user "mallory"`},
+		{svc.Delete(ctx, "mallory", cred.AccessKeyID), store.ErrNotFound, "access key " + cred.AccessKeyID},
 	} {
 		if !errors.Is(tc.err, tc.sentinel) || !strings.Contains(tc.err.Error(), tc.context) {
 			t.Errorf("error %v, want %v with %q", tc.err, tc.sentinel, tc.context)

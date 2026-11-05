@@ -343,7 +343,8 @@ func (s *Service) owned(ctx context.Context, user, id string) (store.Versioned[i
 		return k, fmt.Errorf("access key %s: %w", id, err)
 	}
 	if k.Object.Root || k.Object.Status == iam.KeyPending || store.Fold(k.Object.UserName) != store.Fold(user) {
-		return k, fmt.Errorf("access key %s of user %q: %w", id, user, store.ErrNotFound)
+		// The same answer as a missing key, so it reveals no other owner's key.
+		return k, fmt.Errorf("access key %s: %w", id, store.ErrNotFound)
 	}
 	return k, nil
 }
