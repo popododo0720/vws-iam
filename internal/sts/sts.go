@@ -635,6 +635,23 @@ func (s *Service) Validate(ctx context.Context, accessKeyID, token string) (Sess
 	if err != nil {
 		return Session{}, err
 	}
+	if err := s.checkPrincipal(ctx, sess); err != nil {
+		return Session{}, err
+	}
+	p := sess.principal()
+	return Session{
+		AccessKeyID: sess.AccessKeyID, Secret: sess.Secret, Project: sess.Project, AuthTime: sess.AuthTime,
+		RoleID: sess.RoleID, SessionName: sess.SessionName, Federated: sess.Federated, Principal: p,
+		PrincipalID: sess.PrincipalID, MFA: sess.MFA, IssuedAt: sess.IssuedAt, Expires: sess.Expires,
+		SAML: sess.SAML.clone(),
+	}, nil
+}
+
+// checkPrincipal is the part of Validate that reads the store: the user or
+// role the session names must still exist with the id it was issued for,
+// and its revocation generation must not have moved past the session's. A
+// store failure is returned as is, not as a refusal.
+func (s *Service) checkPrincipal(ctx context.Context, sess session) error {
 	var id string
 	var revoked time.Time
 	var gen uint64
@@ -642,13 +659,13 @@ func (s *Service) Validate(ctx context.Context, accessKeyID, token string) (Sess
 	case authz.User:
 		u, err := store.Get[iam.User](ctx, s.b, sess.Name)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
-			return Session{}, fmt.Errorf("session principal: %w", err)
+			return fmt.Errorf("session principal: %w", err)
 		}
 		id, revoked, gen = u.Object.ID, u.Object.SessionsRevokedBefore, u.Object.SessionsRevokeGeneration
 	case authz.Role:
 		r, err := store.Get[iam.Role](ctx, s.b, sess.Name)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
-			return Session{}, fmt.Errorf("session principal: %w", err)
+			return fmt.Errorf("session principal: %w", err)
 		}
 		id, revoked, gen = r.Object.ID, r.Object.SessionsRevokedBefore, r.Object.SessionsRevokeGeneration
 	case authz.Root:
@@ -657,11 +674,16 @@ func (s *Service) Validate(ctx context.Context, accessKeyID, token string) (Sess
 		id = rootID
 	}
 	if id == "" || id != sess.PrincipalID {
-		return Session{}, fmt.Errorf("%w: principal no longer exists", ErrInvalidToken)
+		return fmt.Errorf("%w: principal no longer exists", ErrInvalidToken)
 	}
 	if sessionRevoked(sess, revoked, gen) {
-		return Session{}, fmt.Errorf("%w: session revoked", ErrInvalidToken)
+		return fmt.Errorf("%w: session revoked", ErrInvalidToken)
 	}
+	return nil
+}
+
+// principal is the authz.Principal a session acts as.
+func (sess session) principal() authz.Principal {
 	p := authz.Principal{
 		Kind: authz.PrincipalKind(sess.Kind), Name: sess.Name, ARN: sess.ARN, SessionPolicies: sess.Policies,
 		SessionPolicyARNs: sess.PolicyARNs, Federated: sess.Federated,
@@ -670,12 +692,7 @@ func (s *Service) Validate(ctx context.Context, accessKeyID, token string) (Sess
 		p.ARN = "" // a GetSessionToken session acts as the user (or root) itself
 		p.SessionToken, p.SessionMFA = true, sess.MFA
 	}
-	return Session{
-		AccessKeyID: sess.AccessKeyID, Secret: sess.Secret, Project: sess.Project, AuthTime: sess.AuthTime,
-		RoleID: sess.RoleID, SessionName: sess.SessionName, Federated: sess.Federated, Principal: p,
-		PrincipalID: sess.PrincipalID, MFA: sess.MFA, IssuedAt: sess.IssuedAt, Expires: sess.Expires,
-		SAML: sess.SAML.clone(),
-	}, nil
+	return p
 }
 
 // sessionRevoked compares generations, which come from the store's write
