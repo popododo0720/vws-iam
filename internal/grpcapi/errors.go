@@ -154,7 +154,10 @@ func toStatus(ctx context.Context, err error) error {
 	if errors.As(err, &ae) {
 		return ae.GRPCStatus().Err()
 	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+	// Lost compare-and-swap races until the deadline is contention, not a
+	// timeout: ConcurrentModification tells the client to retry (#51).
+	timedOut := errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+	if timedOut && !errors.Is(err, store.ErrConflict) {
 		return status.FromContextError(err).Err()
 	}
 	if st, ok := status.FromError(err); ok && st.Code() != codes.Unknown {
