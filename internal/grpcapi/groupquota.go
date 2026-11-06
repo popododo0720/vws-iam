@@ -258,9 +258,10 @@ func (p project) createGroup(ctx context.Context, g iam.Group, requestID string)
 	return v, nil
 }
 
-// updateGroup is update for groups, committing through commitGroup.
+// updateGroup is update for groups, committing through commitGroup. A group
+// it creates is adopted through its RequestID, as createGroup does.
 func (p project) updateGroup(
-	ctx context.Context, key, etag, requestID string, allowMissing bool,
+	ctx context.Context, key, etag, requestID string, o once, allowMissing bool,
 	fn func(*iam.Group) error, mk func() (iam.Group, error),
 ) (store.Versioned[iam.Group], error) {
 	for attempt := 0; ; attempt++ {
@@ -275,6 +276,9 @@ func (p project) updateGroup(
 		if err != nil {
 			return cur, err
 		}
+		if err := o.check(cur.Object.Meta); err != nil {
+			return cur, err
+		}
 		if err := checkEtag(etag, cur.Version); err != nil {
 			return cur, err
 		}
@@ -283,6 +287,7 @@ func (p project) updateGroup(
 			return cur, err
 		}
 		bumpGroup(&cur.Object)
+		o.record(&cur.Object.Meta)
 		v, err := p.commitGroup(ctx, cur, prev)
 		if errors.Is(err, errLockBusy) {
 			return cur, err

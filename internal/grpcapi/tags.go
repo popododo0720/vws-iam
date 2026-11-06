@@ -64,7 +64,8 @@ func (s *Server) TagPolicy(ctx context.Context, req *iamv1.TagPolicyRequest) (*l
 	if op, err := s.replay(ctx, pid, "TagPolicy", req.GetRequestId(), req); op != nil || err != nil {
 		return op, toStatus(ctx, err)
 	}
-	v, err := mutateOrValidate(ctx, p.b, id, "", req.GetValidateOnly(), false, bumpPolicy, func(pol *iam.Policy) error {
+	o := newOnce(pid, "TagPolicy", req.GetRequestId(), req)
+	v, err := mutateOrValidate(ctx, p.b, id, "", o, req.GetValidateOnly(), false, bumpPolicy, func(pol *iam.Policy) error {
 		merged := make(map[string]string, len(pol.Tags)+len(tags))
 		maps.Copy(merged, pol.Tags)
 		for _, tag := range tags {
@@ -80,6 +81,12 @@ func (s *Server) TagPolicy(ctx context.Context, req *iamv1.TagPolicyRequest) (*l
 		// AWS changes a policy's UpdateDate only for a new version, not for a tag change.
 		return nil
 	}, nil)
+	if errors.Is(err, errApplied) {
+		if op, err := s.applied(ctx, pid, "TagPolicy", req.GetRequestId(), req); op != nil || err != nil {
+			return op, toStatus(ctx, err)
+		}
+		err = nil
+	}
 	if errors.Is(err, errNoop) {
 		err = nil
 	}
@@ -117,7 +124,8 @@ func (s *Server) UntagPolicy(ctx context.Context, req *iamv1.UntagPolicyRequest)
 	if op, err := s.replay(ctx, pid, "UntagPolicy", req.GetRequestId(), req); op != nil || err != nil {
 		return op, toStatus(ctx, err)
 	}
-	v, err := mutateOrValidate(ctx, p.b, id, "", req.GetValidateOnly(), false, bumpPolicy, func(pol *iam.Policy) error {
+	o := newOnce(pid, "UntagPolicy", req.GetRequestId(), req)
+	v, err := mutateOrValidate(ctx, p.b, id, "", o, req.GetValidateOnly(), false, bumpPolicy, func(pol *iam.Policy) error {
 		if len(pol.Tags) == 0 {
 			return errNoop
 		}
@@ -133,6 +141,12 @@ func (s *Server) UntagPolicy(ctx context.Context, req *iamv1.UntagPolicyRequest)
 		// AWS changes a policy's UpdateDate only for a new version, not for a tag change.
 		return nil
 	}, nil)
+	if errors.Is(err, errApplied) {
+		if op, err := s.applied(ctx, pid, "UntagPolicy", req.GetRequestId(), req); op != nil || err != nil {
+			return op, toStatus(ctx, err)
+		}
+		err = nil
+	}
 	if errors.Is(err, errNoop) {
 		err = nil
 	}

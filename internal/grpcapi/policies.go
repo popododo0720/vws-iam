@@ -3,6 +3,7 @@ package grpcapi
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -210,7 +211,15 @@ func (s *Server) UpdatePolicy(ctx context.Context, req *iamv1.UpdatePolicyReques
 	if req.GetAllowMissing() {
 		return nil, invalidSpec("allow_missing is not supported for policies; use CreatePolicy")
 	}
-	v, err := mutateOrValidate(ctx, p.b, id, req.GetPolicy().GetEtag(), req.GetValidateOnly(), false, bumpPolicy, apply, nil)
+	o := newOnce(pid, "UpdatePolicy", req.GetRequestId(), req)
+	etag := req.GetPolicy().GetEtag()
+	v, err := mutateOrValidate(ctx, p.b, id, etag, o, req.GetValidateOnly(), false, bumpPolicy, apply, nil)
+	if errors.Is(err, errApplied) {
+		if op, err := s.applied(ctx, pid, "UpdatePolicy", req.GetRequestId(), req); op != nil || err != nil {
+			return op, toStatus(ctx, err)
+		}
+		err = nil
+	}
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
@@ -323,7 +332,8 @@ func (s *Server) CreatePolicyVersion(ctx context.Context, req *iamv1.CreatePolic
 		return nil, toStatus(ctx, err)
 	}
 	var added iam.PolicyVersion
-	v, err := mutateOrValidate(ctx, p.b, id, "", req.GetValidateOnly(), false, bumpPolicy, func(pol *iam.Policy) error {
+	o := newOnce(pid, "CreatePolicyVersion", req.GetRequestId(), req)
+	v, err := mutateOrValidate(ctx, p.b, id, "", o, req.GetValidateOnly(), false, bumpPolicy, func(pol *iam.Policy) error {
 		if len(pol.Versions) >= iam.MaxPolicyVersions {
 			return quota("a policy can have at most 5 versions")
 		}
@@ -331,7 +341,9 @@ func (s *Server) CreatePolicyVersion(ctx context.Context, req *iamv1.CreatePolic
 		if next == 0 {
 			next = len(pol.Versions) + 1
 		}
-		added = iam.PolicyVersion{ID: "v" + strconv.Itoa(next), Document: spec.GetDocument(), Created: s.now().UTC()}
+		added = iam.PolicyVersion{
+			ID: "v" + strconv.Itoa(next), Document: spec.GetDocument(), Created: s.now().UTC(), Request: o.token(),
+		}
 		if want := req.GetPolicyVersionId(); want != "" && want != added.ID {
 			return invalidID("policy_version_id must be " + added.ID + " (assigned in order)")
 		}
@@ -343,8 +355,22 @@ func (s *Server) CreatePolicyVersion(ctx context.Context, req *iamv1.CreatePolic
 		pol.Updated = s.now().UTC()
 		return pol.Validate()
 	}, nil)
+	if errors.Is(err, errApplied) {
+		if op, err := s.applied(ctx, pid, "CreatePolicyVersion", req.GetRequestId(), req); op != nil || err != nil {
+			return op, toStatus(ctx, err)
+		}
+		err = nil
+	}
 	if err != nil {
 		return nil, toStatus(ctx, err)
+	}
+	if added.ID == "" && !req.GetValidateOnly() {
+		// An earlier delivery added the version and recorded no answer.
+		i := slices.IndexFunc(v.Object.Versions, func(pv iam.PolicyVersion) bool { return pv.Request == o.token() })
+		if i < 0 {
+			return nil, toStatus(ctx, notFound("the policy version this request created was deleted"))
+		}
+		added = v.Object.Versions[i]
 	}
 	resp := p.versionProto(v, added)
 	op, err := s.done(ctx, opArgs{project: pid, method: "CreatePolicyVersion", requestID: req.GetRequestId(), req: req, resource: resp.Name, verb: commonv1.OperationVerb_OPERATION_VERB_CREATE, generation: v.Object.Generation, response: resp, validateOnly: req.GetValidateOnly()})
@@ -362,7 +388,8 @@ func (s *Server) DeletePolicyVersion(ctx context.Context, req *iamv1.DeletePolic
 		return op, toStatus(ctx, err)
 	}
 	var gone *iam.PolicyVersion
-	v, _, err := update(ctx, p.b, id, req.GetEtag(), false, bumpPolicy, func(pol *iam.Policy) error {
+	o := newOnce(pid, "DeletePolicyVersion", req.GetRequestId(), req)
+	v, _, err := update(ctx, p.b, id, req.GetEtag(), o, false, bumpPolicy, func(pol *iam.Policy) error {
 		gone = nil
 		kept := pol.Versions[:0:0]
 		for _, pv := range pol.Versions {
@@ -386,6 +413,11 @@ func (s *Server) DeletePolicyVersion(ctx context.Context, req *iamv1.DeletePolic
 	}, nil)
 	resp := &iamv1.PolicyVersion{Name: req.GetName()}
 	switch {
+	case errors.Is(err, errApplied):
+		op, err := s.applied(ctx, pid, "DeletePolicyVersion", req.GetRequestId(), req)
+		if op != nil || err != nil {
+			return op, toStatus(ctx, err)
+		}
 	case errors.Is(err, errNoop):
 	case err != nil:
 		return nil, toStatus(ctx, err)

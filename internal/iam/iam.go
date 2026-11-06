@@ -55,10 +55,18 @@ type Meta struct {
 	Updated    time.Time         `json:"updated,omitzero"`
 	// RequestID is the request id of the create, for replay after a crash.
 	RequestID string `json:"requestId,omitempty"`
+	// Requests holds the request tokens of the latest updates (at most
+	// MaxRequests), each written in the compare-and-swap that applied the
+	// update, so a duplicate racing its first delivery is not applied
+	// again (#50).
+	Requests []string `json:"requests,omitempty"`
 }
 
 // Envelope returns the envelope; promoted to every resource.
 func (m Meta) Envelope() Meta { return m }
+
+// EnvelopeRef returns the envelope for writing; promoted to every resource.
+func (m *Meta) EnvelopeRef() *Meta { return m }
 
 // Object is a stored IAM resource. Key is unique per kind and
 // case-insensitive, like AWS IAM names.
@@ -232,6 +240,9 @@ const MaxRevokeRequests = 32
 func (User) Kind() Kind    { return KindUser }
 func (u User) Key() string { return u.Name }
 func (u User) Validate() error {
+	if err := u.validRequests(); err != nil {
+		return err
+	}
 	if err := checkName("user", u.Name, u.Path); err != nil {
 		return err
 	}
@@ -267,6 +278,9 @@ type Group struct {
 func (Group) Kind() Kind    { return KindGroup }
 func (g Group) Key() string { return g.Name }
 func (g Group) Validate() error {
+	if err := g.validRequests(); err != nil {
+		return err
+	}
 	if !ValidGroupName(g.Name) {
 		return invalid("group name %q", g.Name)
 	}
@@ -334,6 +348,9 @@ type Role struct {
 func (Role) Kind() Kind    { return KindRole }
 func (r Role) Key() string { return r.Name }
 func (r Role) Validate() error {
+	if err := r.validRequests(); err != nil {
+		return err
+	}
 	if err := checkName("role", r.Name, r.Path); err != nil {
 		return err
 	}
@@ -366,6 +383,9 @@ type PolicyVersion struct {
 	ID       string    `json:"id"`
 	Document string    `json:"document"`
 	Created  time.Time `json:"created"`
+	// Request is the request token of the CreatePolicyVersion that added
+	// it, so a duplicate of that request answers with this version (#50).
+	Request string `json:"request,omitempty"`
 }
 
 // MaxPolicyVersions is the AWS limit of stored versions per policy.
@@ -392,6 +412,9 @@ type Policy struct {
 func (Policy) Kind() Kind    { return KindPolicy }
 func (p Policy) Key() string { return p.Name }
 func (p Policy) Validate() error {
+	if err := p.validRequests(); err != nil {
+		return err
+	}
 	if err := checkPolicyName(p.Name, p.Path); err != nil {
 		return err
 	}
@@ -409,6 +432,9 @@ func (p Policy) Validate() error {
 	for _, v := range p.Versions {
 		if seen[v.ID] || v.ID == "" {
 			return invalid("policy version id %q", v.ID)
+		}
+		if v.Request != "" && !requestTokenRE.MatchString(v.Request) {
+			return invalid("policy version %q request token %q", v.ID, v.Request)
 		}
 		seen[v.ID] = true
 		found = found || v.ID == p.DefaultVersion
@@ -472,6 +498,9 @@ type AccessKey struct {
 func (AccessKey) Kind() Kind    { return KindAccessKey }
 func (k AccessKey) Key() string { return k.ID }
 func (k AccessKey) Validate() error {
+	if err := k.validRequests(); err != nil {
+		return err
+	}
 	if !accessKeyRE.MatchString(k.ID) {
 		return invalid("access key id %q", k.ID)
 	}
@@ -528,6 +557,9 @@ type MfaDevice struct {
 func (MfaDevice) Kind() Kind    { return KindMfaDevice }
 func (d MfaDevice) Key() string { return d.Name }
 func (d MfaDevice) Validate() error {
+	if err := d.validRequests(); err != nil {
+		return err
+	}
 	if err := checkName("mfa device", d.Name, d.Path); err != nil {
 		return err
 	}
