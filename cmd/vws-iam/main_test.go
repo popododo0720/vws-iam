@@ -18,7 +18,8 @@ import (
 )
 
 func TestParseConfig(t *testing.T) {
-	c, err := parseConfig([]string{"-namespace", "vws-iam", "-kek-dir", "/k", "-listen", ":1"}, io.Discard, noEnv)
+	args := []string{"-namespace", "vws-iam", "-kek-dir", "/k", "-listen", ":1", "-insecure-plaintext"}
+	c, err := parseConfig(args, io.Discard, noEnv)
 	if err != nil || c.namespace != "vws-iam" || c.listen != ":1" {
 		t.Fatalf("%+v %v", c, err)
 	}
