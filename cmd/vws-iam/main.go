@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	grpchealth "google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
@@ -49,7 +50,10 @@ type config struct {
 	nsFile string
 	// bootstrap is the one-shot mode: import the root key and exit.
 	bootstrap bool
-	getenv    func(string) string
+	tls       tlsFiles
+	// insecurePlaintext allows serving without TLS on a non-loopback address.
+	insecurePlaintext bool
+	getenv            func(string) string
 }
 
 // Store modes of -store.
@@ -114,6 +118,14 @@ func parseConfigNS(args []string, stderr io.Writer, getenv func(string) string, 
 	fs.StringVar(&c.kubeconfig, "kubeconfig", "", "kubeconfig path; empty uses in-cluster config")
 	fs.StringVar(&c.kekDir, "kek-dir", "", "directory of the mounted vws-iam-kek Secret: one base64 32-byte key per id and an \"active\" file")
 	fs.StringVar(&c.rootDir, "root-credentials-dir", "", "optional mounted Secret with project, access_key_id and secret_access_key files: imported once as that project's root key")
+	fs.StringVar(&c.tls.certFile, "tls-cert-file", "", "PEM server certificate of the gRPC listener; "+
+		"needs -tls-key-file and -tls-client-ca-file (mutual TLS)")
+	fs.StringVar(&c.tls.keyFile, "tls-key-file", "", "PEM server key of the gRPC listener; "+
+		"needs -tls-cert-file and -tls-client-ca-file")
+	fs.StringVar(&c.tls.clientCAFile, "tls-client-ca-file", "", "PEM CA bundle that client certificates (console-api) "+
+		"must chain to; a client without one is refused. The three TLS files are read again on every handshake")
+	fs.BoolVar(&c.insecurePlaintext, "insecure-plaintext", false, "serve gRPC without TLS on a non-loopback -listen "+
+		"address; only where another layer authenticates the channel")
 	fs.StringVar(&c.healthAddr, "health-listen", "127.0.0.1:9096", "HTTP address of /healthz and /readyz; empty disables")
 	if err := fs.Parse(args); err != nil {
 		return c, fmt.Errorf("flags: %w", err)
@@ -123,6 +135,11 @@ func parseConfigNS(args []string, stderr io.Writer, getenv func(string) string, 
 	}
 	if err := c.resolveStore(); err != nil {
 		return c, err
+	}
+	if !c.bootstrap {
+		if err := c.tls.check(c.listen, c.insecurePlaintext); err != nil {
+			return c, err
+		}
 	}
 	hasEnvKEK := getenv(secret.EnvKEK) != "" || getenv(secret.EnvKEKID) != ""
 	switch {
@@ -339,11 +356,23 @@ func run(ctx context.Context, cfg config) (err error) {
 		log.LogAttrs(ctx, slog.LevelInfo, "health serving", slog.String("addr", bound))
 	}
 
+	var transport []grpc.ServerOption
+	if cfg.tls.enabled() {
+		tc, err := cfg.tls.serverConfig()
+		if err != nil {
+			return err
+		}
+		transport = append(transport, grpc.Creds(credentials.NewTLS(tc)))
+	} else {
+		log.LogAttrs(ctx, slog.LevelWarn,
+			"gRPC is plaintext: set -tls-cert-file, -tls-key-file and -tls-client-ca-file for mutual TLS",
+			slog.String("addr", cfg.listen))
+	}
 	lis, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.listen)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
-	srv := grpc.NewServer(grpcapi.ServerOptions()...)
+	srv := grpc.NewServer(grpcapi.ServerOptions(transport...)...)
 	api := grpcapi.New(backend, keys)
 	grpcapi.Register(srv, api)
 	go collectReplays(ctx, log, api)
@@ -357,7 +386,7 @@ func run(ctx context.Context, cfg config) (err error) {
 		srv.GracefulStop()
 	}()
 	log.LogAttrs(ctx, slog.LevelInfo, "serving", slog.String("addr", lis.Addr().String()),
-		slog.String("store", cfg.storeMode), slog.String("namespace", cfg.namespace))
+		slog.String("store", cfg.storeMode), slog.String("namespace", cfg.namespace), slog.Bool("mtls", cfg.tls.enabled()))
 	if err := srv.Serve(lis); err != nil {
 		return fmt.Errorf("serve: %w", err)
 	}

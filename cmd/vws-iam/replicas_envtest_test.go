@@ -77,7 +77,8 @@ type replica struct {
 // chart's flags, as run() does.
 func startReplica(t *testing.T, kubeconfig, namespace string) replica {
 	t.Helper()
-	cfg, err := parseConfig([]string{"-listen", "0.0.0.0:9095", "-kubeconfig", kubeconfig}, io.Discard, podEnv(namespace))
+	args := []string{"-listen", "0.0.0.0:9095", "-insecure-plaintext", "-kubeconfig", kubeconfig}
+	cfg, err := parseConfig(args, io.Discard, podEnv(namespace))
 	if err != nil {
 		t.Fatal(err)
 	}
