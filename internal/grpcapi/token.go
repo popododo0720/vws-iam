@@ -165,7 +165,10 @@ func (s *Server) assumeRole(ctx context.Context, req *iamv1.AssumeRoleRequest, a
 		return nil, toStatus(ctx, err)
 	}
 	m := sts.MFA{SerialNumber: req.GetSerialNumber(), TokenCode: req.GetTokenCode()}
-	creds, err := p.sts.AssumeRole(ctx, c, rc, iam.RoleARN(pid, role), req.GetRoleSessionName(), d, "", m)
+	// TODO(#22): pass Policy and PolicyArns once vws-proto#147 carries them on
+	// AssumeRoleRequest; until then a gRPC AssumeRole has no session policy.
+	creds, err := p.sts.AssumeRole(ctx, c, rc, iam.RoleARN(pid, role), req.GetRoleSessionName(), d,
+		sts.SessionPolicies{}, m)
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}

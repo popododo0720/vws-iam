@@ -135,6 +135,18 @@ type Credentials struct {
 	Expiration   time.Time
 	// AssumedRoleARN is set by AssumeRole.
 	AssumedRoleARN string
+	// PackedPolicySize is set by AssumeRole: the percentage (0-100) of
+	// MaxPackedPolicyChars that its session policies use.
+	PackedPolicySize int
+}
+
+// SessionPolicies are the AWS session policy parameters of AssumeRole: the
+// inline Policy (empty means none) and the managed PolicyArns of this
+// project. They only narrow the session: its permissions are the
+// intersection of the role's policies and these.
+type SessionPolicies struct {
+	Policy     string
+	PolicyARNs []string
 }
 
 // String hides the secret and token.
@@ -166,7 +178,8 @@ type session struct {
 	AuthTime    time.Time `json:"at"`
 	RoleID      string    `json:"ri,omitempty"`
 	SessionName string    `json:"sn,omitempty"`
-	// PolicyARNs are managed session policies (GetFederationToken).
+	// PolicyARNs are managed session policies (GetFederationToken,
+	// AssumeRole).
 	PolicyARNs []string `json:"pa,omitempty"`
 	// Federated marks a GetFederationToken session; SessionName is then
 	// the federated user name and ARN its federated-user ARN.
@@ -457,13 +470,24 @@ func (s *Service) revokeGen(ctx context.Context, kind authz.PrincipalKind, name 
 
 // AssumeRole returns credentials for roleARN if the role's trust policy
 // trusts the caller and the caller's own policies allow sts:AssumeRole on
-// it. sessionPolicy, if set, narrows the session.
-func (s *Service) AssumeRole(ctx context.Context, c Caller, reqCtx map[string][]string, roleARN, sessionName string, duration time.Duration, sessionPolicy string, m MFA) (Credentials, error) {
+// it. sp, if set, narrows the session. The session policies are checked
+// as AWS does (length, alphabet, at most MaxSessionPolicyARNs, packed size)
+// before anything is read, and each managed one must exist in the project
+// once the caller is known to be allowed, so an unauthorized caller learns
+// nothing about the project's policies.
+func (s *Service) AssumeRole(
+	ctx context.Context, c Caller, reqCtx map[string][]string, roleARN, sessionName string,
+	duration time.Duration, sp SessionPolicies, m MFA,
+) (Credentials, error) {
 	if c.principalID == "" {
 		return Credentials{}, fmt.Errorf("%w: unresolved caller", ErrAccessDenied)
 	}
 	if !sessionNameRE.MatchString(sessionName) {
 		return Credentials{}, fmt.Errorf("%w: RoleSessionName %q", ErrInvalidRequest, sessionName)
+	}
+	packed, err := validateSessionPolicies(sp.Policy, sp.PolicyARNs)
+	if err != nil {
+		return Credentials{}, err
 	}
 	prefix := "arn:vws:iam::" + s.account + ":role/"
 	i := strings.LastIndex(roleARN, "/")
@@ -496,14 +520,6 @@ func (s *Service) AssumeRole(ctx context.Context, c Caller, reqCtx map[string][]
 	if duration < MinDuration || duration > maxDur {
 		return Credentials{}, fmt.Errorf("%w: DurationSeconds %d outside [%d, %d]", ErrInvalidRequest, int(duration.Seconds()), int(MinDuration.Seconds()), int(maxDur.Seconds()))
 	}
-	var policies []string
-	if sessionPolicy != "" {
-		if _, err := policy.ParseIdentity(sessionPolicy); err != nil {
-			return Credentials{}, err
-		}
-		policies = []string{sessionPolicy}
-	}
-
 	// The caller's own permissions must allow sts:AssumeRole on the role.
 	d, err := s.authz.Authorize(ctx, c.principal, "sts:AssumeRole", roleARN, s.callerContext(c, reqCtx))
 	if err != nil {
@@ -533,13 +549,31 @@ func (s *Service) AssumeRole(ctx context.Context, c Caller, reqCtx map[string][]
 	if !td.Allowed {
 		return Credentials{}, fmt.Errorf("%w: %s does not trust %s", ErrAccessDenied, roleARN, callerARN)
 	}
+	// Both stay nil without session policies: an empty non-nil list would
+	// narrow the session to nothing.
+	var policies, policyARNs []string
+	if sp.Policy != "" {
+		policies = []string{sp.Policy}
+	}
+	for _, pa := range sp.PolicyARNs {
+		ok, err := s.authz.ManagedPolicyExists(ctx, pa)
+		if err != nil {
+			return Credentials{}, fmt.Errorf("assume role: managed session policy: %w", err)
+		}
+		if !ok {
+			return Credentials{}, fmt.Errorf("%w: policy %s does not exist or is not attachable", policy.ErrMalformed, pa)
+		}
+		policyARNs = append(policyARNs, pa)
+	}
 	arn := iam.ARN("sts", "", s.account, "assumed-role/"+r.Object.Name+"/"+sessionName)
 	creds, err := s.issue(ctx, session{
-		Kind: int(authz.Role), Name: r.Object.Name, ARN: arn, MFA: c.mfa, Policies: policies, Chained: chained,
+		Kind: int(authz.Role), Name: r.Object.Name, ARN: arn, MFA: c.mfa, Chained: chained,
+		Policies: policies, PolicyARNs: policyARNs,
 		PrincipalID: r.Object.ID, AuthTime: c.authTime, RoleID: r.Object.ID, SessionName: sessionName,
 		SAML: c.saml.clone(), // a chained session keeps the SAML identity
 	}, duration)
 	creds.AssumedRoleARN = arn
+	creds.PackedPolicySize = packedPercent(packed)
 	return creds, err
 }
 

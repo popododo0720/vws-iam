@@ -106,7 +106,7 @@ func testRevokeSkew(t *testing.T, backend func(*testing.T) store.Backend) {
 			}
 			issue := func(name string) (role, user sts.Credentials) {
 				t.Helper()
-				role, err := issuer.svc.AssumeRole(ctx, caller, nil, adminARN, name, 6*time.Hour, "", sts.MFA{})
+				role, err := issuer.svc.AssumeRole(ctx, caller, nil, adminARN, name, 6*time.Hour, sts.SessionPolicies{}, sts.MFA{})
 				if err != nil {
 					t.Fatal(err)
 				}

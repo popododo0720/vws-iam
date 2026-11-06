@@ -14,8 +14,9 @@ import (
 	"github.com/popododo0720/vws-iam/internal/policy"
 )
 
-// ErrPackedPolicyTooLarge is GetFederationToken's answer when its session
-// policies together exceed MaxPackedPolicyChars.
+// ErrPackedPolicyTooLarge is the answer of GetFederationToken and
+// AssumeRole when their session policies together exceed
+// MaxPackedPolicyChars.
 var ErrPackedPolicyTooLarge = errors.New("PackedPolicyTooLarge")
 
 // GetFederationToken limits, from the AWS API reference.
@@ -128,8 +129,14 @@ func (s *Service) GetFederationToken(
 	}
 	return FederationToken{
 		Credentials: creds, FederatedUserID: s.account + ":" + req.Name, ARN: arn,
-		PackedPolicySize: (packed*100 + MaxPackedPolicyChars - 1) / MaxPackedPolicyChars,
+		PackedPolicySize: packedPercent(packed),
 	}, nil
+}
+
+// packedPercent is the AWS PackedPolicySize of packed characters of
+// session policies: the percentage of MaxPackedPolicyChars, rounded up.
+func packedPercent(packed int) int {
+	return (packed*100 + MaxPackedPolicyChars - 1) / MaxPackedPolicyChars
 }
 
 // validateFederation checks req as AWS does before anything is read: it
