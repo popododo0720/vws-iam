@@ -73,6 +73,16 @@ func NewKeyring(active string, keys map[string][]byte) (*Keyring, error) {
 		k.macs = append(k.macs, macKey{id, mk})
 	}
 	slices.SortFunc(k.macs, func(a, b macKey) int { return strings.Compare(a.id, b.id) })
+	// Two ids holding the same key bytes give one digest, not two: a
+	// replay claim would otherwise collide with its own first entry and a
+	// counter would count each attempt twice.
+	var macs []macKey
+	for _, m := range k.macs {
+		if !slices.ContainsFunc(macs, func(x macKey) bool { return hmac.Equal(x.key, m.key) }) {
+			macs = append(macs, m)
+		}
+	}
+	k.macs = macs
 	if _, ok := k.aeads[active]; !ok {
 		return nil, fmt.Errorf("active KEK %q: %w", active, ErrUnknownKEK)
 	}

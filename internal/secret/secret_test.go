@@ -173,3 +173,17 @@ func TestDigests(t *testing.T) {
 		t.Fatalf("b's digest %q differs in ring {a,b}: %q", b[0], got[1])
 	}
 }
+
+// TestDigestsDuplicateKEK: KEK ids that hold the same bytes give one
+// digest, so a replay claim does not meet its own entry and an attempt is
+// counted once.
+func TestDigestsDuplicateKEK(t *testing.T) {
+	ka, kb := key(t), key(t)
+	k, err := secret.NewKeyring("a", map[string][]byte{"a": ka, "b": kb, "c": ka})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := k.Digests("replay", "m"); len(d) != 2 || d[0] == d[1] {
+		t.Fatalf("digests %q, want one per distinct KEK", d)
+	}
+}
