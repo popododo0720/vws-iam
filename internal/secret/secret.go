@@ -7,13 +7,18 @@ package secret
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hkdf"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
@@ -31,7 +36,16 @@ var kidRE = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 type Keyring struct {
 	active string
 	aeads  map[string]cipher.AEAD
+	// macs are the MAC keys derived from each KEK, sorted by KEK id.
+	macs []macKey
 }
+
+type macKey struct {
+	id  string
+	key []byte
+}
+
+const macInfo = "vws-iam/mac/v1"
 
 // NewKeyring builds a keyring from 32-byte keys. active must be among them.
 func NewKeyring(active string, keys map[string][]byte) (*Keyring, error) {
@@ -52,7 +66,13 @@ func NewKeyring(active string, keys map[string][]byte) (*Keyring, error) {
 			return nil, fmt.Errorf("KEK %q: %w", id, err)
 		}
 		k.aeads[id] = aead
+		mk, err := hkdf.Key(sha256.New, key, nil, macInfo, sha256.Size)
+		if err != nil {
+			return nil, fmt.Errorf("KEK %q: derive MAC key: %w", id, err)
+		}
+		k.macs = append(k.macs, macKey{id, mk})
 	}
+	slices.SortFunc(k.macs, func(a, b macKey) int { return strings.Compare(a.id, b.id) })
 	if _, ok := k.aeads[active]; !ok {
 		return nil, fmt.Errorf("active KEK %q: %w", active, ErrUnknownKEK)
 	}
@@ -120,6 +140,21 @@ func (k *Keyring) Open(s iam.Sealed, aad string) ([]byte, error) {
 		return nil, ErrOpen
 	}
 	return p, nil
+}
+
+// Digests returns the hex HMAC-SHA256 of purpose and msg under the MAC key
+// of every KEK in the ring, in KEK id order. Without a KEK a guess of msg
+// cannot be tested against a digest. A value recorded under every digest
+// is found again by any ring that shares one KEK with the ring that
+// recorded it.
+func (k *Keyring) Digests(purpose, msg string) []string {
+	out := make([]string, len(k.macs))
+	for i, m := range k.macs {
+		h := hmac.New(sha256.New, m.key)
+		h.Write([]byte(purpose + "\x00" + msg))
+		out[i] = hex.EncodeToString(h.Sum(nil))
+	}
+	return out
 }
 
 // NeedsRewrap reports whether s is sealed under an older KEK.
