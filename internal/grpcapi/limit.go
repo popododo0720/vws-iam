@@ -79,8 +79,9 @@ func userSubject(project, user string) subject {
 // ipSubject counts a source IP. Trust: source_ip is set by the trusted
 // front end (console-api, the SigV4 gateway) from the client connection;
 // only those reach vws-iam. The gRPC peer is that front end, never the
-// client, so it is not used. An empty source_ip adds no IP subject; an
-// IPv6 address counts as its /64. A malformed one is counted as is.
+// client, so it is not used. An empty source_ip adds no IP subject
+// (Login counts it apart, loginCallers); an IPv6 address counts as its
+// /64. A malformed one is counted as is.
 func ipSubject(ip string) (subject, bool) {
 	if ip == "" {
 		return subject{}, false
@@ -103,6 +104,21 @@ func (c callers) withIP(ip string) callers {
 		return append(c, j)
 	}
 	return c
+}
+
+// loginCallers are the subjects of a console Login of j: the source IP
+// first, so a locked IP is refused before j's counter is written. Each
+// attempt then writes a user counter only while its IP is under
+// IPAttemptLimit, which bounds the counters one IP can create with
+// unknown user names per window. A Login without a source IP counts
+// under one shared sentinel IP (console-api always sets it). Known and
+// unknown names take the same path.
+func loginCallers(j subject, sourceIP string) callers {
+	ip, ok := ipSubject(sourceIP)
+	if !ok {
+		ip = subject{iam.AttemptIP, "none/"}
+	}
+	return callers{ip, j}
 }
 
 // errThrottled is a locked-out caller: RESOURCE_EXHAUSTED / Throttling.

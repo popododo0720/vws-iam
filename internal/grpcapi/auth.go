@@ -444,7 +444,7 @@ func (s *Server) Login(ctx context.Context, req *iamv1.LoginRequest) (resp *iamv
 	// source IP (limit.go); an MFA_REQUIRED answer is not a failure.
 	var u store.Versioned[iam.User]
 	mfaOK, needMFA, renaming := false, false, false
-	err = s.limitedVerify(ctx, callers{userSubject(pid, req.GetUserName())}.withIP(req.GetSourceIp()), func() error {
+	err = s.limitedVerify(ctx, loginCallers(userSubject(pid, req.GetUserName()), req.GetSourceIp()), func() error {
 		var err error
 		u, err = store.Get[iam.User](ctx, p.b, req.GetUserName())
 		if errors.Is(err, store.ErrNotFound) || (err == nil && u.Object.PasswordHash == "") {
