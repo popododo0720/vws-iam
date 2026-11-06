@@ -36,13 +36,15 @@ const (
 	KindAccountAliasClaim Kind = "IamAccountAliasClaim"
 	// KindPasswordPolicy is the account password policy (#84).
 	KindPasswordPolicy Kind = "IamAccountPasswordPolicy"
+	// KindRootLogin is the root user's console password (#34).
+	KindRootLogin Kind = "IamRootLogin"
 )
 
 // Kinds lists every stored kind.
 var Kinds = []Kind{
 	KindUser, KindGroup, KindRole, KindPolicy, KindAccessKey, KindMfaDevice,
 	KindKeyIndex, KindSession, KindOperation, KindReplay, KindAttempt, KindMemberLock, KindFidoDevice,
-	KindInstanceProfile, KindAccountAlias, KindAccountAliasClaim, KindPasswordPolicy,
+	KindInstanceProfile, KindAccountAlias, KindAccountAliasClaim, KindPasswordPolicy, KindRootLogin,
 }
 
 // Meta is the resource envelope every API resource carries.

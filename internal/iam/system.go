@@ -43,6 +43,9 @@ type Session struct {
 	SourceIP string    `json:"sourceIp,omitempty"`
 }
 
+// Root reports whether the session is the account root user's (#34).
+func (s Session) Root() bool { return s.UserName == "" }
+
 func (Session) Kind() Kind    { return KindSession }
 func (s Session) Key() string { return s.Hash }
 func (s Session) Validate() error {

@@ -428,12 +428,16 @@ func hashToken(tok string) string {
 }
 
 // Login checks a console password (and TOTP when a device is enabled) and
-// starts a session. Only the token's SHA-256 is stored.
+// starts a session. Only the token's SHA-256 is stored. The user name
+// "root" signs in the account root user (loginRoot).
 func (s *Server) Login(ctx context.Context, req *iamv1.LoginRequest) (resp *iamv1.LoginResponse, err error) {
 	defer func() { s.m.add(ctx, s.m.login, attribute.String("result", result(err))) }()
 	pid := req.GetProject()
 	if !iam.ValidProject(pid) || !iam.ValidName(req.GetUserName()) {
 		return nil, badCredentials()
+	}
+	if isRootLogin(req.GetUserName()) {
+		return s.loginRoot(ctx, req)
 	}
 	p := s.project(pid)
 	// The whole password + MFA check is one counted attempt per user and
@@ -548,6 +552,11 @@ func (s *Server) ValidateSession(ctx context.Context, req *iamv1.ValidateSession
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
+	if sess.Root() {
+		return &iamv1.ValidateSessionResponse{
+			ExpireTime: timestamppb.New(sess.Expires), Principal: rootPrincipal(sess.Project, sess.MFA, sess.AuthTime),
+		}, nil
+	}
 	u, err := s.sessionUser(ctx, sess)
 	if err != nil {
 		return nil, err
@@ -559,7 +568,8 @@ func (s *Server) ValidateSession(ctx context.Context, req *iamv1.ValidateSession
 }
 
 // consoleSession looks up an unexpired console session by its token; the
-// user must still exist and still have a console password.
+// user must still exist and still have a console password, and a root
+// session must match the current root login.
 func (s *Server) consoleSession(ctx context.Context, tok string) (iam.Session, error) {
 	if tok == "" {
 		return iam.Session{}, badCredentials()
@@ -577,6 +587,12 @@ func (s *Server) consoleSession(ctx context.Context, tok string) (iam.Session, e
 			return iam.Session{}, derr
 		}
 		return iam.Session{}, fail(codes.Unauthenticated, "TOKEN_EXPIRED", "ExpiredToken", "the session has expired")
+	}
+	if sess.Root() {
+		if err := s.sessionRoot(ctx, sess); err != nil {
+			return iam.Session{}, err
+		}
+		return sess, nil
 	}
 	if _, err := s.sessionUser(ctx, sess); err != nil {
 		return iam.Session{}, err

@@ -23,9 +23,9 @@ var ErrPackedPolicyTooLarge = errors.New("PackedPolicyTooLarge")
 const (
 	DefaultFederationDuration = 12 * time.Hour
 	MaxFederationDuration     = 36 * time.Hour
-	// RootFederationMaxDuration caps a root caller's session: a longer
-	// request gets one hour, as in AWS.
-	RootFederationMaxDuration = time.Hour
+	// RootMaxSessionDuration caps a root caller's GetFederationToken and
+	// GetSessionToken session: a longer request gets one hour, as in AWS.
+	RootMaxSessionDuration = time.Hour
 	// MaxPackedPolicyChars bounds the plaintext of the inline session
 	// policy and the managed session policy ARNs together.
 	MaxPackedPolicyChars = 2048
@@ -97,7 +97,7 @@ func (s *Service) GetFederationToken(
 		return FederationToken{}, err
 	}
 	if c.principal.Kind == authz.Root {
-		d = min(d, RootFederationMaxDuration)
+		d = min(d, RootMaxSessionDuration)
 	}
 	for _, arn := range req.PolicyARNs {
 		ok, err := s.authz.ManagedPolicyExists(ctx, arn)
