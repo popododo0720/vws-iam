@@ -27,7 +27,10 @@ func Samples() []iam.Object {
 		iam.Role{Name: "deployer", ID: "AROA1", Created: now, AssumeRolePolicy: `{"Version":"2012-10-17","Statement":[]}`, MaxSessionDuration: time.Hour},
 		iam.Policy{Name: "x", ID: "ANPA1", Created: now, DefaultVersion: "v1", Versions: []iam.PolicyVersion{{ID: "v1", Document: `{}`, Created: now}}},
 		iam.AccessKey{ID: "AKIAABCDEFGHIJKLMNOP", UserName: "Alice", Status: iam.KeyActive, Created: now, Secret: sealed()},
-		iam.MfaDevice{Name: "alice-phone", UserName: "Alice", Created: now, Seed: sealed()},
+		iam.MfaDevice{
+			Name: "alice-phone", UserName: "Alice", Created: now, Seed: sealed(),
+			FailedAttempts: 2, LockedSince: now, LockedUntil: now.Add(time.Hour), Lockouts: 3,
+		},
 		iam.KeyIndex{ID: "AKIAABCDEFGHIJKLMNOP", Project: "proj-a"},
 		iam.Session{Hash: strings.Repeat("ab", 32), Project: "proj-a", UserName: "Alice", AuthTime: now, Expires: now.Add(time.Hour)},
 		iam.Operation{ID: "op-1", Project: "proj-a", Response: []byte{1}, Created: now},

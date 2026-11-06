@@ -27,7 +27,11 @@ widened by `sigv4.MaxSkew` (15 minutes) until they expire.
 
 A device lock starts only from wrong codes: the 5th wrong code in a row
 (Verify, Enable, console Login or STS with a valid credential) locks the
-device for 15 minutes from that failure. An attempt refused with
+device for 15 minutes from that failure. Lockouts back off: until a code
+is accepted, the next lockout lasts 30 minutes and every one after it 1
+hour (`mfa.MaxLockout`), so waiting out each lock leaves 5 guesses per
+hour; the lockout count is stored with the device and survives a
+restart (#29). An attempt refused with
 `Throttling` checks no code, so it never starts a lock. When the user's
 own attempt counter is over its limit, a throttled console Login or STS
 MFA attempt renews
@@ -51,7 +55,8 @@ GetMfaDevice and ListMfaDevices report `status.failed_attempts` and
 they are only reached through console-api, which authorizes the caller
 with `Authorize(iam:GetMfaDevice | iam:ListMfaDevices, ...)` first, so
 only an IAM administrator sees them. The counter resets when the device
-locks: the 5th wrong code in a row sets `locked_until` to now+15m and
+locks: the 5th wrong code in a row sets `locked_until` to now+15m (30m,
+then 1h, for further lockouts before an accepted code) and
 `failed_attempts` back to 0. `locked_until` is set only while the lockout
 runs. Neither field carries the seed or a code.
 
