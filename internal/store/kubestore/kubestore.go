@@ -77,6 +77,12 @@ func Open(kubeconfig, namespace string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("kubeconfig: %w", err)
 	}
+	// No client-side rate limit (#51). client-go's default of 5 QPS made
+	// a burst of CAS retries on one object wait past the request deadline,
+	// and its "would exceed context deadline" error wraps no context error.
+	// The API server's priority and fairness throttles instead, and its
+	// 429 is ErrUnavailable, which callers retry with backoff.
+	cfg.QPS = -1
 	c, err := client.New(cfg, client.Options{})
 	if err != nil {
 		return nil, fmt.Errorf("kube client: %w", err)
