@@ -48,77 +48,84 @@ func badCredentials() error {
 // temporary ones (ASIA) are opened from the session token.
 func (s *Server) Authenticate(ctx context.Context, req *iamv1.AuthenticateRequest) (resp *iamv1.AuthenticateResponse, err error) {
 	defer func() { s.m.add(ctx, s.m.authn, attribute.String("result", result(err))) }()
-	return s.authenticate(ctx, req, true)
+	// TODO(#20): set the reference on resp.Principal once vws-proto's
+	// Principal carries a session reference (popododo0720/vws-proto#146), so the
+	// gateway can hand it back to Authorize.
+	resp, _, err = s.authenticate(ctx, req, true)
+	return resp, err
 }
 
 // authenticate verifies req. gateway is set for the gateway's
 // Authenticate, whose Principal then goes to Authorize; it is false for an
-// STS call that vws-iam serves itself with the session it opened.
+// STS call that vws-iam serves itself with the session it opened. For a
+// gateway request signed with STS credentials it also returns the session
+// reference Authorize checks for revocation (#20); it is "" otherwise.
 func (s *Server) authenticate(
 	ctx context.Context, req *iamv1.AuthenticateRequest, gateway bool,
-) (*iamv1.AuthenticateResponse, error) {
+) (*iamv1.AuthenticateResponse, string, error) {
 	sr := sigv4.Request{Date: req.GetDate(), Region: req.GetRegion(), Service: req.GetService(), CanonicalRequest: req.GetCanonicalRequest(), StringToSign: req.GetStringToSign(), Signature: req.GetSignature()}
 	id := req.GetAccessKeyId()
 	switch {
 	case strings.HasPrefix(id, "ASIA"):
 		return s.authTemporary(ctx, req, sr, gateway)
 	case !accessKeyID.MatchString(id) || req.GetSessionToken() != "":
-		return nil, badCredentials()
+		return nil, "", badCredentials()
 	}
 	pid, err := accesskey.ProjectOf(ctx, s.b, id)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, badCredentials()
+		return nil, "", badCredentials()
 	}
 	if err != nil {
-		return nil, toStatus(ctx, err)
+		return nil, "", toStatus(ctx, err)
 	}
 	p := s.project(pid)
 	cred, err := p.keys.GetSigningCredential(ctx, id)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, badCredentials()
+		return nil, "", badCredentials()
 	}
 	if err != nil {
-		return nil, toStatus(ctx, err)
+		return nil, "", toStatus(ctx, err)
 	}
 	if err := sigv4.Check([]byte(cred.Secret), sr, s.now()); err != nil {
-		return nil, toStatus(ctx, err)
+		return nil, "", toStatus(ctx, err)
 	}
 	s.markUsed(ctx, p, id, req.GetService(), req.GetRegion())
 	now := timestamppb.New(s.now())
 	if cred.Root {
 		return &iamv1.AuthenticateResponse{Account: pid, Arn: rootARN(pid), IsRoot: true, Principal: &iamv1.Principal{
 			Type: iamv1.PrincipalType_PRINCIPAL_TYPE_ROOT, Arn: rootARN(pid), Project: pid, UniqueId: pid, AuthTime: now,
-		}}, nil
+		}}, "", nil
 	}
 	u, err := store.Get[iam.User](ctx, p.b, cred.UserName)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, badCredentials()
+		return nil, "", badCredentials()
 	}
 	if err != nil {
-		return nil, toStatus(ctx, err)
+		return nil, "", toStatus(ctx, err)
 	}
 	arn := iam.UserARN(pid, u.Object)
 	return &iamv1.AuthenticateResponse{Account: pid, Arn: arn, Principal: &iamv1.Principal{
 		Type: iamv1.PrincipalType_PRINCIPAL_TYPE_USER, Arn: arn, Project: pid, UniqueId: u.Object.ID, Resource: name(pid, "users", u.Object.Name), AuthTime: now,
-	}}, nil
+	}}, "", nil
 }
 
 func (s *Server) authTemporary(
 	ctx context.Context, req *iamv1.AuthenticateRequest, sr sigv4.Request, gateway bool,
-) (*iamv1.AuthenticateResponse, error) {
+) (*iamv1.AuthenticateResponse, string, error) {
 	if req.GetSessionToken() == "" {
-		return nil, invalidCredentials("MissingAuthenticationToken", "a session token is required for temporary credentials")
+		return nil, "", invalidCredentials(
+			"MissingAuthenticationToken", "a session token is required for temporary credentials")
 	}
 	pid, err := sts.SessionProject(s.keys, req.GetAccessKeyId(), req.GetSessionToken(), s.now)
 	if err != nil {
-		return nil, toStatus(ctx, err)
+		return nil, "", toStatus(ctx, err)
 	}
 	sess, err := s.project(pid).sts.Validate(ctx, req.GetAccessKeyId(), req.GetSessionToken())
 	if err != nil {
-		return nil, toStatus(ctx, err)
+		return nil, "", toStatus(ctx, err)
 	}
 	if err := sigv4.Check([]byte(sess.Secret), sr, s.now()); err != nil {
-		return nil, toStatus(ctx, err)
+		return nil, "", toStatus(ctx, err)
 	}
 	if gateway && sess.SAML != nil {
 		// TODO(#202): describe a SAML session to the gateway once
@@ -127,19 +134,29 @@ func (s *Server) authTemporary(
 		// could not see them (a Deny on saml:sub would fail open), so the
 		// session fails closed here; STS calls vws-iam serves itself
 		// restore them from the session token (sts callerContext).
-		return nil, badCredentials()
+		return nil, "", badCredentials()
 	}
 	if strings.EqualFold(sr.Service, "iam") && sess.Principal.SessionToken && !sess.Principal.SessionMFA {
 		// TODO(#233): the Principal the gateway passes to Authorize cannot
 		// say it is a GetSessionToken session (popododo0720/vws-proto#140),
 		// so its IAM calls are refused here, with the error AWS returns.
-		return nil, badCredentials()
+		return nil, "", badCredentials()
 	}
 	pr, err := s.sessionPrincipal(ctx, sess)
 	if err != nil {
-		return nil, toStatus(ctx, err)
+		return nil, "", toStatus(ctx, err)
 	}
-	return &iamv1.AuthenticateResponse{Account: sess.Project, Arn: pr.GetArn(), IsRoot: pr.GetType() == iamv1.PrincipalType_PRINCIPAL_TYPE_ROOT, Principal: pr, ExpireTime: timestamppb.New(sess.Expires)}, nil
+	ref := ""
+	if gateway {
+		if ref, err = s.project(pid).sts.MintSessionRef(req.GetAccessKeyId(), req.GetSessionToken()); err != nil {
+			return nil, "", toStatus(ctx, err)
+		}
+	}
+	resp := &iamv1.AuthenticateResponse{
+		Account: sess.Project, Arn: pr.GetArn(), IsRoot: pr.GetType() == iamv1.PrincipalType_PRINCIPAL_TYPE_ROOT,
+		Principal: pr, ExpireTime: timestamppb.New(sess.Expires),
+	}
+	return resp, ref, nil
 }
 
 // sessionPrincipal describes an STS session; the user or role must still exist.
@@ -202,8 +219,11 @@ type checked struct {
 
 // recheck verifies a Principal sent by a caller (the gateway): the entity
 // must still exist with the same ARN and unique id, and an MFA claim needs
-// a recent auth_time and, for a user, an enabled device.
-func (s *Server) recheck(ctx context.Context, pr *iamv1.Principal) (checked, error) {
+// a recent auth_time and, for a user, an enabled device. ref, when not
+// empty, is the session reference of the STS session behind the principal:
+// the session must not have been revoked, and the reference must describe
+// this principal (#20).
+func (s *Server) recheck(ctx context.Context, pr *iamv1.Principal, ref string) (checked, error) {
 	deny := func(why string) (checked, error) { return checked{}, accessDenied("principal rejected: " + why) }
 	pid := pr.GetProject()
 	if !iam.ValidProject(pid) {
@@ -256,6 +276,11 @@ func (s *Server) recheck(ctx context.Context, pr *iamv1.Principal) (checked, err
 	default:
 		return deny("type")
 	}
+	if ref != "" {
+		if err := checkSessionRef(ctx, p, pr, c, ref); err != nil {
+			return checked{}, err
+		}
+	}
 	if c.mfa {
 		now := s.now()
 		switch {
@@ -274,6 +299,28 @@ func (s *Server) recheck(ctx context.Context, pr *iamv1.Principal) (checked, err
 	return c, nil
 }
 
+// checkSessionRef refuses a session that was revoked, expired or whose
+// principal is gone (the same check Validate makes, from the reference), and
+// a reference that does not describe the principal the gateway sent, so one
+// session's reference cannot vouch for another principal or auth_time (and so
+// aws:MultiFactorAuthAge). A store failure is returned as is, which fails
+// closed.
+func checkSessionRef(ctx context.Context, p project, pr *iamv1.Principal, c checked, ref string) error {
+	sr, err := p.sts.CheckSessionRef(ctx, ref)
+	switch {
+	case errors.Is(err, sts.ErrInvalidToken), errors.Is(err, sts.ErrExpired):
+		return accessDenied("principal rejected: session revoked or invalid")
+	case err != nil:
+		return err
+	case sr.Principal.Kind != c.az.Kind || sr.Principal.Name != c.az.Name || sr.UniqueID() != pr.GetUniqueId(),
+		!c.authTime.Equal(sr.AuthTime):
+		return accessDenied("principal rejected: session reference does not match the principal")
+	case c.mfa && !sr.MFA:
+		return accessDenied("principal rejected: MFA claim but the session was issued without MFA")
+	}
+	return nil
+}
+
 // serverKeys are context keys only vws-iam may set.
 var serverKeys = map[string]bool{
 	"aws:multifactorauthpresent": true, "aws:multifactorauthage": true, "aws:principalarn": true,
@@ -287,15 +334,20 @@ var serverKeys = map[string]bool{
 func (s *Server) Authorize(ctx context.Context, req *iamv1.AuthorizeRequest) (*iamv1.AuthorizeResponse, error) {
 	// TODO(#109): set resp.EncodedMessage on a deny once vws-proto
 	// carries AuthorizeResponse.encoded_message (popododo0720/vws-proto#84).
-	resp, _, err := s.authorize(ctx, req, false)
+	// TODO(#20): pass req.GetPrincipal().GetSessionRef() once vws-proto's
+	// Principal carries it (popododo0720/vws-proto#146), and refuse an ASSUMED_ROLE
+	// principal without one: until then the gateway cannot send a reference
+	// and a revoked session is not caught here.
+	resp, _, err := s.authorize(ctx, req, "", false)
 	return resp, err
 }
 
-// authorize is Authorize; with encode, a deny decided by policy
-// evaluation also returns its encoded authorization message
+// authorize is Authorize with the session reference of the STS session
+// behind the principal ("" for none, #20); with encode, a deny decided by
+// policy evaluation also returns its encoded authorization message
 // (authorizationMessage) for DecodeAuthorizationMessage.
 func (s *Server) authorize(
-	ctx context.Context, req *iamv1.AuthorizeRequest, encode bool,
+	ctx context.Context, req *iamv1.AuthorizeRequest, ref string, encode bool,
 ) (resp *iamv1.AuthorizeResponse, encoded string, err error) {
 	defer func() {
 		s.m.add(ctx, s.m.authz, attribute.String("result", result(err)), attribute.String("decision", resp.GetDecision().String()))
@@ -303,7 +355,7 @@ func (s *Server) authorize(
 	if req.GetAction() == "" || !strings.Contains(req.GetAction(), ":") {
 		return nil, "", invalidSpec("action must look like service:Action")
 	}
-	c, err := s.recheck(ctx, req.GetPrincipal())
+	c, err := s.recheck(ctx, req.GetPrincipal(), ref)
 	if err != nil {
 		var ae *apiError
 		if errors.As(err, &ae) {
