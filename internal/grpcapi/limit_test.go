@@ -2,6 +2,7 @@ package grpcapi_test
 
 import (
 	"context"
+	"crypto/rand"
 	"strconv"
 	"strings"
 	"sync"
@@ -119,6 +120,51 @@ func testAttemptLimits(t *testing.T, backend func(*testing.T) store.Backend) {
 		}
 	})
 
+	t.Run("UnknownUsersBoundedPerIP", func(t *testing.T) {
+		// #41: concurrent random user names from one source IP, or from
+		// callers without one, create at most IPAttemptLimit user
+		// counters per window: the IP counter is taken before the user's.
+		for _, ip := range []string{"203.0.113.8", ""} {
+			b := backend(t)
+			now := time.Now().UTC()
+			e := newEnvOn(t, b, &now)
+			cheapDummyHash(t)
+			ctx := t.Context()
+			const n = grpcapi.IPAttemptLimit + 20
+			errs := make([]error, n)
+			var wg sync.WaitGroup
+			for i := range n {
+				wg.Go(func() { errs[i] = login(ctx, e, "u"+rand.Text(), "wrong password!", ip) })
+			}
+			wg.Wait()
+			checked := 0
+			for _, err := range errs {
+				if codesOf(err) == codes.Unauthenticated {
+					checked++
+				} else {
+					wantThrottled(t, err)
+				}
+			}
+			if checked != grpcapi.IPAttemptLimit {
+				t.Fatalf("source IP %q: %d of %d guesses reached the check, want %d", ip, checked, n, grpcapi.IPAttemptLimit)
+			}
+			wantThrottled(t, login(ctx, e, "u"+rand.Text(), "wrong password!", ip))
+			vs, err := store.List[iam.AttemptCounter](ctx, b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			users := 0
+			for _, v := range vs {
+				if v.Object.Scope == iam.AttemptUser {
+					users++
+				}
+			}
+			if users > grpcapi.IPAttemptLimit {
+				t.Fatalf("source IP %q: %d user counters, want at most %d", ip, users, grpcapi.IPAttemptLimit)
+			}
+		}
+	})
+
 	t.Run("PerAccessKeySTSMFA", func(t *testing.T) {
 		now := time.Now().UTC()
 		e := newEnvOn(t, backend(t), &now)
@@ -226,9 +272,11 @@ func testAttemptLimits(t *testing.T, backend func(*testing.T) store.Backend) {
 		const busyIP, otherIP = "198.51.100.60", "198.51.100.61"
 		seed := func(scope, id string, failures int) {
 			t.Helper()
-			c := iam.AttemptCounter{Hash: grpcapi.AttemptCounterHash(scope, id), Scope: scope, Failures: failures, WindowStart: now}
-			if _, err := store.Create(ctx, b, c); err != nil {
-				t.Fatal(err)
+			for _, k := range a.api.AttemptCounterKeys(scope, id) {
+				c := iam.AttemptCounter{Hash: k, Scope: scope, Failures: failures, WindowStart: now}
+				if _, err := store.Create(ctx, b, c); err != nil {
+					t.Fatal(err)
+				}
 			}
 		}
 		type caller struct {
@@ -343,7 +391,9 @@ func testAttemptLimits(t *testing.T, backend func(*testing.T) store.Backend) {
 			t.Fatalf("GC in window = %d, %v", n, err)
 		}
 		now = now.Add(grpcapi.AttemptWindow)
-		if n, err := e.api.GCAttemptCounters(ctx); err != nil || n != 1 {
+		// The user's counter and the shared one of Logins without a
+		// source IP.
+		if n, err := e.api.GCAttemptCounters(ctx); err != nil || n != 2 {
 			t.Fatalf("GC after window = %d, %v", n, err)
 		}
 	})

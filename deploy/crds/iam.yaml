@@ -253,7 +253,7 @@ spec:
           type: object
           properties:
             spec:
-              description: A used STS SigV4 request, shared by every vws-iam replica. Holds only the SHA-256 of the access key id and signature, and an expiry; written and garbage-collected only by vws-iam.
+              description: A used STS SigV4 request, shared by every vws-iam replica. Holds only a keyed HMAC-SHA256 of the access key id and signature under a key derived from each KEK, so a reader without the KEK cannot test guesses, and an expiry; written and garbage-collected only by vws-iam.
               type: object
               x-kubernetes-preserve-unknown-fields: true
           required: [spec]
@@ -279,7 +279,7 @@ spec:
           type: object
           properties:
             spec:
-              description: Failed authentication attempts of one caller (user, access key or source IP) in a window, shared by every vws-iam replica. Holds only a SHA-256 of the caller, counts and times; written and garbage-collected only by vws-iam.
+              description: Failed authentication attempts of one caller (user, access key or source IP) in a window, shared by every vws-iam replica. Holds only a keyed HMAC-SHA256 of the caller under a key derived from each KEK, so a reader without the KEK cannot test guesses, counts and times; written and garbage-collected only by vws-iam.
               type: object
               x-kubernetes-preserve-unknown-fields: true
           required: [spec]

@@ -126,7 +126,7 @@ func (s *Server) loginRoot(ctx context.Context, req *iamv1.LoginRequest) (*iamv1
 	pid := req.GetProject()
 	p := s.project(pid)
 	var r store.Versioned[iam.RootLogin]
-	err := s.limitedVerify(ctx, callers{rootSubject(pid)}.withIP(req.GetSourceIp()), func() error {
+	err := s.limitedVerify(ctx, loginCallers(rootSubject(pid), req.GetSourceIp()), func() error {
 		var err error
 		r, err = store.Get[iam.RootLogin](ctx, p.b, iam.RootLoginKey)
 		if errors.Is(err, store.ErrNotFound) {

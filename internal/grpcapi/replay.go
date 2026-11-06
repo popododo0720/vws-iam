@@ -25,17 +25,30 @@ import (
 // GC removed the entry.
 const replayTTL = 2 * sigv4.MaxSkew
 
-// replayHash is the store key of a signed request. Only this digest is
-// stored; the signature and the secret never are.
-func replayHash(r *iamv1.AuthenticateRequest) string {
+// replayKeys are the store keys of a signed request: its keyed digest
+// under every KEK of the ring (secret.Keyring.Digests). Only these are
+// stored; the signature and the secret never are, and a store reader
+// without the KEK cannot test a guess against a key.
+func (s *Server) replayKeys(r *iamv1.AuthenticateRequest) []string {
+	return s.keys.Digests("replay", r.GetAccessKeyId()+"\n"+r.GetSignature())
+}
+
+// legacyReplayHash is the unkeyed key of releases before #41. It is only
+// read, so a request claimed by such a release is still refused.
+// TODO(#310): remove after the HMAC release.
+func legacyReplayHash(r *iamv1.AuthenticateRequest) string {
 	h := sha256.Sum256([]byte(r.GetAccessKeyId() + "\n" + r.GetSignature()))
 	return hex.EncodeToString(h[:])
 }
 
 // claimReplay records r as used, once across every replica sharing the
-// backend: the IamReplayEntry create is atomic, so of two requests with
-// the same signature exactly one gets past it. A store error fails
-// closed.
+// backend: it must create the IamReplayEntry under every key of its ring,
+// and each create is atomic. Any two replicas' rings share a KEK, so two
+// claimers of one request race on the same entry under it and at most one
+// creates every entry. For that, a KEK must stay in every ring for at
+// least replayTTL after the last replica that lacks its successor stops.
+// A partial claim is not rolled back: the request was refused, and its
+// retry is refused too. A store error fails closed.
 func (s *Server) claimReplay(ctx context.Context, r *iamv1.AuthenticateRequest) error {
 	now := s.now()
 	s.stsSeen.Range(func(k, v any) bool {
@@ -44,12 +57,32 @@ func (s *Server) claimReplay(ctx context.Context, r *iamv1.AuthenticateRequest) 
 		}
 		return true
 	})
-	h := replayHash(r)
-	if v, ok := s.stsSeen.Load(h); ok {
-		if t, ok := v.(time.Time); ok && !now.After(t) {
-			return replayed()
+	keys := s.replayKeys(r)
+	for _, h := range keys {
+		if v, ok := s.stsSeen.Load(h); ok {
+			if t, ok := v.(time.Time); ok && !now.After(t) {
+				return replayed()
+			}
 		}
 	}
+	v, err := store.Get[iam.ReplayEntry](ctx, s.b, legacyReplayHash(r))
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+	case err != nil:
+		return toStatus(ctx, err)
+	case !now.After(v.Object.Expires):
+		return replayed()
+	}
+	for _, h := range keys {
+		if err := s.claimReplayKey(ctx, h, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// claimReplayKey creates the replay entry h, replacing an expired one.
+func (s *Server) claimReplayKey(ctx context.Context, h string, now time.Time) error {
 	exp := now.Add(replayTTL)
 	// Lost response: if the create below commits but its response is lost
 	// (a timeout or UNAVAILABLE), this call fails, and a client retry of

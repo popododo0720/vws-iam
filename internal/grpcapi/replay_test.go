@@ -124,7 +124,7 @@ func testSharedReplay(t *testing.T, backend func(*testing.T) store.Backend) {
 		if err := gst(ctx, rb, a.stsSign(kid, secret, "", "GetSessionToken")); err != nil {
 			t.Fatal(err)
 		}
-		// Only the SHA-256 is stored: neither the signature nor the secret.
+		// Only keyed digests are stored: neither the signature nor the secret.
 		es, err := b.List(ctx, iam.KindReplay)
 		if err != nil {
 			t.Fatal(err)

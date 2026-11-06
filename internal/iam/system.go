@@ -80,8 +80,10 @@ func (o Operation) Validate() error {
 }
 
 // ReplayEntry records that a forwarded SigV4 request was used for STS, so
-// every replica refuses it a second time. Key is the SHA-256 hex of the
-// access key id and signature; neither is stored. Expires is when the
+// every replica refuses it a second time. Key is the hex HMAC-SHA256 of
+// the access key id and signature under a key derived from a KEK (one
+// entry per KEK), so a store reader without the KEK cannot test guesses;
+// neither is stored. Expires is when the
 // entry may be garbage-collected: after it, X-Amz-Date is out of window.
 type ReplayEntry struct {
 	Hash    string    `json:"hash"`
@@ -107,8 +109,10 @@ const (
 
 // AttemptCounter counts failed Login, MFA and STS-MFA attempts of one
 // caller (a user, an access key or a source IP) in a fixed window, shared
-// by every replica. Key is the SHA-256 hex of the scope and the caller;
-// the user name, key id and IP are not stored.
+// by every replica. Key is the hex HMAC-SHA256 of the scope and the
+// caller under a key derived from a KEK (one counter per KEK), so a store
+// reader without the KEK cannot test guesses; the user name, key id and
+// IP are not stored.
 type AttemptCounter struct {
 	Hash        string    `json:"hash"`
 	Scope       string    `json:"scope"`

@@ -3,10 +3,13 @@ package secret_test
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -122,5 +125,65 @@ func TestFromEnv(t *testing.T) {
 		if _, _, err := secret.FromEnv(env(m)); err == nil || strings.Contains(err.Error(), key) {
 			t.Fatalf("%v accepted or leaked: %v", m, err)
 		}
+	}
+}
+
+// TestDigests covers the keyed store digests (#41): stable, separated by
+// purpose and KEK, never the plain SHA-256 of the input, in KEK id order,
+// and a KEK's digest is the same in every ring that holds it.
+func TestDigests(t *testing.T) {
+	ka, kb := key(t), key(t)
+	ring := func(active string, ids ...string) *secret.Keyring {
+		t.Helper()
+		keys := map[string][]byte{}
+		for _, id := range ids {
+			keys[id] = map[string][]byte{"a": ka, "b": kb}[id]
+		}
+		k, err := secret.NewKeyring(active, keys)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return k
+	}
+	a, ab, ba := ring("a", "a"), ring("a", "a", "b"), ring("b", "b", "a")
+	const msg = "user\nacme/alice"
+	d := a.Digests("attempt", msg)
+	if len(d) != 1 || len(d[0]) != 64 {
+		t.Fatalf("digests %q, want one hex SHA-256", d)
+	}
+	if again := a.Digests("attempt", msg); !slices.Equal(again, d) {
+		t.Fatalf("not deterministic: %q then %q", d, again)
+	}
+	if other := a.Digests("replay", msg); other[0] == d[0] {
+		t.Fatal("purposes share a digest")
+	}
+	plain := sha256.Sum256([]byte(msg))
+	plainPurpose := sha256.Sum256([]byte("attempt\x00" + msg))
+	if d[0] == hex.EncodeToString(plain[:]) || d[0] == hex.EncodeToString(plainPurpose[:]) {
+		t.Fatal("digest is the plain SHA-256 of its input")
+	}
+	got := ab.Digests("attempt", msg)
+	if len(got) != 2 || got[0] != d[0] || got[1] == d[0] {
+		t.Fatalf("ring {a,b} = %q, want a's digest %q first and b's apart", got, d[0])
+	}
+	if rev := ba.Digests("attempt", msg); !slices.Equal(rev, got) {
+		t.Fatalf("order depends on the active KEK: %q vs %q", rev, got)
+	}
+	if b := ring("b", "b").Digests("attempt", msg); b[0] != got[1] {
+		t.Fatalf("b's digest %q differs in ring {a,b}: %q", b[0], got[1])
+	}
+}
+
+// TestDigestsDuplicateKEK: KEK ids that hold the same bytes give one
+// digest, so a replay claim does not meet its own entry and an attempt is
+// counted once.
+func TestDigestsDuplicateKEK(t *testing.T) {
+	ka, kb := key(t), key(t)
+	k, err := secret.NewKeyring("a", map[string][]byte{"a": ka, "b": kb, "c": ka})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := k.Digests("replay", "m"); len(d) != 2 || d[0] == d[1] {
+		t.Fatalf("digests %q, want one per distinct KEK", d)
 	}
 }
