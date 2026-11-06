@@ -11,9 +11,9 @@ import (
 	"github.com/popododo0720/vws-iam/internal/sts"
 )
 
-// contended loses every user write to another writer. The read after
-// the first Mutate gave up ends the context mid-call, as a deadline
-// that lands during a store round trip does.
+// contended loses every user write to another writer. The fifth read
+// ends the context mid-call, as a deadline that lands during a store
+// round trip does.
 type contended struct {
 	store.Backend
 	cancel context.CancelFunc
@@ -22,7 +22,7 @@ type contended struct {
 
 func (c *contended) Get(ctx context.Context, k iam.Kind, key string) (store.Entry, error) {
 	if k == iam.KindUser {
-		if c.reads++; c.reads > 9 {
+		if c.reads++; c.reads > 4 {
 			c.cancel()
 			return store.Entry{}, ctx.Err()
 		}
@@ -38,9 +38,9 @@ func (c *contended) Update(ctx context.Context, k iam.Kind, key string, spec []b
 }
 
 // TestRevokeSessionsOnceRunsOutOfTimeUnderContention: a revocation that
-// loses every race until its context ends fails with ErrConflict, also
-// when the context ends during a read after the races, so the RPC answers
-// ConcurrentModification and not a bare timeout (#51). Nothing is bumped.
+// loses every race until its context ends during a retry's read fails
+// with ErrConflict, so the RPC answers ConcurrentModification and not a
+// bare timeout (#51). Nothing is bumped.
 func TestRevokeSessionsOnceRunsOutOfTimeUnderContention(t *testing.T) {
 	e := setup(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -48,8 +48,8 @@ func TestRevokeSessionsOnceRunsOutOfTimeUnderContention(t *testing.T) {
 	b := &contended{Backend: e.b, cancel: cancel}
 	svc := sts.New(b, e.keys, e.az, acct, e.clk.now)
 	err := svc.RevokeSessionsOnce(ctx, authz.User, "alice", "req-1")
-	if !errors.Is(err, store.ErrConflict) || !errors.Is(err, context.Canceled) || b.reads != 10 {
-		t.Fatalf("err = %v after %d reads, want the conflict and context.Canceled after 10", err, b.reads)
+	if !errors.Is(err, store.ErrConflict) || !errors.Is(err, context.Canceled) || b.reads != 5 {
+		t.Fatalf("err = %v after %d reads, want the conflict and context.Canceled after 5", err, b.reads)
 	}
 	u, err := store.Get[iam.User](context.Background(), e.b, "alice")
 	if err != nil {
