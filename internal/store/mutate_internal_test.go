@@ -127,7 +127,8 @@ func TestMutateStopsWaitingWhenContextEnds(t *testing.T) {
 // TestMutateReportsTheConflictWhenARetryRunsOutOfTime: a context that
 // ends while a retry reads ends Mutate with the conflict and the context's
 // error, so the caller sees contention, not a slow backend (#51). A first
-// read cut short is only the context's error.
+// read cut short, and a retry's write that may have landed, are only the
+// context's error.
 func TestMutateReportsTheConflictWhenARetryRunsOutOfTime(t *testing.T) {
 	recordSleeps(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -143,6 +144,29 @@ func TestMutateReportsTheConflictWhenARetryRunsOutOfTime(t *testing.T) {
 	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrConflict) || b.updates != 0 {
 		t.Fatalf("first read on a done context: %v after %d updates", err, b.updates)
 	}
+
+	ctx, cancel = context.WithCancel(context.Background())
+	defer cancel()
+	l := &landsThenTimesOut{conflicting: conflicting{t: t, conflicts: 1}, cancel: cancel}
+	_, err = Mutate(ctx, l, "g", func(*iam.Group) error { return nil })
+	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrConflict) || l.updates != 2 {
+		t.Fatalf("retry write applied, then the context ended: %v after %d updates", err, l.updates)
+	}
+}
+
+// landsThenTimesOut applies the write after the conflicts, then answers
+// the context's error, as a write whose response the deadline cut off.
+type landsThenTimesOut struct {
+	conflicting
+	cancel context.CancelFunc
+}
+
+func (l *landsThenTimesOut) Update(ctx context.Context, k iam.Kind, key string, spec []byte, v string) (string, error) {
+	if _, err := l.conflicting.Update(ctx, k, key, spec, v); err != nil {
+		return "", err
+	}
+	l.cancel()
+	return "", ctx.Err()
 }
 
 // ctxReads fails a Get once ctx is done, as a real backend does.
