@@ -129,7 +129,8 @@ const adminARN = "arn:vws:iam::" + acct + ":role/admin"
 func TestAssumeRoleCredentialsWorkThenExpire(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
-	creds, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "deploy-1", 15*time.Minute, "", sts.MFA{})
+	creds, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "deploy-1", 15*time.Minute,
+		sts.SessionPolicies{}, sts.MFA{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,11 +157,11 @@ func TestAssumeRoleCredentialsWorkThenExpire(t *testing.T) {
 func TestTokenIsBoundTamperEvidentAndSurvivesRestart(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
-	c1, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "s1", 0, "", sts.MFA{})
+	c1, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "s1", 0, sts.SessionPolicies{}, sts.MFA{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	c2, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "s2", 0, "", sts.MFA{})
+	c2, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "s2", 0, sts.SessionPolicies{}, sts.MFA{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,15 +187,18 @@ func TestUntrustedPrincipalIsDenied(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	// eve may call sts:AssumeRole, but the trust policy does not name her.
-	if _, err := e.svc.AssumeRole(ctx, e.caller(t, "eve"), nil, adminARN, "x1", 0, "", sts.MFA{}); !errors.Is(err, sts.ErrAccessDenied) {
+	if _, err := e.svc.AssumeRole(ctx, e.caller(t, "eve"), nil, adminARN, "x1", 0, sts.SessionPolicies{},
+		sts.MFA{}); !errors.Is(err, sts.ErrAccessDenied) {
 		t.Fatalf("eve: %v", err)
 	}
 	// bob is trusted but has no sts:AssumeRole permission.
-	if _, err := e.svc.AssumeRole(ctx, e.caller(t, "bob"), nil, adminARN, "x1", 0, "", sts.MFA{}); !errors.Is(err, sts.ErrAccessDenied) {
+	if _, err := e.svc.AssumeRole(ctx, e.caller(t, "bob"), nil, adminARN, "x1", 0, sts.SessionPolicies{},
+		sts.MFA{}); !errors.Is(err, sts.ErrAccessDenied) {
 		t.Fatalf("bob: %v", err)
 	}
 	for _, arn := range []string{"arn:vws:iam::999999999999:role/admin", "arn:vws:iam::" + acct + ":role/missing", "arn:vws:iam::" + acct + ":role/dev/admin", "admin"} {
-		if _, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, arn, "x1", 0, "", sts.MFA{}); !errors.Is(err, sts.ErrAccessDenied) {
+		if _, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, arn, "x1", 0, sts.SessionPolicies{},
+			sts.MFA{}); !errors.Is(err, sts.ErrAccessDenied) {
 			t.Fatalf("%s: %v", arn, err)
 		}
 	}
@@ -204,10 +208,11 @@ func TestMFAConditionAndPropagation(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	role := "arn:vws:iam::" + acct + ":role/mfa-only"
-	if _, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, role, "m1", 0, "", sts.MFA{}); !errors.Is(err, sts.ErrAccessDenied) {
+	if _, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, role, "m1", 0, sts.SessionPolicies{},
+		sts.MFA{}); !errors.Is(err, sts.ErrAccessDenied) {
 		t.Fatalf("without MFA: %v", err)
 	}
-	creds, err := e.svc.AssumeRole(ctx, e.mfaCaller(t, "alice"), nil, role, "m1", 0, "", sts.MFA{})
+	creds, err := e.svc.AssumeRole(ctx, e.mfaCaller(t, "alice"), nil, role, "m1", 0, sts.SessionPolicies{}, sts.MFA{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +229,7 @@ func TestMFAConditionAndPropagation(t *testing.T) {
 	if err != nil || !us.MFA || us.Principal.Kind != authz.User || us.Principal.Name != "alice" {
 		t.Fatalf("user session %v %+v", err, us)
 	}
-	if _, err := e.svc.AssumeRole(ctx, us.Caller(), nil, role, "m2", 0, "", sts.MFA{}); err != nil {
+	if _, err := e.svc.AssumeRole(ctx, us.Caller(), nil, role, "m2", 0, sts.SessionPolicies{}, sts.MFA{}); err != nil {
 		t.Fatalf("MFA session could not assume: %v", err)
 	}
 	if _, err := e.svc.GetSessionToken(ctx, us.Caller(), time.Hour, sts.MFA{}); !errors.Is(err, sts.ErrAccessDenied) {
@@ -235,7 +240,9 @@ func TestMFAConditionAndPropagation(t *testing.T) {
 func TestSessionPolicyNarrows(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
-	creds, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "narrow", 0, `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}}`, sts.MFA{})
+	getOnly := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}}`
+	creds, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "narrow", 0,
+		sts.SessionPolicies{Policy: getOnly}, sts.MFA{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +256,8 @@ func TestSessionPolicyNarrows(t *testing.T) {
 	if d, err := e.az.Authorize(ctx, sess.Principal, "ec2:RunInstances", "*", nil); err != nil || d.Allowed {
 		t.Fatalf("RunInstances allowed through a narrowing session policy: %+v %v", d, err)
 	}
-	if _, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "bad", 0, `{"Version":"2012-10-17"}`, sts.MFA{}); !errors.Is(err, policy.ErrMalformed) {
+	if _, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "bad", 0,
+		sts.SessionPolicies{Policy: `{"Version":"2012-10-17"}`}, sts.MFA{}); !errors.Is(err, policy.ErrMalformed) {
 		t.Fatalf("malformed session policy: %v", err)
 	}
 }
@@ -258,15 +266,18 @@ func TestDurationAndNameBounds(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	for _, d := range []time.Duration{14 * time.Minute, 12*time.Hour + time.Second} {
-		if _, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "d1", d, "", sts.MFA{}); !errors.Is(err, sts.ErrInvalidRequest) {
+		if _, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "d1", d, sts.SessionPolicies{},
+			sts.MFA{}); !errors.Is(err, sts.ErrInvalidRequest) {
 			t.Fatalf("%s: %v", d, err)
 		}
 	}
-	if c, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "d1", 12*time.Hour, "", sts.MFA{}); err != nil || !c.Expiration.Equal(e.clk.t.Add(12*time.Hour)) {
+	if c, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "d1", 12*time.Hour, sts.SessionPolicies{},
+		sts.MFA{}); err != nil || !c.Expiration.Equal(e.clk.t.Add(12*time.Hour)) {
 		t.Fatalf("12h: %v %v", err, c.Expiration)
 	}
 	for _, n := range []string{"", "a", "has space", strings.Repeat("x", 65)} {
-		if _, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, n, 0, "", sts.MFA{}); !errors.Is(err, sts.ErrInvalidRequest) {
+		if _, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, n, 0, sts.SessionPolicies{},
+			sts.MFA{}); !errors.Is(err, sts.ErrInvalidRequest) {
 			t.Fatalf("name %q: %v", n, err)
 		}
 	}
@@ -279,7 +290,8 @@ func TestDurationAndNameBounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.svc.AssumeRole(ctx, s.Caller(), nil, adminARN, "chain", 2*time.Hour, "", sts.MFA{}); !errors.Is(err, sts.ErrInvalidRequest) {
+	if _, err := e.svc.AssumeRole(ctx, s.Caller(), nil, adminARN, "chain", 2*time.Hour, sts.SessionPolicies{},
+		sts.MFA{}); !errors.Is(err, sts.ErrInvalidRequest) {
 		t.Fatalf("chained 2h: %v", err)
 	}
 	if _, err := e.svc.GetSessionToken(ctx, e.caller(t, "alice"), 37*time.Hour, sts.MFA{}); !errors.Is(err, sts.ErrInvalidRequest) {
@@ -291,7 +303,8 @@ func TestCallerIsDerivedServerSide(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	// The zero Caller (all a client could build) gets nothing.
-	if _, err := e.svc.AssumeRole(ctx, sts.Caller{}, nil, adminARN, "z1", 0, "", sts.MFA{}); !errors.Is(err, sts.ErrAccessDenied) {
+	if _, err := e.svc.AssumeRole(ctx, sts.Caller{}, nil, adminARN, "z1", 0, sts.SessionPolicies{},
+		sts.MFA{}); !errors.Is(err, sts.ErrAccessDenied) {
 		t.Fatalf("zero caller: %v", err)
 	}
 	if _, err := e.svc.GetSessionToken(ctx, sts.Caller{}, 0, sts.MFA{}); !errors.Is(err, sts.ErrAccessDenied) {
@@ -317,7 +330,8 @@ func TestCallerIsDerivedServerSide(t *testing.T) {
 	// A client-set aws:MultiFactorAuthPresent is ignored.
 	role := "arn:vws:iam::" + acct + ":role/mfa-only"
 	forged := map[string][]string{"aws:MultiFactorAuthPresent": {"true"}}
-	if _, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), forged, role, "f1", 0, "", sts.MFA{}); !errors.Is(err, sts.ErrAccessDenied) {
+	if _, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), forged, role, "f1", 0, sts.SessionPolicies{},
+		sts.MFA{}); !errors.Is(err, sts.ErrAccessDenied) {
 		t.Fatalf("forged MFA context honored: %v", err)
 	}
 }
@@ -362,7 +376,7 @@ func TestGetSessionTokenVerifiesMFA(t *testing.T) {
 func TestRevokeSessions(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
-	old, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "r1", 0, "", sts.MFA{})
+	old, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "r1", 0, sts.SessionPolicies{}, sts.MFA{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +394,7 @@ func TestRevokeSessions(t *testing.T) {
 		t.Fatalf("user session revoked by a role revocation: %v", err)
 	}
 	e.clk.t = e.clk.t.Add(time.Second)
-	fresh, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "r2", 0, "", sts.MFA{})
+	fresh, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "r2", 0, sts.SessionPolicies{}, sts.MFA{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,7 +476,7 @@ func TestGetSessionTokenSessionIsMarked(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		ar, err := e.svc.AssumeRole(ctx, c, nil, adminARN, "session", 0, "", sts.MFA{})
+		ar, err := e.svc.AssumeRole(ctx, c, nil, adminARN, "session", 0, sts.SessionPolicies{}, sts.MFA{})
 		if err != nil {
 			t.Fatalf("mfa %v: AssumeRole from the session: %v", mfa, err)
 		}

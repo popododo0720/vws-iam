@@ -187,7 +187,8 @@ func TestDecodeAuthorizationMessageUnauthorized(t *testing.T) {
 		allowed bool
 	}{{"", true}, {narrow, false}} {
 		role := "arn:vws:iam::" + acct + ":role/decoder"
-		creds, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, role, "audit", 0, tc.session, sts.MFA{})
+		creds, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, role, "audit", 0,
+			sts.SessionPolicies{Policy: tc.session}, sts.MFA{})
 		if err != nil {
 			t.Fatal(err)
 		}

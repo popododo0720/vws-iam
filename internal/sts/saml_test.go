@@ -748,14 +748,14 @@ func TestAssumeRoleWithSAMLChainedIdentity(t *testing.T) {
 		},
 	} {
 		trust(tc.trust)
-		_, err := e.svc.AssumeRole(ctx, tc.caller, tc.reqCtx, adminARN, "chain", 0, "", sts.MFA{})
+		_, err := e.svc.AssumeRole(ctx, tc.caller, tc.reqCtx, adminARN, "chain", 0, sts.SessionPolicies{}, sts.MFA{})
 		if (tc.want == nil && err != nil) || (tc.want != nil && !errors.Is(err, tc.want)) {
 			t.Errorf("%s: %v, want %v", tc.name, err, tc.want)
 		}
 	}
 	// The chained session keeps the SAML identity for the next hop.
 	trust(allow + "}")
-	chained, err := e.svc.AssumeRole(ctx, samlCaller, nil, adminARN, "chain", 0, "", sts.MFA{})
+	chained, err := e.svc.AssumeRole(ctx, samlCaller, nil, adminARN, "chain", 0, sts.SessionPolicies{}, sts.MFA{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -774,13 +774,13 @@ func TestAssumeRoleWithSAMLChainedIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	trust(allow + "}" + deny("saml:sub", "alice@corp.test"))
-	_, err = e.svc.AssumeRole(ctx, next.Caller(), nil, adminARN, "again", 0, "", sts.MFA{})
+	_, err = e.svc.AssumeRole(ctx, next.Caller(), nil, adminARN, "again", 0, sts.SessionPolicies{}, sts.MFA{})
 	if !errors.Is(err, sts.ErrAccessDenied) {
 		t.Fatalf("second hop with Deny on saml:sub: %v, want AccessDenied", err)
 	}
 	// A caller without SAML identity does not match the Deny, and its
 	// session has none.
-	plain, err := e.svc.AssumeRole(ctx, broker, nil, adminARN, "plain", 0, "", sts.MFA{})
+	plain, err := e.svc.AssumeRole(ctx, broker, nil, adminARN, "plain", 0, sts.SessionPolicies{}, sts.MFA{})
 	if err != nil {
 		t.Fatal(err)
 	}

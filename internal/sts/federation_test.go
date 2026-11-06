@@ -197,7 +197,8 @@ func TestGetFederationTokenCallers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ar, err := e.svc.AssumeRole(ctx, broker, nil, "arn:vws:iam::"+acct+":role/admin", "s1", 0, "", sts.MFA{})
+	ar, err := e.svc.AssumeRole(ctx, broker, nil, "arn:vws:iam::"+acct+":role/admin", "s1", 0, sts.SessionPolicies{},
+		sts.MFA{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +220,7 @@ func TestGetFederationTokenCallers(t *testing.T) {
 		}
 	}
 	// A federated session cannot assume a role either.
-	if _, err := e.svc.AssumeRole(ctx, fedCaller, nil, "arn:vws:iam::"+acct+":role/admin", "s2", 0, "",
+	if _, err := e.svc.AssumeRole(ctx, fedCaller, nil, "arn:vws:iam::"+acct+":role/admin", "s2", 0, sts.SessionPolicies{},
 		sts.MFA{}); !errors.Is(err, sts.ErrAccessDenied) {
 		t.Errorf("federated AssumeRole: %v", err)
 	}

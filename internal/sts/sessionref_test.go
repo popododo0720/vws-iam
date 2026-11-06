@@ -23,7 +23,7 @@ const denyAssume = `{"Version":"2012-10-17","Statement":{"Effect":"Deny","Princi
 func (e env) sessions(t *testing.T) (role, user sts.Credentials) {
 	t.Helper()
 	ctx := context.Background()
-	role, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "ref1", 0, "", sts.MFA{})
+	role, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "ref1", 0, sts.SessionPolicies{}, sts.MFA{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,8 @@ func TestSessionRefRefusedAfterRevokeWithSkewedClocks(t *testing.T) {
 			revoker := sts.New(e.b, e.keys, e.az, acct, (&clock{t: e.clk.t.Add(d)}).now)
 			// Sessions outlast the largest skew, or a replica ahead of the
 			// issuer would see them expire rather than revoked.
-			role, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "skew", 6*time.Hour, "", sts.MFA{})
+			role, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "skew", 6*time.Hour,
+				sts.SessionPolicies{}, sts.MFA{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -128,7 +129,8 @@ func TestSessionRefRefusedAfterRevokeWithSkewedClocks(t *testing.T) {
 			}
 
 			// A reference minted from a session issued after the revoke is good.
-			role2, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "skew2", 6*time.Hour, "", sts.MFA{})
+			role2, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "skew2", 6*time.Hour,
+				sts.SessionPolicies{}, sts.MFA{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -336,7 +338,7 @@ func TestSessionRefSurvivesRestartAndKEKRotation(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := sts.New(e.b, oldRing, e.az, acct, e.clk.now)
-	cred, err := old.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "rot", 0, "", sts.MFA{})
+	cred, err := old.AssumeRole(ctx, e.caller(t, "alice"), nil, adminARN, "rot", 0, sts.SessionPolicies{}, sts.MFA{})
 	if err != nil {
 		t.Fatal(err)
 	}
