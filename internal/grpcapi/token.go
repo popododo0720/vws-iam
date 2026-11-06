@@ -12,6 +12,7 @@ import (
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
+	"github.com/popododo0720/vws-iam/internal/authz"
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/sts"
 )
@@ -119,6 +120,9 @@ func (s *Server) authenticatedCallerFrom(
 			return project{}, sts.Caller{}, "", err
 		}
 		p := s.project(v.Project)
+		if v.Root() {
+			return p, sts.RootCaller(v.MFA, v.AuthTime), "", nil
+		}
 		c, err := p.sts.ConsoleCaller(ctx, v.UserName, v.MFA, v.AuthTime)
 		return p, c, "", err
 	}
@@ -196,15 +200,15 @@ func (s *Server) GetSessionToken(ctx context.Context, req *iamv1.GetSessionToken
 }
 
 func (s *Server) getSessionToken(ctx context.Context, req *iamv1.GetSessionTokenRequest, a authn) (*iamv1.GetSessionTokenResponse, error) {
-	if a.console != "" {
-		// As in AWS, GetSessionToken needs long-term credentials; an IAM
-		// user's console session is not one. Only the root user may use a
-		// console session here, and vws-iam has no root console login yet.
-		return nil, toStatus(ctx, fmt.Errorf("%w: GetSessionToken with a console session is root-only", sts.ErrAccessDenied))
-	}
 	p, c, err := s.authenticatedCaller(ctx, a, "GetSessionToken")
 	if err != nil {
 		return nil, toStatus(ctx, err)
+	}
+	if a.console != "" && c.Principal().Kind != authz.Root {
+		// As in AWS, GetSessionToken needs long-term credentials; an IAM
+		// user's console session is not one. Only the root user may use a
+		// console session here.
+		return nil, toStatus(ctx, fmt.Errorf("%w: GetSessionToken with a console session is root-only", sts.ErrAccessDenied))
 	}
 	ctx = stsAttempts(ctx, a, req.GetSerialNumber(), req.GetTokenCode())
 	d := time.Duration(req.GetDurationSeconds()) * time.Second

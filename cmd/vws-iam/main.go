@@ -81,6 +81,8 @@ const (
 	envRootProject = "VWS_IAM_ROOT_PROJECT"
 	envRootKeyID   = "VWS_IAM_ROOT_ACCESS_KEY_ID"
 	envRootSecret  = "VWS_IAM_ROOT_SECRET_ACCESS_KEY"
+	// envRootPassword is the optional root console password (#34).
+	envRootPassword = "VWS_IAM_ROOT_PASSWORD"
 )
 
 const usage = `usage: vws-iam [flags]            serve gRPC
@@ -88,7 +90,8 @@ const usage = `usage: vws-iam [flags]            serve gRPC
 
 KEK: env VWS_IAM_KEK (base64 of 32 bytes) + VWS_IAM_KEK_ID, or -kek-dir.
 Bootstrap root credentials: env VWS_IAM_ROOT_PROJECT, VWS_IAM_ROOT_ACCESS_KEY_ID,
-VWS_IAM_ROOT_SECRET_ACCESS_KEY, or -root-credentials-dir.
+VWS_IAM_ROOT_SECRET_ACCESS_KEY, or -root-credentials-dir. The root console password
+is optional: env VWS_IAM_ROOT_PASSWORD, or a password file in -root-credentials-dir.
 `
 
 func parseConfig(args []string, stderr io.Writer, getenv func(string) string) (config, error) {
@@ -117,7 +120,9 @@ func parseConfigNS(args []string, stderr io.Writer, getenv func(string) string, 
 			"(env POD_NAMESPACE, then the service account namespace file)")
 	fs.StringVar(&c.kubeconfig, "kubeconfig", "", "kubeconfig path; empty uses in-cluster config")
 	fs.StringVar(&c.kekDir, "kek-dir", "", "directory of the mounted vws-iam-kek Secret: one base64 32-byte key per id and an \"active\" file")
-	fs.StringVar(&c.rootDir, "root-credentials-dir", "", "optional mounted Secret with project, access_key_id and secret_access_key files: imported once as that project's root key")
+	fs.StringVar(&c.rootDir, "root-credentials-dir", "",
+		"optional mounted Secret with project, access_key_id and secret_access_key files: imported once as that "+
+			"project's root key; an optional password file sets the root console password")
 	fs.StringVar(&c.tls.certFile, "tls-cert-file", "", "PEM server certificate of the gRPC listener; "+
 		"needs -tls-key-file and -tls-client-ca-file (mutual TLS)")
 	fs.StringVar(&c.tls.keyFile, "tls-key-file", "", "PEM server key of the gRPC listener; "+
@@ -278,9 +283,23 @@ func readTrim(dir, name string) (string, error) {
 	return strings.TrimSpace(string(b)), nil
 }
 
-// bootstrapRoot imports the root key once. Nothing secret is logged.
+// readRootPassword reads the optional password file of dir. Only the
+// line ending is removed: spaces are part of a password.
+func readRootPassword(dir string) (string, error) {
+	b, err := os.ReadFile(filepath.Join(dir, "password")) //nolint:gosec // operator-supplied mount path
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("root password: %w", err)
+	}
+	return strings.TrimSuffix(strings.TrimSuffix(string(b), "\n"), "\r"), nil
+}
+
+// bootstrapRoot imports the root key once and, when one is given, sets
+// the root console password (#34). Nothing secret is logged.
 func bootstrapRoot(ctx context.Context, b store.Backend, keys *secret.Keyring, cfg config) (string, error) {
-	var project, id, sec string
+	var project, id, sec, pw string
 	if cfg.rootDir != "" {
 		var err error
 		if project, err = readTrim(cfg.rootDir, "project"); err != nil {
@@ -292,8 +311,12 @@ func bootstrapRoot(ctx context.Context, b store.Backend, keys *secret.Keyring, c
 		if sec, err = readTrim(cfg.rootDir, "secret_access_key"); err != nil {
 			return "", err
 		}
+		if pw, err = readRootPassword(cfg.rootDir); err != nil {
+			return "", err
+		}
 	} else {
 		project, id, sec = strings.TrimSpace(cfg.getenv(envRootProject)), strings.TrimSpace(cfg.getenv(envRootKeyID)), strings.TrimSpace(cfg.getenv(envRootSecret))
+		pw = cfg.getenv(envRootPassword)
 	}
 	if !iam.ValidProject(project) || !strings.HasPrefix(id, "AKIA") || len(sec) < 32 {
 		return "", errors.New("root credentials: invalid project, access key id or secret")
@@ -302,6 +325,15 @@ func bootstrapRoot(ctx context.Context, b store.Backend, keys *secret.Keyring, c
 	if _, err := svc.Import(ctx, "", id, sec, true); err != nil && !errors.Is(err, store.ErrExists) {
 		return "", fmt.Errorf("root credentials: %w", err)
 	}
+	if pw == "" {
+		return project, nil
+	}
+	changed, err := grpcapi.SetRootPassword(ctx, b, project, pw, time.Now())
+	if err != nil {
+		return "", fmt.Errorf("root credentials: %w", err)
+	}
+	slog.Default().LogAttrs(ctx, slog.LevelInfo, "root console password ready",
+		slog.String("project", project), slog.Bool("changed", changed))
 	return project, nil
 }
 

@@ -237,7 +237,7 @@ func TestGetFederationTokenCallers(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := tok.Credentials.Expiration.Sub(e.clk.t); got != sts.RootFederationMaxDuration {
+		if got := tok.Credentials.Expiration.Sub(e.clk.t); got != sts.RootMaxSessionDuration {
 			t.Fatalf("root %v: lasts %v", d, got)
 		}
 		s := e.session(t, tok.Credentials)

@@ -603,6 +603,11 @@ func (s *Service) GetSessionToken(
 	if duration < MinDuration || duration > MaxSessionTokenDuration {
 		return Credentials{}, fmt.Errorf("%w: DurationSeconds %d", ErrInvalidRequest, int(duration.Seconds()))
 	}
+	if c.principal.Kind == authz.Root {
+		// AWS: a root session lasts at most one hour; a longer request
+		// gets one hour.
+		duration = min(duration, RootMaxSessionDuration)
+	}
 	mfa, err := s.verifyMFA(ctx, c, m)
 	if err != nil {
 		return Credentials{}, err
