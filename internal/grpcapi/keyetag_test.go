@@ -10,30 +10,22 @@ import (
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
-	"github.com/popododo0720/vws-iam/internal/grpcapi"
 	"github.com/popododo0720/vws-iam/internal/iam"
-	"github.com/popododo0720/vws-iam/internal/secret"
 	"github.com/popododo0720/vws-iam/internal/store"
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
 )
 
-// etagFixture is an env and, on the same store, a server called directly
-// for the user etag that vws-proto does not carry yet (#139).
+// etagFixture is an env whose gRPC clients send the user_etag of
+// CreateAccessKeyRequest and DeleteAccessKeyRequest (#139) to a server on b.
 type etagFixture struct {
-	e   *env
-	b   store.Backend
-	api *grpcapi.Server
+	e *env
+	b store.Backend
 }
 
 func newEtagFixture(t *testing.T, b store.Backend) etagFixture {
 	t.Helper()
 	now := time.Now().UTC()
-	keys, err := secret.NewKeyring("k1", map[string][]byte{"k1": make([]byte, 32)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	api := grpcapi.New(b, keys, grpcapi.WithClock(func() time.Time { return now }))
-	return etagFixture{e: newEnvOn(t, b, &now), b: b, api: api}
+	return etagFixture{e: newEnvOn(t, b, &now), b: b}
 }
 
 // etag is the user's current etag.
@@ -48,12 +40,12 @@ func (f etagFixture) etag(t *testing.T, user string) string {
 
 func (f etagFixture) create(t *testing.T, user, etag string) (*iamv1.CreateAccessKeyResponse, error) {
 	t.Helper()
-	return f.api.CreateAccessKeyUserEtag(t.Context(), &iamv1.CreateAccessKeyRequest{Parent: user}, etag)
+	return f.e.keys.CreateAccessKey(t.Context(), &iamv1.CreateAccessKeyRequest{Parent: user, UserEtag: etag})
 }
 
 func (f etagFixture) remove(t *testing.T, key, etag string) error {
 	t.Helper()
-	_, err := f.api.DeleteAccessKeyUserEtag(t.Context(), &iamv1.DeleteAccessKeyRequest{Name: key}, etag)
+	_, err := f.e.keys.DeleteAccessKey(t.Context(), &iamv1.DeleteAccessKeyRequest{Name: key, UserEtag: etag})
 	return err
 }
 
@@ -206,5 +198,60 @@ func (e *env) updateUserPath(t *testing.T, user, path string) {
 	})
 	if err != nil {
 		t.Fatalf("UpdateUser %s to %s: %v", user, path, err)
+	}
+}
+
+// TestAccessKeyUserEtagRestartAndReplay sends user_etag over gRPC to a
+// restarted server, on both backends: the etag read before the restart
+// still binds the write, a repeated create (same request_id) is
+// ALREADY_EXISTS without a second key or the secret, and a repeated delete
+// is NOT_FOUND and deletes nothing more.
+func TestAccessKeyUserEtagRestartAndReplay(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		open func() store.Backend
+	}{
+		{"memstore", func() store.Backend { return memstore.New() }},
+		{"kubestore", func() store.Backend { return trappedKube(&trap{}) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := tc.open()
+			f := newEtagFixture(t, b)
+			u := f.e.createUser(t, t.Context(), "dave")
+			read := f.etag(t, u.GetName())
+
+			f = newEtagFixture(t, b) // restart: a new server on the same store
+			req := &iamv1.CreateAccessKeyRequest{Parent: u.GetName(), RequestId: "etag-replay-1", UserEtag: read}
+			created, err := f.e.keys.CreateAccessKey(t.Context(), req)
+			if err != nil {
+				t.Fatalf("create after restart with the etag read before: %v", err)
+			}
+			again, err := f.e.keys.CreateAccessKey(t.Context(), req)
+			wantErr(t, err, codes.AlreadyExists, "ALREADY_EXISTS", "EntityAlreadyExists")
+			if again.GetSecretAccessKey() != "" {
+				t.Fatal("a repeated create returned a secret")
+			}
+			f.keys(t, u.GetName(), 1)
+
+			key := created.GetAccessKey().GetName()
+			etag := f.etag(t, u.GetName())
+			if err := f.remove(t, key, etag); err != nil {
+				t.Fatalf("delete with the current etag: %v", err)
+			}
+			wantErr(t, f.remove(t, key, etag), codes.NotFound, "RESOURCE_NOT_FOUND", "NoSuchEntity")
+			f.keys(t, u.GetName(), 0)
+
+			// A stale etag whose request_id made no key that still exists
+			// stays ABORTED and creates nothing.
+			stale := f.etag(t, u.GetName())
+			f.e.updateUserPath(t, u.GetName(), "/moved/")
+			for _, rid := range []string{"etag-replay-1", "etag-replay-2"} {
+				_, err = f.e.keys.CreateAccessKey(t.Context(), &iamv1.CreateAccessKeyRequest{
+					Parent: u.GetName(), RequestId: rid, UserEtag: stale,
+				})
+				wantErr(t, err, codes.Aborted, "ETAG_MISMATCH", "ConcurrentModification")
+			}
+			f.keys(t, u.GetName(), 0)
+		})
 	}
 }

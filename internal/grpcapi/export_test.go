@@ -26,22 +26,6 @@ func (s *Server) AttemptCounterKeys(scope, id string) []string {
 	return keys
 }
 
-// CreateAccessKeyUserEtag is CreateAccessKey with the user etag that
-// vws-proto does not carry yet (#139).
-func (s *Server) CreateAccessKeyUserEtag(
-	ctx context.Context, req *iamv1.CreateAccessKeyRequest, userEtag string,
-) (*iamv1.CreateAccessKeyResponse, error) {
-	return s.createAccessKey(ctx, req, userEtag)
-}
-
-// DeleteAccessKeyUserEtag is DeleteAccessKey with the user etag that
-// vws-proto does not carry yet (#139).
-func (s *Server) DeleteAccessKeyUserEtag(
-	ctx context.Context, req *iamv1.DeleteAccessKeyRequest, userEtag string,
-) (*longrunningpb.Operation, error) {
-	return s.deleteAccessKey(ctx, req, userEtag)
-}
-
 // UpdateUserRename is UpdateUser with the AWS NewUserName that vws-proto
 // does not carry yet (#134).
 func (s *Server) UpdateUserRename(
@@ -138,9 +122,9 @@ func (s *Server) CreateServiceLinkedRole(
 	return s.createServiceLinkedRole(ctx, project, req)
 }
 
-// ResyncMfaDevice is IAM ResyncMFADevice, which vws-proto does not carry
-// yet (#102).
-func (s *Server) ResyncMfaDevice(ctx context.Context, project string, req ResyncMFADeviceRequest) error {
+// ResyncMFADevice is IAM ResyncMFADevice, which this server does not
+// serve over gRPC yet (#102).
+func (s *Server) ResyncMFADevice(ctx context.Context, project string, req ResyncMFADeviceRequest) error {
 	return s.resyncMfaDevice(ctx, project, req)
 }
 
@@ -150,9 +134,9 @@ func (s *Server) DeleteRolePermissionsBoundary(ctx context.Context, project, rol
 	return s.deleteRolePermissionsBoundary(ctx, project, roleName)
 }
 
-// PutRolePermissionsBoundary is IAM PutRolePermissionsBoundary, which
-// vws-proto does not carry yet (#100).
-func (s *Server) PutRolePermissionsBoundary(ctx context.Context, project, roleName, boundaryARN string) error {
+// PutRoleBoundary is IAM PutRolePermissionsBoundary, which this server
+// does not serve over gRPC yet (#100).
+func (s *Server) PutRoleBoundary(ctx context.Context, project, roleName, boundaryARN string) error {
 	return s.putRolePermissionsBoundary(ctx, project, roleName, boundaryARN)
 }
 

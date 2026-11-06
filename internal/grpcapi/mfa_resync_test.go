@@ -49,16 +49,16 @@ func TestResyncMfaDevice(t *testing.T) {
 			ctx := t.Context()
 			seed, serial := resyncDevice(t, e, "alice")
 			req := resyncReq("alice", serial, seed, now, 11)
-			if err := e.api.ResyncMfaDevice(ctx, proj, req); err != nil {
+			if err := e.api.ResyncMFADevice(ctx, proj, req); err != nil {
 				t.Fatal(err)
 			}
 			d, err := store.Get[iam.MfaDevice](ctx, store.Scoped(b, proj), "alice-phone")
 			if err != nil || d.Object.Drift != 12 {
 				t.Fatalf("device %+v %v, want drift 12", d.Object, err)
 			}
-			err = newEnvOn(t, b, &now).api.ResyncMfaDevice(ctx, proj, req)
+			err = newEnvOn(t, b, &now).api.ResyncMFADevice(ctx, proj, req)
 			wantAWS(t, err, codes.Unauthenticated, "InvalidAuthenticationCode")
-			err = e.api.ResyncMfaDevice(ctx, proj, resyncReq("alice", serial, seed, now, 40))
+			err = e.api.ResyncMFADevice(ctx, proj, resyncReq("alice", serial, seed, now, 40))
 			wantAWS(t, err, codes.Unauthenticated, "InvalidAuthenticationCode")
 		})
 	}
@@ -82,7 +82,7 @@ func TestResyncMfaDeviceNoSuchEntity(t *testing.T) {
 		{"not an mfa arn", "alice", "arn:vws:iam::" + proj + ":user/alice"},
 		{"hardware serial", "alice", "GAHT12345678"},
 	} {
-		err := e.api.ResyncMfaDevice(ctx, proj, resyncReq(tc.user, tc.serial, seed, now, 0))
+		err := e.api.ResyncMFADevice(ctx, proj, resyncReq(tc.user, tc.serial, seed, now, 0))
 		wantAWS(t, err, codes.NotFound, "NoSuchEntity")
 	}
 	d, err := store.Get[iam.MfaDevice](ctx, store.Scoped(b, proj), "alice-phone")
@@ -122,14 +122,14 @@ func TestResyncMfaDeviceValidation(t *testing.T) {
 	} {
 		r := ok
 		tc.edit(&r)
-		err := e.api.ResyncMfaDevice(ctx, proj, r)
+		err := e.api.ResyncMFADevice(ctx, proj, r)
 		wantAWS(t, err, codes.InvalidArgument, "ValidationError")
 		leaks := func(c string) bool { return c != "" && strings.Contains(err.Error(), c) }
 		if leaks(r.AuthenticationCode1) || leaks(r.AuthenticationCode2) {
 			t.Errorf("%s: message %q carries a code", tc.name, err)
 		}
 	}
-	err := e.api.ResyncMfaDevice(ctx, "Not A Project", ok)
+	err := e.api.ResyncMFADevice(ctx, "Not A Project", ok)
 	wantAWS(t, err, codes.InvalidArgument, "ValidationError")
 	// Boundaries that pass validation reach the store (NoSuchEntity).
 	for _, us := range [][2]string{
@@ -139,7 +139,7 @@ func TestResyncMfaDeviceValidation(t *testing.T) {
 	} {
 		r := ok
 		r.UserName, r.SerialNumber = us[0], us[1]
-		wantAWS(t, e.api.ResyncMfaDevice(ctx, proj, r), codes.NotFound, "NoSuchEntity")
+		wantAWS(t, e.api.ResyncMFADevice(ctx, proj, r), codes.NotFound, "NoSuchEntity")
 	}
 	s := grpcapi.ResyncMFADeviceRequest{AuthenticationCode1: "246810", AuthenticationCode2: "135791"}.String()
 	if strings.Contains(s, "246810") || strings.Contains(s, "135791") {
@@ -159,9 +159,9 @@ func TestResyncMfaDeviceLockout(t *testing.T) {
 		UserName: "alice", SerialNumber: serial, AuthenticationCode1: "000000", AuthenticationCode2: "000000",
 	}
 	for range 4 {
-		wantAWS(t, e.api.ResyncMfaDevice(ctx, proj, bad), codes.Unauthenticated, "InvalidAuthenticationCode")
+		wantAWS(t, e.api.ResyncMFADevice(ctx, proj, bad), codes.Unauthenticated, "InvalidAuthenticationCode")
 	}
-	wantAWS(t, e.api.ResyncMfaDevice(ctx, proj, bad), codes.PermissionDenied, "AccessDenied")
-	err := e.api.ResyncMfaDevice(ctx, proj, resyncReq("alice", serial, seed, now, 2))
+	wantAWS(t, e.api.ResyncMFADevice(ctx, proj, bad), codes.PermissionDenied, "AccessDenied")
+	err := e.api.ResyncMFADevice(ctx, proj, resyncReq("alice", serial, seed, now, 2))
 	wantAWS(t, err, codes.PermissionDenied, "AccessDenied")
 }

@@ -81,8 +81,8 @@ func (s *Server) deleteRolePermissionsBoundary(ctx context.Context, pid, roleNam
 // Authorization (iam:PutRolePermissionsBoundary) is console-api's, as for
 // UpdateRole.
 //
-// TODO(#100): serve this as RoleService.PutRolePermissionsBoundary once
-// vws-proto carries the RPC (popododo0720/vws-proto#115).
+// TODO(#100): serve this as RoleService.PutRolePermissionsBoundary, which
+// vws-proto v0.9.0 carries and unserved.go answers UNIMPLEMENTED.
 func (s *Server) putRolePermissionsBoundary(ctx context.Context, pid, roleName, boundaryARN string) error {
 	if !iam.ValidProject(pid) {
 		return invalidID("project " + quote(pid) + " is not a project id")

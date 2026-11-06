@@ -5,6 +5,8 @@ import (
 	"errors"
 	"unicode/utf8"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -395,11 +397,22 @@ func checkPassword(pw string) error {
 }
 
 // SetLoginProfile sets the console password (argon2id at rest). Not an
-// operation, so the password never reaches an operation record.
+// operation, so the password never reaches an operation record. Only the
+// upsert mode is served; CREATE_ONLY and MUST_EXIST are UNIMPLEMENTED and
+// write nothing, never an upsert (TODO(#326)).
 func (s *Server) SetLoginProfile(ctx context.Context, req *iamv1.SetLoginProfileRequest) (*iamv1.SetLoginProfileResponse, error) {
 	pid, id, err := child(req.GetName(), "users")
 	if err != nil {
 		return nil, err
+	}
+	switch m := req.GetMode(); m {
+	case iamv1.LoginProfileWriteMode_LOGIN_PROFILE_WRITE_MODE_UNSPECIFIED,
+		iamv1.LoginProfileWriteMode_LOGIN_PROFILE_WRITE_MODE_UPSERT:
+	case iamv1.LoginProfileWriteMode_LOGIN_PROFILE_WRITE_MODE_CREATE_ONLY,
+		iamv1.LoginProfileWriteMode_LOGIN_PROFILE_WRITE_MODE_MUST_EXIST:
+		return nil, status.Error(codes.Unimplemented, "mode "+m.String()+" is not served yet")
+	default:
+		return nil, invalidSpec("mode must be a LoginProfileWriteMode")
 	}
 	if err := checkPassword(req.GetPassword()); err != nil {
 		return nil, err

@@ -74,7 +74,7 @@ func TestMFALockedNeverReachesTheWire(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			wantLockedOnWire(t, restarted.api.ResyncMfaDevice(ctx, proj, resyncReq("alice", serial, raw, now, 2)), "alice-phone")
+			wantLockedOnWire(t, restarted.api.ResyncMFADevice(ctx, proj, resyncReq("alice", serial, raw, now, 2)), "alice-phone")
 
 			// Enable of a new device locked by wrong pairs.
 			e.createUser(t, ctx, "bob")

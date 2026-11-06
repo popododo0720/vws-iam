@@ -49,13 +49,24 @@ func requestRepeated(id string) error {
 // A non-empty userEtag is the user version the caller read (#139). A user
 // at another version is ABORTED before any write, and the key is activated
 // only while the user is still at userEtag, so a change of the user that
-// lands before the activation commits makes the create ABORTED too.
+// lands before the activation commits makes the create ABORTED too. A
+// mismatch whose requestID already created a key is ALREADY_EXISTS, as
+// without an etag: a kubestore fence moves the user's version when a create
+// commits, so a retry after a lost response would otherwise be ABORTED on
+// kubestore and ALREADY_EXISTS on memstore. It writes nothing either way.
 func (p project) createKey(ctx context.Context, user, requestID, userEtag string) (accesskey.Credential, error) {
 	sweepFailures := 0
 	for attempt := 0; ; attempt++ {
 		var userPre *store.Pre
 		if userEtag != "" {
 			pre, err := p.userAt(ctx, user, userEtag)
+			if errors.Is(err, errUserEtagMismatch) && requestID != "" {
+				if id, ok, lerr := p.keys.ByRequestID(ctx, user, requestID); lerr != nil {
+					return accesskey.Credential{}, lerr
+				} else if ok {
+					return accesskey.Credential{}, requestRepeated(id)
+				}
+			}
 			if err != nil {
 				return accesskey.Credential{}, err
 			}
@@ -172,11 +183,10 @@ func (p project) createKeyLocked(
 	return accesskey.Credential{}, err
 }
 
-// userEtagMismatch is a user_etag that is not the user's current version.
-func userEtagMismatch() error {
-	return fail(codes.Aborted, "ETAG_MISMATCH", "ConcurrentModification",
-		"the access key's parent user changed since user_etag was read")
-}
+// errUserEtagMismatch is a user_etag that is not the user's current
+// version.
+var errUserEtagMismatch = fail(codes.Aborted, "ETAG_MISMATCH", "ConcurrentModification",
+	"the access key's parent user changed since user_etag was read")
 
 // userAt returns the precondition that user is at version etag, or
 // userEtagMismatch if it is not.
@@ -189,7 +199,7 @@ func (p project) userAt(ctx context.Context, user, etag string) (store.Pre, erro
 		return store.Pre{}, fmt.Errorf("read user: %w", err)
 	}
 	if u.Version != etag {
-		return store.Pre{}, userEtagMismatch()
+		return store.Pre{}, errUserEtagMismatch
 	}
 	return store.PreOf(u), nil
 }

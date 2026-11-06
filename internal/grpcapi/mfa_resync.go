@@ -59,8 +59,8 @@ func checkResyncRequest(req ResyncMFADeviceRequest) error {
 // to concurrent writes is ConcurrentModification. Authorization
 // (iam:ResyncMFADevice) is console-api's, as for EnableMFADevice.
 //
-// TODO(#102): serve this as MfaDeviceService.ResyncMfaDevice once
-// vws-proto carries the RPC (popododo0720/vws-proto#113).
+// TODO(#102): serve this as MfaDeviceService.ResyncMfaDevice, which
+// vws-proto v0.9.0 carries and unserved.go answers UNIMPLEMENTED.
 func (s *Server) resyncMfaDevice(ctx context.Context, pid string, req ResyncMFADeviceRequest) error {
 	if !iam.ValidProject(pid) {
 		return invalidID("project " + quote(pid) + " is not a project id")

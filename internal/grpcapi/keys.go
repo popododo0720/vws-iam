@@ -114,7 +114,7 @@ func (g keyGuard) check(ctx context.Context, b store.Backend, k iam.AccessKey) (
 	case errors.Is(err, store.ErrNotFound) && g.arn != "":
 		return pre, false, userMismatch("expected_user_arn")
 	case errors.Is(err, store.ErrNotFound):
-		return pre, false, userEtagMismatch()
+		return pre, false, errUserEtagMismatch
 	case err != nil:
 		return pre, false, err
 	}
@@ -124,7 +124,7 @@ func (g keyGuard) check(ctx context.Context, b store.Backend, k iam.AccessKey) (
 		return pre, false, userMismatch("expected_user_arn")
 	}
 	if g.userEtag != "" && u.Version != g.userEtag {
-		return pre, false, userEtagMismatch()
+		return pre, false, errUserEtagMismatch
 	}
 	return store.PreOf(u), true, nil
 }
@@ -247,18 +247,11 @@ func (s *Server) ListAccessKeys(ctx context.Context, req *iamv1.ListAccessKeysRe
 // A request_id is stored with the key it creates; while that key exists, a
 // repeat for the same user is ALREADY_EXISTS naming the key, without the
 // secret (vws-proto: after a lost response, delete the key and create
-// another). An empty request_id makes every call a new key.
+// another). An empty request_id makes every call a new key. A user_etag
+// (#139), when set, creates the key only while the parent user is at that
+// version, else ABORTED and no key is created.
 func (s *Server) CreateAccessKey(ctx context.Context, req *iamv1.CreateAccessKeyRequest) (*iamv1.CreateAccessKeyResponse, error) {
-	// TODO(#139): pass req.GetUserEtag() once vws-proto has the field.
-	return s.createAccessKey(ctx, req, "")
-}
-
-// createAccessKey is CreateAccessKey with the optional user etag (#139):
-// when not empty, the key is created only while the parent user is at
-// that version, else ABORTED and no key is created.
-func (s *Server) createAccessKey(
-	ctx context.Context, req *iamv1.CreateAccessKeyRequest, userEtag string,
-) (*iamv1.CreateAccessKeyResponse, error) {
+	userEtag := req.GetUserEtag()
 	pid, user, err := child(req.GetParent(), "users")
 	if err != nil {
 		return nil, err
@@ -351,18 +344,11 @@ func (s *Server) UpdateAccessKey(ctx context.Context, req *iamv1.UpdateAccessKey
 	return op, toStatus(ctx, err)
 }
 
-// DeleteAccessKey deletes a key and its index entry.
+// DeleteAccessKey deletes a key and its index entry. A user_etag (#139),
+// when set, deletes the key only while the parent user is at that version,
+// else ABORTED and the key stays.
 func (s *Server) DeleteAccessKey(ctx context.Context, req *iamv1.DeleteAccessKeyRequest) (*longrunningpb.Operation, error) {
-	// TODO(#139): pass req.GetUserEtag() once vws-proto has the field.
-	return s.deleteAccessKey(ctx, req, "")
-}
-
-// deleteAccessKey is DeleteAccessKey with the optional user etag (#139):
-// when not empty, the key is deleted only while the parent user is at that
-// version, else ABORTED and the key stays.
-func (s *Server) deleteAccessKey(
-	ctx context.Context, req *iamv1.DeleteAccessKeyRequest, userEtag string,
-) (*longrunningpb.Operation, error) {
+	userEtag := req.GetUserEtag()
 	pid, user, id, err := keyRef(req.GetName())
 	if err != nil {
 		return nil, err
