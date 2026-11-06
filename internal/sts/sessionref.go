@@ -122,7 +122,9 @@ func (s *Service) MintSessionRef(accessKeyID, token string) (string, error) {
 // session, and a principal that no longer exists are refusals
 // (ErrInvalidToken, ErrExpired); a store failure is returned as an error.
 // It only reads, so checking a reference twice gives the same answer.
-func (s *Service) CheckSessionRef(ctx context.Context, ref string) (SessionRef, error) {
+func (s *Service) CheckSessionRef(ctx context.Context, ref string) (_ SessionRef, err error) {
+	ctx, end := start(ctx, "CheckSessionRef")
+	defer end(&err)
 	p, err := s.openRef(ref)
 	if err != nil {
 		return SessionRef{}, err

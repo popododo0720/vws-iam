@@ -151,7 +151,9 @@ func (r SAMLRoleSession) String() string {
 // sts:AssumeRoleWithSAML (and sts:SetSourceIdentity with a SourceIdentity
 // attribute) for the provider with the SAML:* keys of the assertion,
 // including its mapped attributes (samlContextAttrs). Session policies narrow the session. Nothing is stored.
-func (s *Service) AssumeRoleWithSAML(ctx context.Context, req SAMLRequest) (SAMLRoleSession, error) {
+func (s *Service) AssumeRoleWithSAML(ctx context.Context, req SAMLRequest) (_ SAMLRoleSession, err error) {
+	ctx, end := start(ctx, "AssumeRoleWithSAML")
+	defer end(&err)
 	packed, err := validateSAMLRequest(req)
 	if err != nil {
 		return SAMLRoleSession{}, err

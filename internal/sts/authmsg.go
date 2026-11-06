@@ -172,7 +172,9 @@ func (s *Service) seal(env envelope) (string, error) {
 // valid. It only reads, so a repeat returns the same JSON.
 func (s *Service) DecodeAuthorizationMessage(
 	ctx context.Context, c Caller, reqCtx map[string][]string, encoded string,
-) (string, error) {
+) (_ string, err error) {
+	ctx, end := start(ctx, "DecodeAuthorizationMessage")
+	defer end(&err)
 	if c.principalID == "" {
 		return "", fmt.Errorf("%w: unresolved caller", ErrAccessDenied)
 	}

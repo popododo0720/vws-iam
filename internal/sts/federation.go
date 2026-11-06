@@ -83,7 +83,9 @@ type FederationRequest struct {
 // plaintext.
 func (s *Service) GetFederationToken(
 	ctx context.Context, c Caller, reqCtx map[string][]string, req FederationRequest,
-) (FederationToken, error) {
+) (_ FederationToken, err error) {
+	ctx, end := start(ctx, "GetFederationToken")
+	defer end(&err)
 	if c.principalID == "" {
 		return FederationToken{}, fmt.Errorf("%w: unresolved caller", ErrAccessDenied)
 	}

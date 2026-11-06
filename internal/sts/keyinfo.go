@@ -47,7 +47,9 @@ func WithKeyIndex(index store.Backend) Option { return func(s *Service) { s.inde
 // for now (popododo0720/vws-iam#188).
 func (s *Service) GetAccessKeyInfo(
 	ctx context.Context, c Caller, reqCtx map[string][]string, accessKeyID string,
-) (string, error) {
+) (_ string, err error) {
+	ctx, end := start(ctx, "GetAccessKeyInfo")
+	defer end(&err)
 	if c.principalID == "" {
 		return "", fmt.Errorf("%w: unresolved caller", ErrAccessDenied)
 	}
