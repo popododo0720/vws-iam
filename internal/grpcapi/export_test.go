@@ -10,14 +10,20 @@ import (
 	"github.com/popododo0720/vws-iam/internal/sts"
 )
 
-// AttemptCounterHash is the store key of the attempt counter of scope
-// (iam.AttemptUser, Key, IP) and id, for tests that seed a counter: a
-// user's "project/name", an access key id, or a source IP as given.
-func AttemptCounterHash(scope, id string) string {
-	if j, ok := ipSubject(id); ok && scope == j.scope {
-		return j.hash()
+// AttemptCounterKeys are the store keys, one per KEK, of the attempt
+// counter of scope (iam.AttemptUser, Key, IP) and id, for tests that seed
+// a counter: a user's "project/name", an access key id, or a source IP as
+// given.
+func (s *Server) AttemptCounterKeys(scope, id string) []string {
+	j := subject{scope, id}
+	if ip, ok := ipSubject(id); ok && scope == ip.scope {
+		j = ip
 	}
-	return subject{scope, id}.hash()
+	var keys []string
+	for _, c := range s.counters(callers{j}) {
+		keys = append(keys, c.key)
+	}
+	return keys
 }
 
 // CreateAccessKeyUserEtag is CreateAccessKey with the user etag that

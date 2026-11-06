@@ -56,7 +56,7 @@ type Server struct {
 	// marked throttles MarkUsed writes: access key id -> last write time.
 	marked sync.Map
 	// stsSeen is a per-replica fast front of the shared replay store
-	// (replay.go): replay hash -> time after which it can be forgotten.
+	// (replay.go): replay key -> time after which it can be forgotten.
 	// It only ever rejects, so it is safe to be stale or empty.
 	stsSeen sync.Map
 	// gcPage is the GC list page size (gcPageSize; tests lower it).

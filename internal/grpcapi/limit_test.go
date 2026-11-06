@@ -226,9 +226,11 @@ func testAttemptLimits(t *testing.T, backend func(*testing.T) store.Backend) {
 		const busyIP, otherIP = "198.51.100.60", "198.51.100.61"
 		seed := func(scope, id string, failures int) {
 			t.Helper()
-			c := iam.AttemptCounter{Hash: grpcapi.AttemptCounterHash(scope, id), Scope: scope, Failures: failures, WindowStart: now}
-			if _, err := store.Create(ctx, b, c); err != nil {
-				t.Fatal(err)
+			for _, k := range a.api.AttemptCounterKeys(scope, id) {
+				c := iam.AttemptCounter{Hash: k, Scope: scope, Failures: failures, WindowStart: now}
+				if _, err := store.Create(ctx, b, c); err != nil {
+					t.Fatal(err)
+				}
 			}
 		}
 		type caller struct {

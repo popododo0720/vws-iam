@@ -206,18 +206,19 @@ func testSTSLockRenewal(t *testing.T, backend func(*testing.T) store.Backend) {
 	}
 	// tripUser puts alice's user counter at its limit in a fresh window,
 	// as wrong passwords from anyone who knows the name would.
-	userHash := grpcapi.AttemptCounterHash(iam.AttemptUser, proj+"/alice")
 	tripUser := func() {
 		t.Helper()
-		c := iam.AttemptCounter{Hash: userHash, Scope: iam.AttemptUser, Failures: grpcapi.UserAttemptLimit, WindowStart: now}
-		if _, err := store.Create(ctx, b, c); err == nil {
-			return
-		}
-		if _, err := store.Mutate(ctx, b, userHash, func(x *iam.AttemptCounter) error {
-			*x = c
-			return nil
-		}); err != nil {
-			t.Fatal(err)
+		for _, k := range a.api.AttemptCounterKeys(iam.AttemptUser, proj+"/alice") {
+			c := iam.AttemptCounter{Hash: k, Scope: iam.AttemptUser, Failures: grpcapi.UserAttemptLimit, WindowStart: now}
+			if _, err := store.Create(ctx, b, c); err == nil {
+				continue
+			}
+			if _, err := store.Mutate(ctx, b, k, func(x *iam.AttemptCounter) error {
+				*x = c
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 
