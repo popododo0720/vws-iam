@@ -56,7 +56,7 @@ func TestPutRolePermissionsBoundary(t *testing.T) {
 			seedPlainRole(t, e, "Bounded")
 			before := storedRole(t, b, "Bounded").Object
 
-			if err := e.api.PutRolePermissionsBoundary(t.Context(), proj, "bounded", first); err != nil {
+			if err := e.api.PutRoleBoundary(t.Context(), proj, "bounded", first); err != nil {
 				t.Fatal(err)
 			}
 			got := storedRole(t, b, "Bounded")
@@ -70,7 +70,7 @@ func TestPutRolePermissionsBoundary(t *testing.T) {
 				t.Fatalf("Generation = %d, want %d", got.Object.Generation, before.Generation+1)
 			}
 
-			if err := e.api.PutRolePermissionsBoundary(t.Context(), proj, "Bounded", second); err != nil {
+			if err := e.api.PutRoleBoundary(t.Context(), proj, "Bounded", second); err != nil {
 				t.Fatal(err)
 			}
 			replaced := storedRole(t, b, "Bounded")
@@ -79,7 +79,7 @@ func TestPutRolePermissionsBoundary(t *testing.T) {
 					replaced.Object.PermissionsBoundary, replaced.Object.Generation, second, before.Generation+2)
 			}
 
-			if err := newEnvOn(t, b, &now).api.PutRolePermissionsBoundary(t.Context(), proj, "Bounded", second); err != nil {
+			if err := newEnvOn(t, b, &now).api.PutRoleBoundary(t.Context(), proj, "Bounded", second); err != nil {
 				t.Fatalf("repeat on another replica: %v", err)
 			}
 			if again := storedRole(t, b, "Bounded"); again.Version != replaced.Version {
@@ -103,7 +103,7 @@ func TestPutRolePermissionsBoundaryErrors(t *testing.T) {
 	seedPlainRole(t, e, "plain")
 	before := storedRole(t, b, "plain")
 
-	wantAWS(t, e.api.PutRolePermissionsBoundary(ctx, proj, "missing", pol), codes.NotFound, "NoSuchEntity")
+	wantAWS(t, e.api.PutRoleBoundary(ctx, proj, "missing", pol), codes.NotFound, "NoSuchEntity")
 	for _, a := range []string{
 		"arn:vws:iam::" + proj + ":policy/team/Nope",                   // no such policy
 		"arn:vws:iam::" + proj + ":policy/Boundary",                    // wrong path
@@ -112,20 +112,20 @@ func TestPutRolePermissionsBoundaryErrors(t *testing.T) {
 		"arn:vws:iam::aws:policy/AdministratorAccess",                  // no AWS managed policies
 		"arn:vws:iam::" + proj + ":policy/" + strings.Repeat("p", 129), // not a policy name
 	} {
-		wantAWS(t, e.api.PutRolePermissionsBoundary(ctx, proj, "plain", a), codes.NotFound, "NoSuchEntity")
+		wantAWS(t, e.api.PutRoleBoundary(ctx, proj, "plain", a), codes.NotFound, "NoSuchEntity")
 	}
 
 	slr := seedLinkedRole(t, b, "linked")
-	wantAWS(t, e.api.PutRolePermissionsBoundary(ctx, proj, slr.Name, pol), codes.FailedPrecondition, "UnmodifiableEntity")
+	wantAWS(t, e.api.PutRoleBoundary(ctx, proj, slr.Name, pol), codes.FailedPrecondition, "UnmodifiableEntity")
 	if got := storedRole(t, b, slr.Name); got.Object.PermissionsBoundary != "" {
 		t.Fatalf("service-linked boundary = %q, want none", got.Object.PermissionsBoundary)
 	}
 
 	for _, n := range []string{"", strings.Repeat("r", 65), "a/b", "a b", "rôle"} {
-		wantAWS(t, e.api.PutRolePermissionsBoundary(ctx, proj, n, pol), codes.InvalidArgument, "ValidationError")
+		wantAWS(t, e.api.PutRoleBoundary(ctx, proj, n, pol), codes.InvalidArgument, "ValidationError")
 	}
 	for _, a := range []string{"", "arn:vws:iam::p:pol", "arn:vws:iam::" + proj + ":policy/" + strings.Repeat("p", 2049)} {
-		wantAWS(t, e.api.PutRolePermissionsBoundary(ctx, proj, "plain", a), codes.InvalidArgument, "ValidationError")
+		wantAWS(t, e.api.PutRoleBoundary(ctx, proj, "plain", a), codes.InvalidArgument, "ValidationError")
 	}
 	for _, a := range []string{
 		"arn:aws:iam::" + proj + ":policy/team/Boundary",
@@ -134,9 +134,9 @@ func TestPutRolePermissionsBoundaryErrors(t *testing.T) {
 		"arn:vws:iam:::policy/team/Boundary",
 		"not-an-arn-at-all-but-long",
 	} {
-		wantAWS(t, e.api.PutRolePermissionsBoundary(ctx, proj, "plain", a), codes.InvalidArgument, "InvalidInput")
+		wantAWS(t, e.api.PutRoleBoundary(ctx, proj, "plain", a), codes.InvalidArgument, "InvalidInput")
 	}
-	err := e.api.PutRolePermissionsBoundary(ctx, "Bad_Project", "plain", pol)
+	err := e.api.PutRoleBoundary(ctx, "Bad_Project", "plain", pol)
 	wantAWS(t, err, codes.InvalidArgument, "ValidationError")
 
 	if got := storedRole(t, b, "plain"); got.Version != before.Version || got.Object.PermissionsBoundary != "" {
@@ -160,7 +160,7 @@ func TestPutRolePermissionsBoundaryConcurrent(t *testing.T) {
 			errs := make([]error, 16)
 			for i := range errs {
 				wg.Go(func() {
-					errs[i] = replicas[i%2].api.PutRolePermissionsBoundary(t.Context(), proj, "racer", pol)
+					errs[i] = replicas[i%2].api.PutRoleBoundary(t.Context(), proj, "racer", pol)
 				})
 			}
 			wg.Wait()
@@ -213,7 +213,7 @@ func TestPutRolePermissionsBoundaryStaleRead(t *testing.T) {
 			pol := seedBoundaryPolicy(t, seed, "Boundary", "")
 			seedPlainRole(t, seed, "stale")
 			b := &describing{Backend: inner, t: t}
-			if err := newEnvOn(t, b, &now).api.PutRolePermissionsBoundary(t.Context(), proj, "stale", pol); err != nil {
+			if err := newEnvOn(t, b, &now).api.PutRoleBoundary(t.Context(), proj, "stale", pol); err != nil {
 				t.Fatal(err)
 			}
 			got := storedRole(t, inner, "stale").Object
