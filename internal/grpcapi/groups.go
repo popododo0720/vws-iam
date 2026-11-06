@@ -137,7 +137,7 @@ func (s *Server) CreateGroup(ctx context.Context, req *iamv1.CreateGroupRequest)
 			v, err = create(ctx, p.b, g, req.GetRequestId(), true)
 		}
 	} else {
-		v, err = p.createGroup(ctx, g, req.GetRequestId())
+		v, err = p.createGroup(ctx, g, req.GetRequestId(), once{})
 	}
 	if err != nil {
 		return nil, toStatus(ctx, err)
@@ -198,12 +198,20 @@ func (s *Server) updateGroup(
 	}
 	var v store.Versioned[iam.Group]
 	if req.GetValidateOnly() {
-		v, err = mutateOrValidate(ctx, p.b, id, req.GetGroup().GetEtag(), true, req.GetAllowMissing(), bumpGroup, apply, mk)
+		v, err = mutateOrValidate(
+			ctx, p.b, id, req.GetGroup().GetEtag(), once{}, true, req.GetAllowMissing(), bumpGroup, apply, mk)
 		if err == nil {
 			err = p.checkGroupsPerUser(ctx, id, addedMembers(prev, v.Object.Members))
 		}
 	} else {
-		v, err = p.updateGroup(ctx, id, req.GetGroup().GetEtag(), req.GetRequestId(), req.GetAllowMissing(), apply, mk)
+		o := newOnce(pid, "UpdateGroup", req.GetRequestId(), req)
+		v, err = p.updateGroup(ctx, id, req.GetGroup().GetEtag(), req.GetRequestId(), o, req.GetAllowMissing(), apply, mk)
+	}
+	if errors.Is(err, errApplied) {
+		if op, err := s.applied(ctx, pid, "UpdateGroup", req.GetRequestId(), req); op != nil || err != nil {
+			return op, toStatus(ctx, err)
+		}
+		err = nil
 	}
 	if err != nil {
 		return nil, toStatus(ctx, err)

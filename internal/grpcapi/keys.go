@@ -132,31 +132,48 @@ func (g keyGuard) check(ctx context.Context, b store.Backend, k iam.AccessKey) (
 // updateKeyIf is update for an access key write under a fenced keyGuard:
 // the user check and the key write commit together through store.UpdateIf.
 // A lost race is not retried: the caller authorized against the ARN it
-// sent, so a concurrent change of the user is ConcurrentModification.
+// sent, so a concurrent change of the user is ConcurrentModification. The
+// one exception is a request with a request_id whose user still passes the
+// guard: racing duplicates of it fence each other, so it reads again, up
+// to 8 times, to find the duplicate that committed.
 func updateKeyIf(
-	ctx context.Context, b store.Backend, id, etag string, g keyGuard, fn func(*iam.AccessKey) error,
+	ctx context.Context, b store.Backend, id, etag string, o once, g keyGuard, fn func(*iam.AccessKey) error,
 ) (store.Versioned[iam.AccessKey], error) {
-	cur, err := store.Get[iam.AccessKey](ctx, b, id)
-	if err != nil {
-		return cur, err
+	var conflict error
+	for attempt := 0; ; attempt++ {
+		cur, err := store.Get[iam.AccessKey](ctx, b, id)
+		if err != nil {
+			return cur, err
+		}
+		if err := o.check(cur.Object.Meta); err != nil {
+			return cur, err
+		}
+		if err := checkEtag(etag, cur.Version); err != nil {
+			return cur, err
+		}
+		pre, _, err := g.check(ctx, b, cur.Object)
+		if conflict != nil && err != nil {
+			return cur, conflict
+		}
+		if err != nil {
+			return cur, err
+		}
+		if err := fn(&cur.Object); err != nil {
+			return cur, err
+		}
+		cur.Object.Generation++
+		o.record(&cur.Object.Meta)
+		v, err := store.UpdateIf(ctx, b, cur.Object, cur.Version, pre)
+		if errors.Is(err, store.ErrConflict) && o.op != "" && attempt < 8 {
+			conflict = err
+			continue
+		}
+		if err != nil {
+			return cur, err
+		}
+		cur.Version = v
+		return cur, nil
 	}
-	if err := checkEtag(etag, cur.Version); err != nil {
-		return cur, err
-	}
-	pre, _, err := g.check(ctx, b, cur.Object)
-	if err != nil {
-		return cur, err
-	}
-	if err := fn(&cur.Object); err != nil {
-		return cur, err
-	}
-	cur.Object.Generation++
-	v, err := store.UpdateIf(ctx, b, cur.Object, cur.Version, pre)
-	if err != nil {
-		return cur, err
-	}
-	cur.Version = v
-	return cur, nil
 }
 
 func keyState(st iam.KeyStatus) iamv1.AccessKeyState {
@@ -307,17 +324,24 @@ func (s *Server) UpdateAccessKey(ctx context.Context, req *iamv1.UpdateAccessKey
 		return nil
 	}
 	etag := req.GetAccessKey().GetEtag()
+	o := newOnce(pid, "UpdateAccessKey", req.GetRequestId(), req)
 	var v store.Versioned[iam.AccessKey]
 	if g.fenced() && !req.GetValidateOnly() {
-		v, err = updateKeyIf(ctx, p.b, id, etag, g, apply)
+		v, err = updateKeyIf(ctx, p.b, id, etag, o, g, apply)
 	} else {
 		bump := func(k *iam.AccessKey) { k.Generation++ }
-		v, err = mutateOrValidate(ctx, p.b, id, etag, req.GetValidateOnly(), false, bump, func(k *iam.AccessKey) error {
+		v, err = mutateOrValidate(ctx, p.b, id, etag, o, req.GetValidateOnly(), false, bump, func(k *iam.AccessKey) error {
 			if _, _, err := g.check(ctx, p.b, *k); err != nil {
 				return err
 			}
 			return apply(k)
 		}, nil)
+	}
+	if errors.Is(err, errApplied) {
+		if op, err := s.applied(ctx, pid, "UpdateAccessKey", req.GetRequestId(), req); op != nil || err != nil {
+			return op, toStatus(ctx, err)
+		}
+		err = nil
 	}
 	if err != nil {
 		return nil, toStatus(ctx, err)

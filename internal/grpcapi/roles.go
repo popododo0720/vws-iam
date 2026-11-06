@@ -2,6 +2,7 @@ package grpcapi
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"cloud.google.com/go/longrunning/autogen/longrunningpb"
@@ -160,13 +161,22 @@ func (s *Server) UpdateRole(ctx context.Context, req *iamv1.UpdateRoleRequest) (
 		g.Updated = s.now().UTC()
 		return g.Validate()
 	}
-	v, err := mutateOrValidate(ctx, p.b, id, req.GetRole().GetEtag(), req.GetValidateOnly(), req.GetAllowMissing(), bumpRole, apply, func() (iam.Role, error) {
+	o := newOnce(pid, "UpdateRole", req.GetRequestId(), req)
+	etag := req.GetRole().GetEtag()
+	validate, allowMissing := req.GetValidateOnly(), req.GetAllowMissing()
+	v, err := mutateOrValidate(ctx, p.b, id, etag, o, validate, allowMissing, bumpRole, apply, func() (iam.Role, error) {
 		g := iam.Role{Meta: iam.Meta{UID: iam.NewUID()}, Name: id, ID: iam.NewUniqueID("AROA"), Created: s.now().UTC()}
 		if err := checkID(id, "role"); err != nil {
 			return g, err
 		}
 		return g, apply(&g)
 	})
+	if errors.Is(err, errApplied) {
+		if op, err := s.applied(ctx, pid, "UpdateRole", req.GetRequestId(), req); op != nil || err != nil {
+			return op, toStatus(ctx, err)
+		}
+		err = nil
+	}
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}

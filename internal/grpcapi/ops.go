@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"cloud.google.com/go/longrunning/autogen/longrunningpb"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -56,7 +55,7 @@ func (s *Server) replay(ctx context.Context, project, method, requestID string, 
 		return nil, err
 	}
 	if rec.Object.Fingerprint != fingerprint(req) {
-		return nil, fail(codes.Aborted, "IDEMPOTENCY_CONFLICT", "IdempotentParameterMismatch", "request_id was used with a different request")
+		return nil, idempotencyConflict()
 	}
 	op := &longrunningpb.Operation{}
 	if err := proto.Unmarshal(rec.Object.Response, op); err != nil {
@@ -96,7 +95,15 @@ func (s *Server) done(ctx context.Context, a opArgs) (*longrunningpb.Operation, 
 		return nil, fmt.Errorf("operation: %w", err)
 	}
 	rec := iam.Operation{ID: id, Project: a.project, RequestID: a.requestID, Fingerprint: fingerprint(a.req), Response: b, Created: s.now().UTC()}
-	if _, err := store.Create(ctx, s.b, rec); err != nil && !errors.Is(err, store.ErrExists) {
+	_, err = store.Create(ctx, s.b, rec)
+	if errors.Is(err, store.ErrExists) {
+		// A duplicate of this request recorded first: answer as it did.
+		if prev, err := s.replay(ctx, a.project, a.method, a.requestID, a.req); prev != nil || err != nil {
+			return prev, err
+		}
+		return op, nil
+	}
+	if err != nil {
 		return nil, err
 	}
 	return op, nil

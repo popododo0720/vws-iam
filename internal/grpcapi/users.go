@@ -240,13 +240,21 @@ func (s *Server) updateUser(
 			err = apply(&v.Object)
 		}
 	} else {
-		v, _, err = update(ctx, p.b, id, req.GetUser().GetEtag(), req.GetAllowMissing(), bumpUser, apply, func() (iam.User, error) {
+		o := newOnce(pid, "UpdateUser", req.GetRequestId(), req)
+		etag := req.GetUser().GetEtag()
+		v, _, err = update(ctx, p.b, id, etag, o, req.GetAllowMissing(), bumpUser, apply, func() (iam.User, error) {
 			u := iam.User{Meta: iam.Meta{UID: iam.NewUID(), Generation: 1}, Name: id, ID: iam.NewUniqueID("AIDA"), Created: s.now().UTC()}
 			if err := checkID(id, "user"); err != nil {
 				return u, err
 			}
 			return u, apply(&u)
 		})
+	}
+	if errors.Is(err, errApplied) {
+		if op, err := s.applied(ctx, pid, "UpdateUser", req.GetRequestId(), req); op != nil || err != nil {
+			return op, toStatus(ctx, err)
+		}
+		err = nil
 	}
 	if err != nil {
 		return nil, toStatus(ctx, err)

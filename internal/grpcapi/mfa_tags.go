@@ -50,8 +50,9 @@ func (s *Server) TagMFADevice(ctx context.Context, req *iamv1.TagMFADeviceReques
 	if op, err := s.replay(ctx, pid, "TagMFADevice", req.GetRequestId(), req); op != nil || err != nil {
 		return op, toStatus(ctx, err)
 	}
+	o := newOnce(pid, "TagMFADevice", req.GetRequestId(), req)
 	v, err := mutateOrValidate(
-		ctx, p.b, id, "", req.GetValidateOnly(), false, bumpMfaDevice, func(d *iam.MfaDevice) error {
+		ctx, p.b, id, "", o, req.GetValidateOnly(), false, bumpMfaDevice, func(d *iam.MfaDevice) error {
 			merged := make(map[string]string, len(d.Tags)+len(tags))
 			maps.Copy(merged, d.Tags)
 			for _, tag := range tags {
@@ -63,6 +64,12 @@ func (s *Server) TagMFADevice(ctx context.Context, req *iamv1.TagMFADeviceReques
 			d.Tags = merged
 			return nil
 		}, nil)
+	if errors.Is(err, errApplied) {
+		if op, err := s.applied(ctx, pid, "TagMFADevice", req.GetRequestId(), req); op != nil || err != nil {
+			return op, toStatus(ctx, err)
+		}
+		err = nil
+	}
 	if err != nil {
 		return nil, missingMFADevice(ctx, err)
 	}
@@ -97,8 +104,9 @@ func (s *Server) UntagMFADevice(
 	if op, err := s.replay(ctx, pid, "UntagMFADevice", req.GetRequestId(), req); op != nil || err != nil {
 		return op, toStatus(ctx, err)
 	}
+	o := newOnce(pid, "UntagMFADevice", req.GetRequestId(), req)
 	v, err := mutateOrValidate(
-		ctx, p.b, id, "", req.GetValidateOnly(), false, bumpMfaDevice, func(d *iam.MfaDevice) error {
+		ctx, p.b, id, "", o, req.GetValidateOnly(), false, bumpMfaDevice, func(d *iam.MfaDevice) error {
 			if len(d.Tags) == 0 {
 				return nil
 			}
@@ -110,6 +118,12 @@ func (s *Server) UntagMFADevice(
 			d.Tags = kept
 			return nil
 		}, nil)
+	if errors.Is(err, errApplied) {
+		if op, err := s.applied(ctx, pid, "UntagMFADevice", req.GetRequestId(), req); op != nil || err != nil {
+			return op, toStatus(ctx, err)
+		}
+		err = nil
+	}
 	if err != nil {
 		return nil, missingMFADevice(ctx, err)
 	}

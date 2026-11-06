@@ -11,9 +11,15 @@ import (
 
 // update reads key, checks etag, applies fn, bumps the generation and
 // writes with compare-and-swap. Without an etag a lost race is retried on
-// fresh state; with one it is ETAG_MISMATCH. With allowMissing a missing
-// object is made by create instead.
-func update[T iam.Object](ctx context.Context, b store.Backend, key, etag string, allowMissing bool, bump func(*T), fn func(*T) error, create func() (T, error)) (store.Versioned[T], bool, error) {
+// fresh state; with one it is ETAG_MISMATCH, after one more read when o is
+// set, so a duplicate that lost to its first delivery finds its token. With allowMissing a missing
+// object is made by create instead. An object that already records o was
+// changed by an earlier delivery of the request: it is returned unwritten
+// with errApplied, before the etag check that change made stale.
+func update[T iam.Object, PT envelopeRef[T]](
+	ctx context.Context, b store.Backend, key, etag string, o once, allowMissing bool,
+	bump func(*T), fn func(*T) error, create func() (T, error),
+) (store.Versioned[T], bool, error) {
 	for attempt := 0; ; attempt++ {
 		cur, err := store.Get[T](ctx, b, key)
 		if errors.Is(err, store.ErrNotFound) && allowMissing && create != nil {
@@ -21,10 +27,17 @@ func update[T iam.Object](ctx context.Context, b store.Backend, key, etag string
 			if err != nil {
 				return cur, false, err
 			}
+			o.record(PT(&obj).EnvelopeRef())
 			v, err := store.Create(ctx, b, obj)
+			if errors.Is(err, store.ErrExists) && o.op != "" && attempt < 8 {
+				continue
+			}
 			return store.Versioned[T]{Object: obj, Version: v}, true, err
 		}
 		if err != nil {
+			return cur, false, err
+		}
+		if err := o.check(*PT(&cur.Object).EnvelopeRef()); err != nil {
 			return cur, false, err
 		}
 		if err := checkEtag(etag, cur.Version); err != nil {
@@ -34,8 +47,9 @@ func update[T iam.Object](ctx context.Context, b store.Backend, key, etag string
 			return cur, false, err
 		}
 		bump(&cur.Object)
+		o.record(PT(&cur.Object).EnvelopeRef())
 		v, err := store.Update(ctx, b, cur.Object, cur.Version)
-		if errors.Is(err, store.ErrConflict) && etag == "" && attempt < 8 {
+		if errors.Is(err, store.ErrConflict) && (etag == "" || o.op != "") && attempt < 8 {
 			continue
 		}
 		if errors.Is(err, store.ErrConflict) {
@@ -44,6 +58,12 @@ func update[T iam.Object](ctx context.Context, b store.Backend, key, etag string
 		cur.Version = v
 		return cur, false, err
 	}
+}
+
+// envelopeRef is a pointer to an object with an envelope to record in.
+type envelopeRef[T any] interface {
+	*T
+	EnvelopeRef() *iam.Meta
 }
 
 // remove deletes key after etag and dependency checks. A missing object is
@@ -112,7 +132,10 @@ func create[T enveloped](ctx context.Context, b store.Backend, obj T, requestID 
 }
 
 // mutateOrValidate runs update, or with validateOnly applies fn to a copy.
-func mutateOrValidate[T iam.Object](ctx context.Context, b store.Backend, key, etag string, validateOnly, allowMissing bool, bump func(*T), fn func(*T) error, mk func() (T, error)) (store.Versioned[T], error) {
+func mutateOrValidate[T iam.Object, PT envelopeRef[T]](
+	ctx context.Context, b store.Backend, key, etag string, o once, validateOnly, allowMissing bool,
+	bump func(*T), fn func(*T) error, mk func() (T, error),
+) (store.Versioned[T], error) {
 	if validateOnly {
 		v, err := store.Get[T](ctx, b, key)
 		if err == nil {
@@ -123,9 +146,13 @@ func mutateOrValidate[T iam.Object](ctx context.Context, b store.Backend, key, e
 		}
 		return v, err
 	}
-	v, _, err := update(ctx, b, key, etag, allowMissing, bump, fn, mk)
+	v, _, err := update[T, PT](ctx, b, key, etag, o, allowMissing, bump, fn, mk)
 	return v, err
 }
+
+// errApplied is an update an earlier delivery of its request_id made; fn
+// did not run. The caller answers through Server.applied.
+var errApplied = errors.New("applied by an earlier delivery of the request")
 
 // errNoop aborts an update that has nothing to do.
 var errNoop = errors.New("no change")

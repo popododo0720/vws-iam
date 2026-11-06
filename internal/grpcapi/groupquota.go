@@ -219,12 +219,16 @@ func (p project) commitGroup(ctx context.Context, g store.Versioned[iam.Group], 
 // first and the members are added by commitGroup, because a create cannot
 // be conditional on the lock. If the add is refused, the empty group is
 // removed again, unless a rename has marked it. A retry of the same
-// request adopts the group it left.
-func (p project) createGroup(ctx context.Context, g iam.Group, requestID string) (store.Versioned[iam.Group], error) {
+// request adopts the group it left. o is recorded by the write that
+// completes the group, never on the empty group alone.
+func (p project) createGroup(
+	ctx context.Context, g iam.Group, requestID string, o once,
+) (store.Versioned[iam.Group], error) {
 	if err := p.checkGroupsPerUser(ctx, g.Name, g.Members); err != nil {
 		return store.Versioned[iam.Group]{}, err
 	}
 	if len(g.Members) == 0 {
+		o.record(&g.Meta)
 		return create(ctx, p.b, g, requestID, false)
 	}
 	empty := g
@@ -238,6 +242,7 @@ func (p project) createGroup(ctx context.Context, g iam.Group, requestID string)
 		return v, nil
 	}
 	v.Object.Members = g.Members
+	o.record(&v.Object.Meta)
 	ver, err := p.commitGroup(ctx, v, prev)
 	if err != nil {
 		// A rename may have marked the group this request left (a retry
@@ -258,9 +263,10 @@ func (p project) createGroup(ctx context.Context, g iam.Group, requestID string)
 	return v, nil
 }
 
-// updateGroup is update for groups, committing through commitGroup.
+// updateGroup is update for groups, committing through commitGroup. A group
+// it creates is adopted through its RequestID, as createGroup does.
 func (p project) updateGroup(
-	ctx context.Context, key, etag, requestID string, allowMissing bool,
+	ctx context.Context, key, etag, requestID string, o once, allowMissing bool,
 	fn func(*iam.Group) error, mk func() (iam.Group, error),
 ) (store.Versioned[iam.Group], error) {
 	for attempt := 0; ; attempt++ {
@@ -270,9 +276,12 @@ func (p project) updateGroup(
 			if err != nil {
 				return cur, err
 			}
-			return p.createGroup(ctx, g, requestID)
+			return p.createGroup(ctx, g, requestID, o)
 		}
 		if err != nil {
+			return cur, err
+		}
+		if err := o.check(cur.Object.Meta); err != nil {
 			return cur, err
 		}
 		if err := checkEtag(etag, cur.Version); err != nil {
@@ -283,11 +292,12 @@ func (p project) updateGroup(
 			return cur, err
 		}
 		bumpGroup(&cur.Object)
+		o.record(&cur.Object.Meta)
 		v, err := p.commitGroup(ctx, cur, prev)
 		if errors.Is(err, errLockBusy) {
 			return cur, err
 		}
-		if errors.Is(err, store.ErrConflict) && etag == "" && attempt < 8 {
+		if errors.Is(err, store.ErrConflict) && (etag == "" || o.op != "") && attempt < 8 {
 			continue
 		}
 		if errors.Is(err, store.ErrConflict) {
