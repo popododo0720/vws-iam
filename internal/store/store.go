@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"strings"
+	"time"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
 )
@@ -289,8 +291,38 @@ func DeleteIf[T iam.Object](ctx context.Context, b Backend, key, version string,
 	return b.DeleteIf(ctx, zero.Kind(), key, version, pre)
 }
 
+// Mutate retry bounds: after a version conflict it waits a jittered delay
+// in [d/2, d], d doubling from mutateBackoff up to mutateMaxBackoff, and
+// gives up after mutateRetries retries with the conflict.
+const (
+	mutateRetries    = 8
+	mutateBackoff    = 5 * time.Millisecond
+	mutateMaxBackoff = 200 * time.Millisecond
+)
+
+// sleep waits d or until ctx is done; tests replace it.
+var sleep = func(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case <-t.C:
+		return nil
+	}
+}
+
+// conflictDelay is the wait before retry n (0-based).
+func conflictDelay(n int) time.Duration {
+	d := min(mutateBackoff<<min(n, 16), mutateMaxBackoff)
+	return d/2 + rand.N(d/2+1)
+}
+
 // Mutate reads key, applies fn, and writes the result, retrying on a
-// version conflict so a lost race reapplies fn to fresh state.
+// version conflict so a lost race reapplies fn to fresh state. Retries
+// back off with jitter, so racing writers spread out instead of colliding
+// again at once; a context done while waiting stops it with the conflict
+// and the context's cause.
 func Mutate[T iam.Object](ctx context.Context, b Backend, key string, fn func(*T) error) (T, error) {
 	for attempt := 0; ; attempt++ {
 		cur, err := Get[T](ctx, b, key)
@@ -303,9 +335,11 @@ func Mutate[T iam.Object](ctx context.Context, b Backend, key string, fn func(*T
 			return zero, err
 		}
 		_, err = Update(ctx, b, cur.Object, cur.Version)
-		if errors.Is(err, ErrConflict) && attempt < 8 {
-			continue
+		if !errors.Is(err, ErrConflict) || attempt == mutateRetries {
+			return cur.Object, err
 		}
-		return cur.Object, err
+		if werr := sleep(ctx, conflictDelay(attempt)); werr != nil {
+			return cur.Object, fmt.Errorf("%w (stopped retrying: %w)", err, werr)
+		}
 	}
 }
