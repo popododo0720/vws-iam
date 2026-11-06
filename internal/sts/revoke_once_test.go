@@ -11,9 +11,9 @@ import (
 	"github.com/popododo0720/vws-iam/internal/sts"
 )
 
-// contended loses every user write to another writer. The fifth read
-// ends the context mid-call, as a deadline that lands during a store
-// round trip does.
+// contended loses every user write to another writer. The tenth read,
+// the first past Mutate's retry limit, ends the context mid-call, as a
+// deadline that lands during a store round trip does.
 type contended struct {
 	store.Backend
 	cancel context.CancelFunc
@@ -22,7 +22,7 @@ type contended struct {
 
 func (c *contended) Get(ctx context.Context, k iam.Kind, key string) (store.Entry, error) {
 	if k == iam.KindUser {
-		if c.reads++; c.reads > 4 {
+		if c.reads++; c.reads > 9 {
 			c.cancel()
 			return store.Entry{}, ctx.Err()
 		}
@@ -48,8 +48,8 @@ func TestRevokeSessionsOnceRunsOutOfTimeUnderContention(t *testing.T) {
 	b := &contended{Backend: e.b, cancel: cancel}
 	svc := sts.New(b, e.keys, e.az, acct, e.clk.now)
 	err := svc.RevokeSessionsOnce(ctx, authz.User, "alice", "req-1")
-	if !errors.Is(err, store.ErrConflict) || !errors.Is(err, context.Canceled) || b.reads != 5 {
-		t.Fatalf("err = %v after %d reads, want the conflict and context.Canceled after 5", err, b.reads)
+	if !errors.Is(err, store.ErrConflict) || !errors.Is(err, context.Canceled) || b.reads != 10 {
+		t.Fatalf("err = %v after %d reads, want the conflict and context.Canceled after 10", err, b.reads)
 	}
 	u, err := store.Get[iam.User](context.Background(), e.b, "alice")
 	if err != nil {

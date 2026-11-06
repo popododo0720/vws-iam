@@ -178,3 +178,18 @@ func (c *ctxReads) Get(ctx context.Context, k iam.Kind, key string) (Entry, erro
 	}
 	return c.conflicting.Get(ctx, k, key)
 }
+
+// TestMutateWhileAliveRetriesPastTheLimit: MutateWhileAlive keeps
+// retrying conflicts past Mutate's limit, with the delay held at its cap,
+// until the write lands (#51).
+func TestMutateWhileAliveRetriesPastTheLimit(t *testing.T) {
+	waits := recordSleeps(t)
+	b := &conflicting{t: t, conflicts: 3 * mutateRetries}
+	g, err := MutateWhileAlive(context.Background(), b, "g", func(g *iam.Group) error { g.Generation++; return nil })
+	if err != nil || g.Generation != 1 || b.updates != 3*mutateRetries+1 || len(*waits) != 3*mutateRetries {
+		t.Fatalf("%v gen=%d updates=%d waits=%d", err, g.Generation, b.updates, len(*waits))
+	}
+	if last := (*waits)[len(*waits)-1]; last < mutateMaxBackoff/2 || last > mutateMaxBackoff {
+		t.Fatalf("last wait %v, want in [%v, %v]", last, mutateMaxBackoff/2, mutateMaxBackoff)
+	}
+}
