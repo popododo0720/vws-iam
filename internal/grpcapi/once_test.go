@@ -394,3 +394,99 @@ func TestRequestTokensAreBounded(t *testing.T) {
 		}
 	}
 }
+
+// barrier holds every Update of kind until n have arrived, so n racing
+// requests all read before any of them writes.
+type barrier struct {
+	store.Backend
+	kind  iam.Kind
+	n     int
+	mu    sync.Mutex
+	ready chan struct{}
+}
+
+func (b *barrier) Update(ctx context.Context, kind iam.Kind, key string, spec []byte, version string) (string, error) {
+	if kind == b.kind {
+		b.mu.Lock()
+		if b.n--; b.n == 0 {
+			close(b.ready)
+		}
+		b.mu.Unlock()
+		select {
+		case <-b.ready:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	return b.Backend.Update(ctx, kind, key, spec, version)
+}
+
+// TestRequestIDDuplicatesWithEtag: two deliveries of one request with an
+// etag both read before either writes. The loser's write conflicts; it
+// reads again, finds the winner's token and answers with its operation,
+// not ETAG_MISMATCH.
+func TestRequestIDDuplicatesWithEtag(t *testing.T) {
+	b := &barrier{Backend: memstore.New(), kind: iam.KindUser, n: 2, ready: make(chan struct{})}
+	a, rb, _, _ := replicas(t, b)
+	ctx := t.Context()
+	u, err := a.users.GetUser(ctx, &iamv1.GetUserRequest{Name: parentName + "/users/alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := &iamv1.UpdateUserRequest{
+		User:       &iamv1.User{Name: u.GetName(), Etag: u.GetEtag(), Labels: labelsFor(false)},
+		UpdateMask: labelsMask(), RequestId: "with-etag",
+	}
+	var ops [2]op
+	var errs [2]error
+	var wg sync.WaitGroup
+	wg.Go(func() { ops[0], errs[0] = a.users.UpdateUser(ctx, req) })
+	wg.Go(func() { ops[1], errs[1] = rb.users.UpdateUser(ctx, req) })
+	wg.Wait()
+	if errs[0] != nil || errs[1] != nil || !proto.Equal(ops[0], ops[1]) {
+		t.Fatalf("duplicates answered %v, %v; want one operation twice", errs, ops)
+	}
+	gen, _ := stored("alice", func(u iam.User) int64 { return u.Generation }, func(iam.User) int { return 0 })(t, b, "")
+	if gen != u.GetGeneration()+1 {
+		t.Fatalf("generation %d, want %d", gen, u.GetGeneration()+1)
+	}
+	stale := &iamv1.UpdateUserRequest{User: req.GetUser(), UpdateMask: labelsMask(), RequestId: "other"}
+	_, err = a.users.UpdateUser(ctx, stale)
+	wantErr(t, err, codes.Aborted, "ETAG_MISMATCH", "ConcurrentModification")
+}
+
+// TestRequestIDGroupUpsert: an UpdateGroup with allow_missing that creates
+// the group records its token in that create, with or without members, so
+// a retry after a lost operation record changes nothing.
+func TestRequestIDGroupUpsert(t *testing.T) {
+	for _, members := range [][]string{nil, {parentName + "/users/alice"}} {
+		t.Run(fmt.Sprintf("members=%d", len(members)), func(t *testing.T) {
+			b := memstore.New()
+			a, _, _, _ := replicas(t, b)
+			ctx := t.Context()
+			req := &iamv1.UpdateGroupRequest{
+				Group: &iamv1.Group{
+					Name: groupName("g2"), Labels: labelsFor(false), Spec: &iamv1.GroupSpec{Members: members},
+				},
+				UpdateMask:   &fieldmaskpb.FieldMask{Paths: []string{"labels", "spec.members"}},
+				AllowMissing: true, RequestId: "upsert",
+			}
+			state := stored("g2", func(g iam.Group) int64 { return g.Generation },
+				func(g iam.Group) int { return len(g.Members) })
+			if _, err := a.groups.UpdateGroup(ctx, req); err != nil {
+				t.Fatal(err)
+			}
+			gen, n := state(t, b, "")
+			if n != len(members) {
+				t.Fatalf("%d members, want %d", n, len(members))
+			}
+			deleteOperations(t, b)
+			if _, err := a.groups.UpdateGroup(ctx, req); err != nil {
+				t.Fatalf("retry after a lost record: %v", err)
+			}
+			if g, m := state(t, b, ""); g != gen || m != n {
+				t.Fatalf("retry applied again: generation %d members %d, want %d %d", g, m, gen, n)
+			}
+		})
+	}
+}

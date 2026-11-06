@@ -11,7 +11,8 @@ import (
 
 // update reads key, checks etag, applies fn, bumps the generation and
 // writes with compare-and-swap. Without an etag a lost race is retried on
-// fresh state; with one it is ETAG_MISMATCH. With allowMissing a missing
+// fresh state; with one it is ETAG_MISMATCH, after one more read when o is
+// set, so a duplicate that lost to its first delivery finds its token. With allowMissing a missing
 // object is made by create instead. An object that already records o was
 // changed by an earlier delivery of the request: it is returned unwritten
 // with errApplied, before the etag check that change made stale.
@@ -48,7 +49,7 @@ func update[T iam.Object, PT envelopeRef[T]](
 		bump(&cur.Object)
 		o.record(PT(&cur.Object).EnvelopeRef())
 		v, err := store.Update(ctx, b, cur.Object, cur.Version)
-		if errors.Is(err, store.ErrConflict) && etag == "" && attempt < 8 {
+		if errors.Is(err, store.ErrConflict) && (etag == "" || o.op != "") && attempt < 8 {
 			continue
 		}
 		if errors.Is(err, store.ErrConflict) {

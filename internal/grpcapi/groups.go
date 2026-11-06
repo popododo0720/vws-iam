@@ -137,7 +137,7 @@ func (s *Server) CreateGroup(ctx context.Context, req *iamv1.CreateGroupRequest)
 			v, err = create(ctx, p.b, g, req.GetRequestId(), true)
 		}
 	} else {
-		v, err = p.createGroup(ctx, g, req.GetRequestId())
+		v, err = p.createGroup(ctx, g, req.GetRequestId(), once{})
 	}
 	if err != nil {
 		return nil, toStatus(ctx, err)

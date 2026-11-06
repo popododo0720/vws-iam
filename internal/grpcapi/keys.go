@@ -133,9 +133,9 @@ func (g keyGuard) check(ctx context.Context, b store.Backend, k iam.AccessKey) (
 // the user check and the key write commit together through store.UpdateIf.
 // A lost race is not retried: the caller authorized against the ARN it
 // sent, so a concurrent change of the user is ConcurrentModification. The
-// one exception is a request with a request_id and no etag whose user
-// still passes the guard: racing duplicates of it fence each other, so it
-// reads again, up to 8 times, to find the duplicate that committed.
+// one exception is a request with a request_id whose user still passes the
+// guard: racing duplicates of it fence each other, so it reads again, up
+// to 8 times, to find the duplicate that committed.
 func updateKeyIf(
 	ctx context.Context, b store.Backend, id, etag string, o once, g keyGuard, fn func(*iam.AccessKey) error,
 ) (store.Versioned[iam.AccessKey], error) {
@@ -164,7 +164,7 @@ func updateKeyIf(
 		cur.Object.Generation++
 		o.record(&cur.Object.Meta)
 		v, err := store.UpdateIf(ctx, b, cur.Object, cur.Version, pre)
-		if errors.Is(err, store.ErrConflict) && o.op != "" && etag == "" && attempt < 8 {
+		if errors.Is(err, store.ErrConflict) && o.op != "" && attempt < 8 {
 			conflict = err
 			continue
 		}
