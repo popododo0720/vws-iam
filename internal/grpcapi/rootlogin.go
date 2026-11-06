@@ -19,17 +19,13 @@ import (
 	"github.com/popododo0720/vws-iam/internal/store"
 )
 
-// Root password bounds, as AWS sets them for the root user: 8 to 128
-// characters with at least three of uppercase, lowercase, digits and
-// symbols.
+// Root password bounds, as AWS sets them for the root user (and at least
+// three of uppercase, lowercase, digits and symbols), and the bounded
+// retries of SetRootPassword when another writer changes the root login.
 const (
-	minRootPassword = 8
-	maxRootPassword = 128
+	minRootPassword, maxRootPassword = 8, 128
+	setRootPasswordAttempts          = 5
 )
-
-// setRootPasswordAttempts bounds the read-and-write retries of
-// SetRootPassword when another writer changes the root login in between.
-const setRootPasswordAttempts = 5
 
 // ErrRootPassword is a root password outside the AWS rules. Its message
 // never carries the password.
@@ -41,26 +37,20 @@ func validRootPassword(pw string) bool {
 	if n < minRootPassword || n > maxRootPassword {
 		return false
 	}
-	var upper, lower, digit, symbol bool
+	seen := map[string]bool{}
 	for _, r := range pw {
 		switch {
 		case unicode.IsUpper(r):
-			upper = true
+			seen["upper"] = true
 		case unicode.IsLower(r):
-			lower = true
+			seen["lower"] = true
 		case unicode.IsDigit(r):
-			digit = true
+			seen["digit"] = true
 		case unicode.IsPrint(r) && !unicode.IsSpace(r):
-			symbol = true
+			seen["symbol"] = true
 		}
 	}
-	classes := 0
-	for _, ok := range []bool{upper, lower, digit, symbol} {
-		if ok {
-			classes++
-		}
-	}
-	return classes >= 3
+	return len(seen) >= 3
 }
 
 // SetRootPassword stores the argon2id hash of the root console password
