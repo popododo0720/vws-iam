@@ -26,22 +26,6 @@ func (s *Server) AttemptCounterKeys(scope, id string) []string {
 	return keys
 }
 
-// CreateAccessKeyUserEtag is CreateAccessKey with the user etag that
-// vws-proto does not carry yet (#139).
-func (s *Server) CreateAccessKeyUserEtag(
-	ctx context.Context, req *iamv1.CreateAccessKeyRequest, userEtag string,
-) (*iamv1.CreateAccessKeyResponse, error) {
-	return s.createAccessKey(ctx, req, userEtag)
-}
-
-// DeleteAccessKeyUserEtag is DeleteAccessKey with the user etag that
-// vws-proto does not carry yet (#139).
-func (s *Server) DeleteAccessKeyUserEtag(
-	ctx context.Context, req *iamv1.DeleteAccessKeyRequest, userEtag string,
-) (*longrunningpb.Operation, error) {
-	return s.deleteAccessKey(ctx, req, userEtag)
-}
-
 // UpdateUserRename is UpdateUser with the AWS NewUserName that vws-proto
 // does not carry yet (#134).
 func (s *Server) UpdateUserRename(
