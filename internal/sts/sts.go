@@ -97,7 +97,11 @@ const rootID = "root"
 // ConsoleCaller is the IAM user of a console session that the server has
 // already validated (grpcapi ValidateSession); mfa and authTime come from
 // that stored session. The user must still exist.
-func (s *Service) ConsoleCaller(ctx context.Context, userName string, mfa bool, authTime time.Time) (Caller, error) {
+func (s *Service) ConsoleCaller(
+	ctx context.Context, userName string, mfa bool, authTime time.Time,
+) (_ Caller, err error) {
+	ctx, end := start(ctx, "ConsoleCaller")
+	defer end(&err)
 	u, err := store.Get[iam.User](ctx, s.b, userName)
 	if errors.Is(err, store.ErrNotFound) {
 		return Caller{}, ErrInvalidToken
@@ -347,9 +351,11 @@ func (s *Service) userID(c Caller) string {
 
 // Resolve derives the caller from its credential: a session token is
 // opened and checked here; a long-term key must exist and be active.
-func (s *Service) Resolve(ctx context.Context, cred Credential) (Caller, error) {
+func (s *Service) Resolve(ctx context.Context, cred Credential) (_ Caller, err error) {
+	ctx, end := start(ctx, "Resolve")
+	defer end(&err)
 	if cred.SessionToken != "" {
-		sess, err := s.Validate(ctx, cred.AccessKeyID, cred.SessionToken)
+		sess, err := s.validate(ctx, cred.AccessKeyID, cred.SessionToken)
 		if err != nil {
 			return Caller{}, err
 		}
@@ -412,13 +418,14 @@ func (s *Service) verifyMFA(ctx context.Context, c Caller, m MFA) (bool, error) 
 // RevokeSessions invalidates every session issued so far for a user
 // (GetSessionToken) or a role (AssumeRole), like the AWS console's
 // "Revoke active sessions". Later sessions are unaffected.
-func (s *Service) RevokeSessions(ctx context.Context, kind authz.PrincipalKind, name string) error {
+func (s *Service) RevokeSessions(ctx context.Context, kind authz.PrincipalKind, name string) (err error) {
+	ctx, end := start(ctx, "RevokeSessions")
+	defer end(&err)
 	now := s.now().UTC()
 	// The generation is bumped inside the store's compare-and-swap, so the
 	// store's write order, not any replica's clock, decides which sessions
 	// came before the revocation. The reported time never moves backwards
 	// even if this replica's clock is behind the previous revoker's.
-	var err error
 	switch kind {
 	case authz.User:
 		_, err = store.Mutate(ctx, s.b, name, func(u *iam.User) error {
@@ -478,7 +485,9 @@ func (s *Service) revokeGen(ctx context.Context, kind authz.PrincipalKind, name 
 func (s *Service) AssumeRole(
 	ctx context.Context, c Caller, reqCtx map[string][]string, roleARN, sessionName string,
 	duration time.Duration, sp SessionPolicies, m MFA,
-) (Credentials, error) {
+) (_ Credentials, err error) {
+	ctx, end := start(ctx, "AssumeRole")
+	defer end(&err)
 	if c.principalID == "" {
 		return Credentials{}, fmt.Errorf("%w: unresolved caller", ErrAccessDenied)
 	}
@@ -580,7 +589,11 @@ func (s *Service) AssumeRole(
 // GetSessionToken returns credentials for a user, typically to carry MFA.
 // SerialNumber and TokenCode, when given, are verified here; only then does
 // the session carry MFA (or the root caller authenticated with MFA).
-func (s *Service) GetSessionToken(ctx context.Context, c Caller, duration time.Duration, m MFA) (Credentials, error) {
+func (s *Service) GetSessionToken(
+	ctx context.Context, c Caller, duration time.Duration, m MFA,
+) (_ Credentials, err error) {
+	ctx, end := start(ctx, "GetSessionToken")
+	defer end(&err)
 	if (c.principal.Kind != authz.User && c.principal.Kind != authz.Root) || c.temporary || c.principalID == "" {
 		return Credentials{}, fmt.Errorf("%w: GetSessionToken needs long-term user credentials", ErrAccessDenied)
 	}
@@ -664,7 +677,14 @@ func SessionProject(keys *secret.Keyring, accessKeyID, token string, now func() 
 // Validate opens a session token presented with accessKeyID. A tampered,
 // foreign, mismatched, expired or revoked token is rejected, as is one
 // whose user or role was deleted or recreated.
-func (s *Service) Validate(ctx context.Context, accessKeyID, token string) (Session, error) {
+func (s *Service) Validate(ctx context.Context, accessKeyID, token string) (_ Session, err error) {
+	ctx, end := start(ctx, "Validate")
+	defer end(&err)
+	return s.validate(ctx, accessKeyID, token)
+}
+
+// validate is Validate without its own span, for Resolve.
+func (s *Service) validate(ctx context.Context, accessKeyID, token string) (Session, error) {
 	sess, err := s.open(accessKeyID, token)
 	if err != nil {
 		return Session{}, err
