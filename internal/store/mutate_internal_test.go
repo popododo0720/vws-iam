@@ -123,3 +123,73 @@ func TestMutateStopsWaitingWhenContextEnds(t *testing.T) {
 		t.Fatalf("%d updates in %v after cancel", b.updates, time.Since(begin))
 	}
 }
+
+// TestMutateReportsTheConflictWhenARetryRunsOutOfTime: a context that
+// ends while a retry reads ends Mutate with the conflict and the context's
+// error, so the caller sees contention, not a slow backend (#51). A first
+// read cut short, and a retry's write that may have landed, are only the
+// context's error.
+func TestMutateReportsTheConflictWhenARetryRunsOutOfTime(t *testing.T) {
+	recordSleeps(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	b := &ctxReads{conflicting: conflicting{t: t, conflicts: -1, onUpdate: cancel}}
+	_, err := Mutate(ctx, b, "g", func(*iam.Group) error { return nil })
+	if !errors.Is(err, ErrConflict) || !errors.Is(err, context.Canceled) || b.updates != 1 {
+		t.Fatalf("err = %v after %d updates, want the conflict and context.Canceled after 1", err, b.updates)
+	}
+
+	b = &ctxReads{conflicting: conflicting{t: t, conflicts: -1}}
+	_, err = Mutate(ctx, b, "g", func(*iam.Group) error { return nil })
+	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrConflict) || b.updates != 0 {
+		t.Fatalf("first read on a done context: %v after %d updates", err, b.updates)
+	}
+
+	ctx, cancel = context.WithCancel(context.Background())
+	defer cancel()
+	l := &landsThenTimesOut{conflicting: conflicting{t: t, conflicts: 1}, cancel: cancel}
+	_, err = Mutate(ctx, l, "g", func(*iam.Group) error { return nil })
+	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrConflict) || l.updates != 2 {
+		t.Fatalf("retry write applied, then the context ended: %v after %d updates", err, l.updates)
+	}
+}
+
+// landsThenTimesOut applies the write after the conflicts, then answers
+// the context's error, as a write whose response the deadline cut off.
+type landsThenTimesOut struct {
+	conflicting
+	cancel context.CancelFunc
+}
+
+func (l *landsThenTimesOut) Update(ctx context.Context, k iam.Kind, key string, spec []byte, v string) (string, error) {
+	if _, err := l.conflicting.Update(ctx, k, key, spec, v); err != nil {
+		return "", err
+	}
+	l.cancel()
+	return "", ctx.Err()
+}
+
+// ctxReads fails a Get once ctx is done, as a real backend does.
+type ctxReads struct{ conflicting }
+
+func (c *ctxReads) Get(ctx context.Context, k iam.Kind, key string) (Entry, error) {
+	if err := ctx.Err(); err != nil {
+		return Entry{}, err
+	}
+	return c.conflicting.Get(ctx, k, key)
+}
+
+// TestMutateWhileAliveRetriesPastTheLimit: MutateWhileAlive keeps
+// retrying conflicts past Mutate's limit, with the delay held at its cap,
+// until the write lands (#51).
+func TestMutateWhileAliveRetriesPastTheLimit(t *testing.T) {
+	waits := recordSleeps(t)
+	b := &conflicting{t: t, conflicts: 3 * mutateRetries}
+	g, err := MutateWhileAlive(context.Background(), b, "g", func(g *iam.Group) error { g.Generation++; return nil })
+	if err != nil || g.Generation != 1 || b.updates != 3*mutateRetries+1 || len(*waits) != 3*mutateRetries {
+		t.Fatalf("%v gen=%d updates=%d waits=%d", err, g.Generation, b.updates, len(*waits))
+	}
+	if last := (*waits)[len(*waits)-1]; last < mutateMaxBackoff/2 || last > mutateMaxBackoff {
+		t.Fatalf("last wait %v, want in [%v, %v]", last, mutateMaxBackoff/2, mutateMaxBackoff)
+	}
+}

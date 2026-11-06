@@ -322,24 +322,48 @@ func conflictDelay(n int) time.Duration {
 // version conflict so a lost race reapplies fn to fresh state. Retries
 // back off with jitter, so racing writers spread out instead of colliding
 // again at once; a context done while waiting stops it with the conflict
-// and the context's cause.
+// and the context's cause, as does a context that ends while a retry
+// reads. A context that ends during a write keeps only its own error:
+// the write may have been applied.
 func Mutate[T iam.Object](ctx context.Context, b Backend, key string, fn func(*T) error) (T, error) {
+	return mutate(ctx, b, key, fn, mutateRetries)
+}
+
+// MutateWhileAlive is Mutate without the retry limit: it retries version
+// conflicts until it succeeds or ctx ends, for a write that must not be
+// refused under a burst (#48, #51).
+func MutateWhileAlive[T iam.Object](ctx context.Context, b Backend, key string, fn func(*T) error) (T, error) {
+	return mutate(ctx, b, key, fn, -1)
+}
+
+// mutate is Mutate with retries retries; a negative retries has no limit.
+func mutate[T iam.Object](ctx context.Context, b Backend, key string, fn func(*T) error, retries int) (T, error) {
 	for attempt := 0; ; attempt++ {
 		cur, err := Get[T](ctx, b, key)
 		if err != nil {
 			var zero T
-			return zero, err
+			return zero, lostRace(ctx, attempt, err)
 		}
 		if err := fn(&cur.Object); err != nil {
 			var zero T
 			return zero, err
 		}
 		_, err = Update(ctx, b, cur.Object, cur.Version)
-		if !errors.Is(err, ErrConflict) || attempt == mutateRetries {
+		if !errors.Is(err, ErrConflict) || attempt == retries {
 			return cur.Object, err
 		}
 		if werr := sleep(ctx, conflictDelay(attempt)); werr != nil {
 			return cur.Object, fmt.Errorf("%w (stopped retrying: %w)", err, werr)
 		}
 	}
+}
+
+// lostRace adds ErrConflict to the read error of a retry cut short by
+// ctx: the call ran out of time because it lost a race, and nothing was
+// written.
+func lostRace(ctx context.Context, attempt int, err error) error {
+	if attempt == 0 || ctx.Err() == nil {
+		return err
+	}
+	return fmt.Errorf("%w (stopped retrying: %w)", ErrConflict, err)
 }
