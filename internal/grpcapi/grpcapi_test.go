@@ -957,6 +957,14 @@ func TestMfaDeviceLockoutStatus(t *testing.T) {
 	status(0, e.now.Add(15*time.Minute))
 	*e.now = e.now.Add(15*time.Minute + time.Second)
 	status(0, time.Time{})
+	// Waiting the lock out is not a success: the next lock lasts twice as
+	// long (#29).
+	for range 5 {
+		wantErr(t, gst("000000"), codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+	}
+	status(0, e.now.Add(30*time.Minute))
+	*e.now = e.now.Add(30*time.Minute + time.Second)
+	status(0, time.Time{})
 	if err := gst(code(t, e, seed)); err != nil {
 		t.Fatalf("after lockout: %v", err)
 	}

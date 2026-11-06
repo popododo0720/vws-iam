@@ -416,3 +416,97 @@ func TestEnableWindowLiterals(t *testing.T) {
 		}
 	}
 }
+
+// TestLockoutBacksOff pins the lockout backoff (#29) to literal values: the
+// lockouts in a row last 15, 30, 60 and then 60 minutes, the count survives
+// a restart and the lock's expiry, and an accepted code starts it over.
+func TestLockoutBacksOff(t *testing.T) {
+	svc, b, clk := setup(t)
+	ctx := context.Background()
+	seed := enroll(t, svc, clk, "alice", "d1")
+	clk.t = clk.t.Add(30 * time.Second)
+	lock := func(svc *mfa.Service) time.Time {
+		t.Helper()
+		for i := 1; i <= 4; i++ {
+			if err := svc.Verify(ctx, "alice", "d1", "000000"); !errors.Is(err, mfa.ErrInvalidCode) {
+				t.Fatalf("failure %d: %v, want ErrInvalidCode", i, err)
+			}
+		}
+		if err := svc.Verify(ctx, "alice", "d1", "000000"); !errors.Is(err, mfa.ErrLocked) {
+			t.Fatalf("failure 5: %v, want ErrLocked", err)
+		}
+		return clk.t
+	}
+	stored := func() iam.MfaDevice {
+		t.Helper()
+		d, err := store.Get[iam.MfaDevice](ctx, b, "d1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d.Object
+	}
+	for i, want := range []time.Duration{15 * time.Minute, 30 * time.Minute, time.Hour, time.Hour} {
+		lockedAt := lock(svc)
+		d := stored()
+		if !d.LockedUntil.Equal(lockedAt.Add(want)) || d.Lockouts != i+1 {
+			t.Fatalf("lockout %d: until %v lockouts %d, want %v and %d", i+1, d.LockedUntil.Sub(lockedAt), d.Lockouts, want, i+1)
+		}
+		// A new service on the same store is a restart: the lock holds.
+		clk.t = lockedAt.Add(want - time.Second)
+		restarted := mfa.New(b, nil, acct, clk.now)
+		if err := restarted.Verify(ctx, "alice", "d1", code(seed, clk.t, 0)); !errors.Is(err, mfa.ErrLocked) {
+			t.Fatalf("lockout %d: correct code 1s before it ends: %v, want ErrLocked", i+1, err)
+		}
+		// Waiting the lock out is not an accepted code: the next lock is
+		// longer.
+		clk.t = lockedAt.Add(want).Add(totp.Period)
+	}
+	if err := svc.Verify(ctx, "alice", "d1", code(seed, clk.t, 0)); err != nil {
+		t.Fatalf("correct code after the lock: %v", err)
+	}
+	if d := stored(); d.Lockouts != 0 || d.FailedAttempts != 0 {
+		t.Fatalf("accepted code left lockouts %d failed %d", d.Lockouts, d.FailedAttempts)
+	}
+	clk.t = clk.t.Add(totp.Period)
+	lockedAt := lock(svc)
+	if d := stored(); !d.LockedUntil.Equal(lockedAt.Add(15 * time.Minute)) {
+		t.Fatalf("lock after an accepted code lasts %v, want 15m", d.LockedUntil.Sub(lockedAt))
+	}
+}
+
+// TestLockoutBackoffCountsEnableFailures shows Enable's wrong codes back off
+// like Verify's, and a successful Enable resets the count.
+func TestLockoutBackoffCountsEnableFailures(t *testing.T) {
+	svc, b, clk := setup(t)
+	ctx := context.Background()
+	e, err := svc.CreateVirtual(ctx, "d1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for n, want := range []time.Duration{15 * time.Minute, 30 * time.Minute} {
+		for i := range mfa.MaxFailedAttempts {
+			want := mfa.ErrInvalidCode
+			if i == mfa.MaxFailedAttempts-1 {
+				want = mfa.ErrLocked
+			}
+			if err := svc.Enable(ctx, "alice", "d1", "000000", "111111"); !errors.Is(err, want) {
+				t.Fatalf("enable failure %d: %v, want %v", i+1, err, want)
+			}
+		}
+		d, err := store.Get[iam.MfaDevice](ctx, b, "d1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := d.Object.LockedUntil.Sub(clk.t); got != want {
+			t.Fatalf("enable lockout %d lasts %v, want %v", n+1, got, want)
+		}
+		clk.t = d.Object.LockedUntil
+	}
+	seed := seedOf(t, e)
+	if err := svc.Enable(ctx, "alice", "d1", code(seed, clk.t, -1), code(seed, clk.t, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if d, err := store.Get[iam.MfaDevice](ctx, b, "d1"); err != nil || d.Object.Lockouts != 0 {
+		t.Fatalf("enable left lockouts: %v %d", err, d.Object.Lockouts)
+	}
+}

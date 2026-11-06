@@ -3,8 +3,9 @@
 // Each accepted code advances the device's last step, so a code is never
 // accepted twice. Resync stores the drift of the device clock, around
 // which codes are then checked. MaxFailedAttempts wrong codes in a row
-// lock the device for LockoutDuration; the counter is stored, so a
-// restart does not reset it.
+// lock the device, first for LockoutDuration and then twice as long for
+// each further lockout before an accepted code, up to MaxLockout; the
+// counters are stored, so a restart does not reset them.
 package mfa
 
 import (
@@ -47,6 +48,18 @@ const (
 	LockoutDuration   = 15 * time.Minute
 )
 
+// lockoutFor is how long the n-th lockout in a row (n >= 1) lasts:
+// LockoutDuration doubled for each lockout before it, at most MaxLockout,
+// so a guesser who waits out every lock gets 5 tries per hour, not per
+// 15 minutes (#29).
+func lockoutFor(n int) time.Duration {
+	d := LockoutDuration
+	for i := 1; i < n && d < MaxLockout; i++ {
+		d *= 2
+	}
+	return min(d, MaxLockout)
+}
+
 // attempt runs check on device name under the lockout policy and persists
 // the outcome: a failure counts (and may lock), a success resets. op names
 // the operation in the lockout metric. owns, when set, runs before the
@@ -84,13 +97,14 @@ func (s *Service) attemptIf(
 			d.LockedUntil, d.LockedSince, d.FailedAttempts = time.Time{}, time.Time{}, 0
 		}
 		if ok {
-			d.FailedAttempts = 0
+			d.FailedAttempts, d.Lockouts = 0, 0
 			return nil
 		}
 		d.FailedAttempts++
 		verr = ErrInvalidCode
 		if d.FailedAttempts >= MaxFailedAttempts {
-			d.LockedUntil, d.LockedSince, d.FailedAttempts = now.Add(LockoutDuration), now, 0
+			d.Lockouts++
+			d.LockedUntil, d.LockedSince, d.FailedAttempts = now.Add(lockoutFor(d.Lockouts)), now, 0
 			verr, locked = ErrLocked, true
 		}
 		return nil
