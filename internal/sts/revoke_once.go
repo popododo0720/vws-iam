@@ -18,7 +18,8 @@ import (
 // (#48). The operation record in grpcapi only answers later replays; it
 // is written after the bump, so it cannot stop a racing duplicate. An
 // empty requestID always bumps. Lost CAS races are retried while ctx
-// lives, so a burst of revocations of one principal is not refused.
+// lives, so a burst of revocations of one principal is not refused; a
+// call that runs out of time after losing one fails with ErrConflict.
 func (s *Service) RevokeSessionsOnce(
 	ctx context.Context, kind authz.PrincipalKind, name, requestID string,
 ) (err error) {
@@ -38,6 +39,7 @@ func (s *Service) RevokeSessionsOnce(
 			}
 		}
 	}
+	lost := false
 	for {
 		var err error
 		switch kind {
@@ -54,8 +56,14 @@ func (s *Service) RevokeSessionsOnce(
 		default:
 			return fmt.Errorf("%w: principal kind %d", ErrInvalidRequest, kind)
 		}
-		if errors.Is(err, store.ErrConflict) && ctx.Err() == nil {
-			continue
+		if errors.Is(err, store.ErrConflict) {
+			if ctx.Err() == nil {
+				lost = true
+				continue
+			}
+		} else if err != nil && lost && ctx.Err() != nil {
+			// Out of time after losing races: report the contention.
+			err = fmt.Errorf("%w (stopped retrying: %w)", store.ErrConflict, err)
 		}
 		if err != nil {
 			return fmt.Errorf("revoke sessions of %s: %w", name, err)

@@ -123,3 +123,34 @@ func TestMutateStopsWaitingWhenContextEnds(t *testing.T) {
 		t.Fatalf("%d updates in %v after cancel", b.updates, time.Since(begin))
 	}
 }
+
+// TestMutateReportsTheConflictWhenARetryRunsOutOfTime: a context that
+// ends while a retry reads ends Mutate with the conflict and the context's
+// error, so the caller sees contention, not a slow backend (#51). A first
+// read cut short is only the context's error.
+func TestMutateReportsTheConflictWhenARetryRunsOutOfTime(t *testing.T) {
+	recordSleeps(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	b := &ctxReads{conflicting: conflicting{t: t, conflicts: -1, onUpdate: cancel}}
+	_, err := Mutate(ctx, b, "g", func(*iam.Group) error { return nil })
+	if !errors.Is(err, ErrConflict) || !errors.Is(err, context.Canceled) || b.updates != 1 {
+		t.Fatalf("err = %v after %d updates, want the conflict and context.Canceled after 1", err, b.updates)
+	}
+
+	b = &ctxReads{conflicting: conflicting{t: t, conflicts: -1}}
+	_, err = Mutate(ctx, b, "g", func(*iam.Group) error { return nil })
+	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrConflict) || b.updates != 0 {
+		t.Fatalf("first read on a done context: %v after %d updates", err, b.updates)
+	}
+}
+
+// ctxReads fails a Get once ctx is done, as a real backend does.
+type ctxReads struct{ conflicting }
+
+func (c *ctxReads) Get(ctx context.Context, k iam.Kind, key string) (Entry, error) {
+	if err := ctx.Err(); err != nil {
+		return Entry{}, err
+	}
+	return c.conflicting.Get(ctx, k, key)
+}

@@ -322,13 +322,14 @@ func conflictDelay(n int) time.Duration {
 // version conflict so a lost race reapplies fn to fresh state. Retries
 // back off with jitter, so racing writers spread out instead of colliding
 // again at once; a context done while waiting stops it with the conflict
-// and the context's cause.
+// and the context's cause, as does a context that ends while a retry
+// reads or writes.
 func Mutate[T iam.Object](ctx context.Context, b Backend, key string, fn func(*T) error) (T, error) {
 	for attempt := 0; ; attempt++ {
 		cur, err := Get[T](ctx, b, key)
 		if err != nil {
 			var zero T
-			return zero, err
+			return zero, lostRace(ctx, attempt, err)
 		}
 		if err := fn(&cur.Object); err != nil {
 			var zero T
@@ -336,10 +337,19 @@ func Mutate[T iam.Object](ctx context.Context, b Backend, key string, fn func(*T
 		}
 		_, err = Update(ctx, b, cur.Object, cur.Version)
 		if !errors.Is(err, ErrConflict) || attempt == mutateRetries {
-			return cur.Object, err
+			return cur.Object, lostRace(ctx, attempt, err)
 		}
 		if werr := sleep(ctx, conflictDelay(attempt)); werr != nil {
 			return cur.Object, fmt.Errorf("%w (stopped retrying: %w)", err, werr)
 		}
 	}
+}
+
+// lostRace adds ErrConflict to err from a retry cut short by ctx: the
+// call ran out of time because it lost a race, not because it was slow.
+func lostRace(ctx context.Context, attempt int, err error) error {
+	if attempt == 0 || err == nil || ctx.Err() == nil || errors.Is(err, ErrConflict) {
+		return err
+	}
+	return fmt.Errorf("%w (stopped retrying: %w)", ErrConflict, err)
 }
