@@ -149,10 +149,16 @@ func (r SAMLRoleSession) String() string {
 // sts:AssumeRoleWithSAML (and sts:SetSourceIdentity with a SourceIdentity
 // attribute) for the provider with the SAML:* keys of the assertion,
 // including its mapped attributes (samlContextAttrs). Session policies narrow the session. Nothing is stored.
-func (s *Service) AssumeRoleWithSAML(ctx context.Context, req SAMLRequest) (_ SAMLRoleSession, err error) {
+func (s *Service) AssumeRoleWithSAML(
+	ctx context.Context, req SAMLRequest, opts ...IssueOption,
+) (_ SAMLRoleSession, err error) {
 	ctx, end := start(ctx, "AssumeRoleWithSAML")
 	defer end(&err)
 	packed, err := validateSAMLRequest(req)
+	if err != nil {
+		return SAMLRoleSession{}, err
+	}
+	o, err := issueOpts(opts)
 	if err != nil {
 		return SAMLRoleSession{}, err
 	}
@@ -247,7 +253,7 @@ func (s *Service) AssumeRoleWithSAML(ctx context.Context, req SAMLRequest) (_ SA
 		// AWS keeps these three keys for later requests and AssumeRole
 		// calls of the session (cross-service SAML context keys).
 		SAML: &SAMLIdentity{Subject: cl.subject, SubjectType: cl.subjectType, NameQualifier: nameQualifier},
-	}, d, cl.sessionNotOnOrAfter) // SessionNotOnOrAfter stays an absolute cap
+	}, d, cl.sessionNotOnOrAfter, o) // SessionNotOnOrAfter stays an absolute cap
 	if err != nil {
 		return SAMLRoleSession{}, fmt.Errorf("assume role with saml: %w", err)
 	}
