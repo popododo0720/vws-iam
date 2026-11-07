@@ -212,7 +212,6 @@ func TestOtherNamesStayAt64(t *testing.T) {
 			iam.Role{Name: n64, AssumeRolePolicy: trust, MaxSessionDuration: time.Hour},
 			iam.Role{Name: n65, AssumeRolePolicy: trust, MaxSessionDuration: time.Hour},
 		},
-		{"mfa device", iam.MfaDevice{Name: n64, Seed: seal}, iam.MfaDevice{Name: n65, Seed: seal}},
 		{
 			"access key",
 			iam.AccessKey{ID: keyID, UserName: n64, Status: iam.KeyActive, Secret: seal},
@@ -236,6 +235,45 @@ func TestOtherNamesStayAt64(t *testing.T) {
 		if err := tc.bad.Validate(); !errors.Is(err, iam.ErrInvalid) {
 			t.Errorf("%s of 65: %v", tc.name, err)
 		}
+	}
+}
+
+// TestMFADeviceNameLength: a virtual MFA device name is 1 to 175
+// characters of the IAM name alphabet, the longest whose root-path serial
+// in a 63-character project is the AWS SerialNumber maximum of 256 (#179).
+func TestMFADeviceNameLength(t *testing.T) {
+	if iam.MaxMFADeviceNameLen != 175 {
+		t.Fatalf("MaxMFADeviceNameLen %d, want 175", iam.MaxMFADeviceNameLen)
+	}
+	seal := iam.Sealed{KeyID: "kek-1", Ciphertext: []byte{1, 2, 3}}
+	ok := []string{"a", strings.Repeat("m", 64), strings.Repeat("m", 65), strings.Repeat("m", 175), "A.z+9=,_@-"}
+	for _, name := range ok {
+		if err := (iam.MfaDevice{Name: name, Seed: seal}).Validate(); err != nil {
+			t.Errorf("mfa device name of %d characters: %v", len(name), err)
+		}
+		if !iam.ValidMFADeviceName(name) {
+			t.Errorf("ValidMFADeviceName(%d characters) = false", len(name))
+		}
+	}
+	for _, name := range []string{strings.Repeat("m", 176), "", "bad name", "a/b", "a:b", strings.Repeat("\u00e9", 4)} {
+		err := (iam.MfaDevice{Name: name, Seed: seal}).Validate()
+		want := `invalid: mfa device name "` + name + `"`
+		if err == nil || err.Error() != want || !errors.Is(err, iam.ErrInvalid) {
+			t.Errorf("mfa device name %q: %v, want %s", name, err, want)
+		}
+	}
+
+	project := strings.Repeat("p", 63)
+	longest := strings.Repeat("M", 175)
+	serial := iam.MfaDeviceARN(project, iam.MfaDevice{Name: longest})
+	if len(serial) != iam.MaxSerialNumberLen {
+		t.Fatalf("longest serial has %d characters, want %d", len(serial), iam.MaxSerialNumberLen)
+	}
+	if name, path, ok := iam.SplitMfaDeviceARN(project, serial); !ok || name != longest || path != "/" {
+		t.Fatalf("split longest serial: %q %q %v", name, path, ok)
+	}
+	if _, _, ok := iam.SplitMfaDeviceARN(project, serial+"M"); ok {
+		t.Fatal("split a serial whose name is 176 characters")
 	}
 }
 

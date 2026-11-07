@@ -5,6 +5,9 @@ import (
 	"time"
 )
 
+// maxProjectLen is the longest project id projectRE matches.
+const maxProjectLen = 63
+
 var projectRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // ValidProject reports whether s is a project id (the account).

@@ -318,6 +318,44 @@ func Run(t *testing.T, open func(t *testing.T) store.Backend) {
 			t.Fatalf("get deleted group: %v", err)
 		}
 	})
+	t.Run("MFADeviceNameLongestRoundTrip", func(t *testing.T) {
+		b := open(t)
+		ctx := context.Background()
+		n := iam.MaxMFADeviceNameLen
+		name := strings.Repeat("M", n)
+		d := iam.MfaDevice{Name: name, Seed: iam.Sealed{KeyID: "kek-1", Ciphertext: []byte{1}}}
+		if _, err := store.Create(ctx, b, d); err != nil {
+			t.Fatalf("create %d-character mfa device: %v", n, err)
+		}
+		got, err := store.Get[iam.MfaDevice](ctx, b, strings.Repeat("m", n))
+		if err != nil {
+			t.Fatalf("get folded name: %v", err)
+		}
+		if got.Object.Name != name {
+			t.Fatalf("name %q", got.Object.Name)
+		}
+		if _, err := store.Create(ctx, b, d); !errors.Is(err, store.ErrExists) {
+			t.Fatalf("second create: %v", err)
+		}
+		long := d
+		long.Name = strings.Repeat("M", n+1)
+		if _, err := store.Create(ctx, b, long); !errors.Is(err, iam.ErrInvalid) {
+			t.Fatalf("create %d-character mfa device: %v", n+1, err)
+		}
+		all, err := store.List[iam.MfaDevice](ctx, b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(all) != 1 || all[0].Object.Name != name {
+			t.Fatalf("list %d mfa devices", len(all))
+		}
+		if err := store.Delete[iam.MfaDevice](ctx, b, strings.Repeat("m", n), got.Version); err != nil {
+			t.Fatalf("delete %d-character mfa device: %v", n, err)
+		}
+		if _, err := store.Get[iam.MfaDevice](ctx, b, name); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("get deleted mfa device: %v", err)
+		}
+	})
 	t.Run("PolicyName128RoundTrip", func(t *testing.T) {
 		b := open(t)
 		ctx := context.Background()

@@ -58,7 +58,7 @@ func SplitMfaDeviceARN(account, serial string) (name, path string, ok bool) {
 	}
 	i := strings.LastIndexByte(rest, '/')
 	name = rest[i+1:]
-	if !ValidName(name) {
+	if !ValidMFADeviceName(name) {
 		return "", "", false
 	}
 	return name, rest[:i+1], true
