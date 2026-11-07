@@ -52,7 +52,8 @@ func viewSAMLProvider(account string, sp iam.SAMLProvider) (samlProviderView, er
 
 // samlProviderName returns the provider name a SAMLProviderArn of project
 // pid names. An ARN outside 20 to 2048 characters is ValidationError; one
-// that is not a SAML provider ARN is InvalidInput; one of another account
+// that is not a SAML provider ARN (an account that is not a project id
+// included) is InvalidInput; one of another account
 // is NoSuchEntity (missing), as a provider of another project is not
 // visible here.
 func samlProviderName(pid, arn string, missing error) (string, error) {
@@ -62,7 +63,7 @@ func samlProviderName(pid, arn string, missing error) (string, error) {
 	}
 	rest, ok := strings.CutPrefix(arn, "arn:"+iam.Partition+":iam::")
 	account, name, cut := strings.Cut(rest, ":saml-provider/")
-	if !ok || !cut || account == "" || strings.Contains(account, ":") || !iam.ValidSAMLProviderName(name) {
+	if !ok || !cut || !iam.ValidProject(account) || !iam.ValidSAMLProviderName(name) {
 		return "", invalidInput("samlProviderArn " + quote(arn) + " is not a SAML provider ARN")
 	}
 	if account != pid {

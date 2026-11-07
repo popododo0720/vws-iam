@@ -338,6 +338,7 @@ func TestSAMLProviderARNErrors(t *testing.T) {
 		{"other partition", proj, "arn:aws" + samlIdpARN[len("arn:vws"):], codes.InvalidArgument, "InvalidInput", down},
 		{"no account", proj, "arn:vws:iam:::saml-provider/corp", codes.InvalidArgument, "InvalidInput", down},
 		{"colon in account", proj, "arn:vws:iam::a:b:saml-provider/corp", codes.InvalidArgument, "InvalidInput", down},
+		{"bad account", proj, "arn:vws:iam::bad account:saml-provider/corp", codes.InvalidArgument, "InvalidInput", down},
 		{"bad name", proj, samlARN(proj, "corp/x"), codes.InvalidArgument, "InvalidInput", down},
 		{"name of 129", proj, samlARN(proj, strings.Repeat("a", 129)), codes.InvalidArgument, "InvalidInput", down},
 		{"no name", proj, samlARN(proj, ""), codes.InvalidArgument, "InvalidInput", down},
