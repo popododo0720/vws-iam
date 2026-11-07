@@ -89,12 +89,12 @@ func (s *Server) samlProviderArg(pid, arn string, missing error) (project, strin
 // readSAMLProvider reads the provider arn names in project p. The store
 // finds a name in any case, but the ARN must carry the name as stored, as
 // AssumeRoleWithSAML requires (sts.WithStoredSAML): an ARN differing only
-// in case is NoSuchEntity (missing).
+// in case is NoSuchEntity (missing), as is a pending provider.
 func readSAMLProvider(
 	ctx context.Context, p project, name string, missing error,
 ) (store.Versioned[iam.SAMLProvider], error) {
 	cur, err := store.Get[iam.SAMLProvider](ctx, p.b, name)
-	if errors.Is(err, store.ErrNotFound) || (err == nil && cur.Object.Name != name) {
+	if errors.Is(err, store.ErrNotFound) || (err == nil && (cur.Object.Name != name || cur.Object.Pending)) {
 		return store.Versioned[iam.SAMLProvider]{}, missing
 	}
 	if err != nil {
@@ -141,7 +141,8 @@ func (s *Server) getSAMLProvider(ctx context.Context, pid, arn string) (samlProv
 
 // listSAMLProviders is IAM ListSAMLProviders: every SAML provider of
 // project pid with its ARN, validUntil and creation time, ordered by
-// case-folded name. AWS pages nothing here, so neither does this.
+// case-folded name, pending ones left out. AWS pages nothing here, so
+// neither does this.
 //
 // A bad project id is ValidationError before any store access. No
 // provider is an empty list. A stored document that no longer parses, or a
@@ -164,6 +165,9 @@ func (s *Server) listSAMLProviders(ctx context.Context, pid string) ([]samlProvi
 	})
 	out := make([]samlProviderEntry, 0, len(all))
 	for _, cur := range all {
+		if cur.Object.Pending {
+			continue
+		}
 		v, err := viewSAMLProvider(p.id, cur.Object)
 		if err != nil {
 			return nil, toStatus(ctx, err)
@@ -360,10 +364,13 @@ func samlProviderInvalid(err error, document string) error {
 // characters. A name that is taken, in any case, is EntityAlreadyExists
 // and the stored provider stays: the create is one store create, so of
 // racing requests on any replica exactly one makes the provider, and a
-// retry after a lost response is EntityAlreadyExists, as in AWS. A request
-// that was canceled or whose deadline passed writes nothing. A store
-// failure is InternalFailure. The SAMLProvidersPerAccount quota is not
-// enforced yet. Authorization (iam:CreateSAMLProvider) is console-api's.
+// retry after a lost response is EntityAlreadyExists, as in AWS. A project
+// that already has iam.MaxSAMLProvidersPerAccount providers is
+// LimitExceeded and nothing is stored; the count and the commit run under
+// the project's quota lock (storeSAMLProvider), so racing creates on any
+// replica never pass it. A request that was canceled or whose deadline
+// passed writes nothing. A store failure is InternalFailure.
+// Authorization (iam:CreateSAMLProvider) is console-api's.
 //
 // TODO(#196): serve this as an RPC once vws-proto carries CreateSAMLProvider.
 func (s *Server) createSAMLProvider(
@@ -403,11 +410,7 @@ func (s *Server) createSAMLProvider(
 		return samlProviderView{}, toStatus(ctx, err) // the caller is gone; write nothing
 	}
 	p := s.project(pid)
-	_, err := store.Create(ctx, p.b, sp)
-	if errors.Is(err, store.ErrExists) {
-		return samlProviderView{}, alreadyExists("Provider with name " + name + " already exists.")
-	}
-	if err != nil {
+	if err := p.storeSAMLProvider(ctx, sp); err != nil {
 		return samlProviderView{}, toStatus(ctx, err)
 	}
 	v, err := viewSAMLProvider(p.id, sp)
