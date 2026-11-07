@@ -164,8 +164,11 @@ func (p project) createKeyLocked(
 	}
 	dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	// An activation whose outcome was lost may have committed.
-	if k, gerr := store.Get[iam.AccessKey](dctx, p.b, cred.AccessKeyID); gerr == nil && k.Object.Status == iam.KeyActive {
+	// An activation whose outcome was lost may have committed. Only a
+	// pending key is uncommitted: once active, an UpdateAccessKey may have
+	// made it Inactive before this read (#165), and it is still the key
+	// this create made.
+	if k, gerr := store.Get[iam.AccessKey](dctx, p.b, cred.AccessKeyID); gerr == nil && k.Object.Status != iam.KeyPending {
 		return cred, nil
 	} else if gerr == nil {
 		version = k.Version
