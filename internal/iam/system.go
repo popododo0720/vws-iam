@@ -2,6 +2,7 @@ package iam
 
 import (
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -15,15 +16,24 @@ func ValidProject(s string) bool { return projectRE.MatchString(s) }
 
 // KeyIndex maps a globally unique access key id to its project, so
 // Authenticate can find a key from the id alone. It is not project-scoped.
+//
+// Expires is set only on the entry of a temporary (ASIA) key of an STS
+// session (#188), which is not stored itself: the entry is the only record
+// of the key, kept so GetAccessKeyInfo can name its project, and is
+// garbage-collected after Expires. A long-term key's entry has none.
 type KeyIndex struct {
-	ID      string `json:"id"`
-	Project string `json:"project"`
+	ID      string    `json:"id"`
+	Project string    `json:"project"`
+	Expires time.Time `json:"expires,omitzero"`
 }
+
+// Session reports whether k is the entry of an STS session key.
+func (k KeyIndex) Session() bool { return !k.Expires.IsZero() }
 
 func (KeyIndex) Kind() Kind    { return KindKeyIndex }
 func (k KeyIndex) Key() string { return k.ID }
 func (k KeyIndex) Validate() error {
-	if !accessKeyRE.MatchString(k.ID) || !ValidProject(k.Project) {
+	if !accessKeyRE.MatchString(k.ID) || !ValidProject(k.Project) || (k.Session() && !strings.HasPrefix(k.ID, "ASIA")) {
 		return invalid("key index %q -> %q", k.ID, k.Project)
 	}
 	return nil

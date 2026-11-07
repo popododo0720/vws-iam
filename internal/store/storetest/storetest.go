@@ -356,6 +356,19 @@ func Run(t *testing.T, open func(t *testing.T) store.Backend) {
 			t.Fatalf("get deleted mfa device: %v", err)
 		}
 	})
+	t.Run("SessionKeyIndexRoundTrip", func(t *testing.T) {
+		b := open(t)
+		exp := time.Date(2026, 10, 14, 1, 0, 0, 0, time.UTC)
+		k := iam.KeyIndex{ID: "ASIAABCDEFGHIJKLMNOP", Project: "proj-a", Expires: exp}
+		c := k
+		c.Expires = exp.Add(time.Hour)
+		roundTrip(t, b, k, c)
+		bad := iam.KeyIndex{ID: "AKIAABCDEFGHIJKLMNOP", Project: "proj-a", Expires: exp}
+		if _, err := store.Create(context.Background(), b, bad); !errors.Is(err, iam.ErrInvalid) {
+			t.Fatalf("long-term key entry with an expiry: %v", err)
+		}
+	})
+
 	t.Run("PolicyName128RoundTrip", func(t *testing.T) {
 		b := open(t)
 		ctx := context.Background()

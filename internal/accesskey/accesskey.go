@@ -68,16 +68,26 @@ func ProjectOf(ctx context.Context, index store.Backend, id string) (string, err
 	return x.Object.Project, nil
 }
 
-// AccountOf returns the project that owns the long-term key id, of any
-// project, for STS GetAccessKeyInfo. It reads the key id -> project
-// index, then the key itself, so an index entry left by a crash or a
-// key that is still pending (never handed out) is store.ErrNotFound, as is
-// an unknown or deleted key. Active and inactive keys are both answered:
-// the key's state is not reported (AWS semantics).
-func AccountOf(ctx context.Context, index store.Backend, id string) (string, error) {
-	pid, err := ProjectOf(ctx, index, id)
+// AccountOf returns the project that owns the key id, of any project,
+// for STS GetAccessKeyInfo. It reads the key id -> project index. For a
+// long-term key it then reads the key itself, so an index entry left by a
+// crash or a key that is still pending (never handed out) is
+// store.ErrNotFound, as is an unknown or deleted key. Active and inactive
+// keys are both answered: the key's state is not reported (AWS
+// semantics). A temporary key of an STS session has only its index entry
+// (#188), which answers until the session expires at now, whether or not
+// the session was revoked.
+func AccountOf(ctx context.Context, index store.Backend, id string, now time.Time) (string, error) {
+	x, err := store.Get[iam.KeyIndex](ctx, index, id)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("access key index %s: %w", id, err)
+	}
+	pid := x.Object.Project
+	if x.Object.Session() {
+		if now.After(x.Object.Expires) {
+			return "", fmt.Errorf("session key expired: %w", store.ErrNotFound)
+		}
+		return pid, nil
 	}
 	k, err := store.Get[iam.AccessKey](ctx, store.Scoped(index, pid), id)
 	if err != nil {

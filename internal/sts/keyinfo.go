@@ -41,10 +41,9 @@ func WithKeyIndex(index store.Backend) Option { return func(s *Service) { s.inde
 // key may belong to any project, and its state (active or inactive) is
 // not reported, as in AWS. The permission is checked before the key is
 // looked up, so a caller without it learns nothing about the key. It only
-// reads, so a repeat returns the same account.
-//
-// Temporary (ASIA) key ids are not stored, so they are ErrNoSuchAccessKey
-// for now (popododo0720/vws-iam#188).
+// reads, so a repeat returns the same account. A temporary (ASIA) key id
+// of a session this service issued is answered until the session expires
+// (#188).
 func (s *Service) GetAccessKeyInfo(
 	ctx context.Context, c Caller, reqCtx map[string][]string, accessKeyID string,
 ) (_ string, err error) {
@@ -70,7 +69,7 @@ func (s *Service) GetAccessKeyInfo(
 	if s.index == nil {
 		return "", errors.New("get access key info: no key index")
 	}
-	pid, err := accesskey.AccountOf(ctx, s.index, accessKeyID)
+	pid, err := accesskey.AccountOf(ctx, s.index, accessKeyID, s.now())
 	if errors.Is(err, store.ErrNotFound) {
 		return "", fmt.Errorf("%w: the access key id does not exist", ErrNoSuchAccessKey)
 	}

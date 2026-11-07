@@ -31,14 +31,22 @@ var skews = []time.Duration{-time.Hour, -10 * time.Minute, -time.Second, 0, time
 // TestRevokeWithSkewedClocksMemstore runs the #46 suite on one shared
 // in-memory backend.
 func TestRevokeWithSkewedClocksMemstore(t *testing.T) {
-	testRevokeSkew(t, func(*testing.T) store.Backend { return memstore.New() })
+	testRevokeSkew(t, func(testing.TB) store.Backend { return memstore.New() })
 }
 
 // TestRevokeWithSkewedClocksOnAPIServer runs it on kubestore against a
 // real kube-apiserver with deploy/crds. It skips without KUBEBUILDER_ASSETS.
 func TestRevokeWithSkewedClocksOnAPIServer(t *testing.T) {
+	testRevokeSkew(t, apiServer(t))
+}
+
+// apiServer starts a kube-apiserver with deploy/crds and returns a
+// constructor of kubestores on it, each in a new namespace. It skips tb
+// without KUBEBUILDER_ASSETS.
+func apiServer(tb testing.TB) func(testing.TB) store.Backend {
+	tb.Helper()
 	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
-		t.Skip("KUBEBUILDER_ASSETS is not set")
+		tb.Skip("KUBEBUILDER_ASSETS is not set")
 	}
 	te := &envtest.Environment{
 		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "deploy", "crds")},
@@ -46,24 +54,24 @@ func TestRevokeWithSkewedClocksOnAPIServer(t *testing.T) {
 	}
 	cfg, err := te.Start()
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
-	t.Cleanup(func() {
+	tb.Cleanup(func() {
 		if err := te.Stop(); err != nil {
-			t.Error(err)
+			tb.Error(err)
 		}
 	})
 	c, err := client.New(cfg, client.Options{})
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
-	testRevokeSkew(t, func(t *testing.T) store.Backend {
+	return func(tb testing.TB) store.Backend {
 		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{GenerateName: "vws-iam-"}}
 		if err := c.Create(context.Background(), ns); err != nil {
-			t.Fatal(err)
+			tb.Fatal(err)
 		}
 		return kubestore.New(c, ns.Name)
-	})
+	}
 }
 
 type replica struct {
@@ -71,7 +79,7 @@ type replica struct {
 	svc *sts.Service
 }
 
-func testRevokeSkew(t *testing.T, backend func(*testing.T) store.Backend) {
+func testRevokeSkew(t *testing.T, backend func(testing.TB) store.Backend) {
 	for _, d := range skews {
 		t.Run("revoker"+d.String(), func(t *testing.T) {
 			ctx := t.Context()

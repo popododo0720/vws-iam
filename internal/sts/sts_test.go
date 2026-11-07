@@ -34,7 +34,7 @@ type env struct {
 	keys    *secret.Keyring
 }
 
-func put[T iam.Object](t *testing.T, b store.Backend, o T) {
+func put[T iam.Object](t testing.TB, b store.Backend, o T) {
 	if _, err := store.Create(context.Background(), b, o); err != nil {
 		t.Fatal(err)
 	}

@@ -646,16 +646,12 @@ func (s *Service) issueBy(ctx context.Context, sess session, d time.Duration, no
 		return Credentials{}, err
 	}
 	sess.RevokeGen = &gen
-	id, err := accesskey.NewKeyID("ASIA")
-	if err != nil {
-		return Credentials{}, err
-	}
 	sec, err := accesskey.NewSecret()
 	if err != nil {
 		return Credentials{}, err
 	}
 	now := s.now().UTC()
-	sess.AccessKeyID, sess.Secret, sess.IssuedAt, sess.Project = id, sec, now, s.account
+	sess.Secret, sess.IssuedAt, sess.Project = sec, now, s.account
 	if sess.AuthTime.IsZero() {
 		sess.AuthTime = now.Truncate(time.Second)
 	}
@@ -667,16 +663,52 @@ func (s *Service) issueBy(ctx context.Context, sess session, d time.Duration, no
 	if !sess.Expires.After(now) {
 		return Credentials{}, fmt.Errorf("%w: the session would end before it starts", ErrExpired)
 	}
-	b, err := json.Marshal(sess)
-	if err != nil {
-		return Credentials{}, fmt.Errorf("session: %w", err)
+	for range maxKeyIDAttempts {
+		id, err := accesskey.NewKeyID("ASIA")
+		if err != nil {
+			return Credentials{}, err
+		}
+		sess.AccessKeyID = id
+		b, err := json.Marshal(sess)
+		if err != nil {
+			return Credentials{}, fmt.Errorf("session: %w", err)
+		}
+		sealed, err := s.keys.Seal(b, tokenAAD+"/"+id)
+		if err != nil {
+			return Credentials{}, err
+		}
+		err = s.indexKey(ctx, id, sess.Expires)
+		if errors.Is(err, store.ErrExists) {
+			continue
+		}
+		if err != nil {
+			return Credentials{}, err
+		}
+		token := sealed.KeyID + "." + base64.RawURLEncoding.EncodeToString(sealed.Ciphertext)
+		return Credentials{AccessKeyID: id, Secret: sec, SessionToken: token, Expiration: sess.Expires}, nil
 	}
-	sealed, err := s.keys.Seal(b, tokenAAD+"/"+id)
-	if err != nil {
-		return Credentials{}, err
+	return Credentials{}, fmt.Errorf("session key index: %d key ids taken: %w", maxKeyIDAttempts, store.ErrExists)
+}
+
+// maxKeyIDAttempts bounds the fresh ASIA ids issueBy tries. A random id is
+// taken only after a create whose success was not seen, or by chance.
+const maxKeyIDAttempts = 3
+
+// indexKey records the project of a session's temporary key id until the
+// session expires, so GetAccessKeyInfo can answer it on every replica and
+// after a restart (#188). The entry holds no secret or token. It is the
+// last step of issuing, so no credentials are handed out without it; an
+// entry whose create failed with an unknown outcome names a key no one
+// holds and is collected after it expires. Without a key index there is
+// nothing to record (GetAccessKeyInfo then fails closed).
+func (s *Service) indexKey(ctx context.Context, id string, expires time.Time) error {
+	if s.index == nil {
+		return nil
 	}
-	token := sealed.KeyID + "." + base64.RawURLEncoding.EncodeToString(sealed.Ciphertext)
-	return Credentials{AccessKeyID: id, Secret: sec, SessionToken: token, Expiration: sess.Expires}, nil
+	if _, err := store.Create(ctx, s.index, iam.KeyIndex{ID: id, Project: s.account, Expires: expires}); err != nil {
+		return fmt.Errorf("session key index: %w", err)
+	}
+	return nil
 }
 
 // SessionProject opens a session token only to read the project that

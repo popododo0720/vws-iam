@@ -32,8 +32,11 @@ type keyInfoEnv struct {
 	caller sts.Caller
 }
 
-// keyInfoSetup builds the projects; its svc has no key index.
-func keyInfoSetup(t *testing.T) keyInfoEnv {
+// keyInfoSetup builds the projects on memstore; its svc has no key index.
+func keyInfoSetup(t testing.TB) keyInfoEnv { return keyInfoSetupOn(t, memstore.New()) }
+
+// keyInfoSetupOn is keyInfoSetup on root.
+func keyInfoSetupOn(t testing.TB, root store.Backend) keyInfoEnv {
 	t.Helper()
 	k := make([]byte, 32)
 	if _, err := rand.Read(k); err != nil {
@@ -43,7 +46,6 @@ func keyInfoSetup(t *testing.T) keyInfoEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root := memstore.New()
 	clk := &clock{t: time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC)}
 	b := store.Scoped(root, acct)
 	ob := store.Scoped(root, "other")
@@ -65,7 +67,7 @@ func keyInfoSetup(t *testing.T) keyInfoEnv {
 	return e
 }
 
-func (e keyInfoEnv) resolve(t *testing.T, user string) sts.Caller {
+func (e keyInfoEnv) resolve(t testing.TB, user string) sts.Caller {
 	t.Helper()
 	cred, err := e.own.Create(context.Background(), user)
 	if err != nil {
@@ -120,7 +122,7 @@ func (e keyInfoEnv) indexed() *sts.Service {
 }
 
 // TestGetAccessKeyInfoNoSuchKey: an unknown, deleted, pending, orphaned
-// (index entry without its key) or temporary key id is
+// (index entry without its key) or never issued temporary key id is
 // InvalidClientTokenId, never an account.
 func TestGetAccessKeyInfoNoSuchKey(t *testing.T) {
 	e := keyInfoSetup(t)
@@ -209,5 +211,121 @@ func TestGetAccessKeyInfoWithoutIndexFailsClosed(t *testing.T) {
 	got, err := e.svc.GetAccessKeyInfo(context.Background(), e.caller, nil, id)
 	if err == nil || got != "" || errors.Is(err, sts.ErrNoSuchAccessKey) {
 		t.Fatalf("no index: %q, %v", got, err)
+	}
+}
+
+// sessionKeys issues an AssumeRole and a GetSessionToken session in the
+// caller's project through svc, which writes the key index.
+func (e keyInfoEnv) sessionKeys(t testing.TB, svc *sts.Service) []sts.Credentials {
+	t.Helper()
+	ctx := context.Background()
+	b := store.Scoped(e.root, acct)
+	put(t, b, iam.User{Name: "deployer", ID: "13", InlinePolicies: map[string]string{"assume": assumeAny}})
+	put(t, b, iam.Role{
+		Name: "ops", ID: "14",
+		AssumeRolePolicy: `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Principal":{"AWS":"arn:vws:iam::` +
+			acct + `:user/deployer"},"Action":"sts:AssumeRole"}}`,
+	})
+	c := e.resolve(t, "deployer")
+	ar, err := svc.AssumeRole(ctx, c, nil, "arn:vws:iam::"+acct+":role/ops", "s1", 15*time.Minute,
+		sts.SessionPolicies{}, sts.MFA{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := svc.GetSessionToken(ctx, c, time.Hour, sts.MFA{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []sts.Credentials{ar, st}
+}
+
+// TestGetAccessKeyInfoSessionKeys: the ASIA key id of an AssumeRole or
+// GetSessionToken session is answered with its project, by a restarted
+// service too, until the session expires (#188). The index entry holds
+// only the key id, project and expiry, never the secret or token.
+func TestGetAccessKeyInfoSessionKeys(t *testing.T) {
+	testSessionKeys(t, keyInfoSetup(t))
+}
+
+// TestGetAccessKeyInfoSessionKeysOnAPIServer is the same on kubestore
+// against a real kube-apiserver.
+func TestGetAccessKeyInfoSessionKeysOnAPIServer(t *testing.T) {
+	testSessionKeys(t, keyInfoSetupOn(t, apiServer(t)(t)))
+}
+
+func testSessionKeys(t *testing.T, e keyInfoEnv) {
+	ctx := context.Background()
+	svc := e.indexed()
+	creds := e.sessionKeys(t, svc)
+	for _, c := range creds {
+		if !strings.HasPrefix(c.AccessKeyID, "ASIA") {
+			t.Fatalf("session key id %s", c.AccessKeyID)
+		}
+		for _, s := range []*sts.Service{svc, e.indexed()} {
+			if got, err := s.GetAccessKeyInfo(ctx, e.caller, nil, c.AccessKeyID); err != nil || got != acct {
+				t.Fatalf("GetAccessKeyInfo(%s) = %q, %v; want %q", c.AccessKeyID, got, err, acct)
+			}
+		}
+		x, err := store.Get[iam.KeyIndex](ctx, e.root, c.AccessKeyID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := (iam.KeyIndex{ID: c.AccessKeyID, Project: acct, Expires: c.Expiration}); x.Object != want {
+			t.Fatalf("index entry %+v; want %+v", x.Object, want)
+		}
+		raw, err := e.root.Get(ctx, iam.KindKeyIndex, c.AccessKeyID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s := string(raw.Spec); strings.Contains(s, c.Secret) || strings.Contains(s, c.SessionToken) {
+			t.Fatalf("index entry holds session material: %s", s)
+		}
+	}
+	// The AssumeRole session (15 minutes) has expired; the GetSessionToken
+	// one (1 hour) has not.
+	e.clk.t = e.clk.t.Add(15*time.Minute + time.Second)
+	got, err := svc.GetAccessKeyInfo(ctx, e.caller, nil, creds[0].AccessKeyID)
+	if !errors.Is(err, sts.ErrNoSuchAccessKey) {
+		t.Fatalf("expired session: %q, %v; want ErrNoSuchAccessKey", got, err)
+	}
+	if got, err := svc.GetAccessKeyInfo(ctx, e.caller, nil, creds[1].AccessKeyID); err != nil || got != acct {
+		t.Fatalf("live session: %q, %v", got, err)
+	}
+}
+
+// failIndex fails every KeyIndex create with err.
+type failIndex struct {
+	store.Backend
+	err   error
+	tries int
+}
+
+func (f *failIndex) Create(ctx context.Context, kind iam.Kind, key string, spec []byte) (string, error) {
+	if kind == iam.KindKeyIndex {
+		f.tries++
+		return "", f.err
+	}
+	return f.Backend.Create(ctx, kind, key, spec)
+}
+
+// TestSessionKeyIndexFailureIssuesNothing: when the index entry cannot be
+// written, no credentials are handed out; a key id that is taken is tried
+// again with a fresh id, a bounded number of times.
+func TestSessionKeyIndexFailureIssuesNothing(t *testing.T) {
+	for name, cause := range map[string]error{"unavailable": store.ErrUnavailable, "taken": store.ErrExists} {
+		t.Run(name, func(t *testing.T) {
+			e := keyInfoSetup(t)
+			ctx := context.Background()
+			fi := &failIndex{Backend: e.root, err: cause}
+			b := store.Scoped(e.root, acct)
+			svc := sts.New(b, e.keys, authz.New(b, acct, e.clk.now), acct, e.clk.now, sts.WithKeyIndex(fi))
+			got, err := svc.GetSessionToken(ctx, e.resolve(t, "nobody"), time.Hour, sts.MFA{})
+			if !errors.Is(err, cause) || got != (sts.Credentials{}) {
+				t.Fatalf("GetSessionToken = %+v, %v; want %v and no credentials", got, err, cause)
+			}
+			if want := map[string]int{"unavailable": 1, "taken": 3}[name]; fi.tries != want {
+				t.Fatalf("%d index creates; want %d", fi.tries, want)
+			}
+		})
 	}
 }
