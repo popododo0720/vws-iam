@@ -324,3 +324,101 @@ func TestAccessKeyCreateRetriesFailedSweep(t *testing.T) {
 		})
 	}
 }
+
+// deactivateOnActivate commits the first activation of an access key,
+// lets a concurrent UpdateAccessKey make the key Inactive, and then loses
+// the activation's reply (store.ErrUnavailable).
+type deactivateOnActivate struct {
+	store.Backend
+	once sync.Once
+	t    *testing.T
+	e    *env
+	id   string
+}
+
+func (d *deactivateOnActivate) UpdateIf(
+	ctx context.Context, kind iam.Kind, key string, spec []byte, version string, pre store.Pre,
+) (string, error) {
+	v, err := d.Backend.UpdateIf(ctx, kind, key, spec, version, pre)
+	if err != nil || kind != iam.KindAccessKey {
+		return v, err
+	}
+	id := key[strings.LastIndex(key, "/")+1:]
+	k, gerr := store.Get[iam.AccessKey](ctx, store.Scoped(d.Backend, proj), id)
+	if gerr != nil || k.Object.Status != iam.KeyActive {
+		return v, err
+	}
+	lost := false
+	d.once.Do(func() {
+		lost, d.id = true, id
+		_, uerr := d.e.keys.UpdateAccessKey(ctx, &iamv1.UpdateAccessKeyRequest{AccessKey: &iamv1.AccessKey{
+			Name: userName(k.Object.UserName) + "/accessKeys/" + id,
+			Spec: &iamv1.AccessKeySpec{State: iamv1.AccessKeyState_ACCESS_KEY_STATE_INACTIVE},
+		}})
+		if uerr != nil {
+			d.t.Errorf("concurrent UpdateAccessKey: %v", uerr)
+		}
+	})
+	if lost {
+		return "", store.ErrUnavailable
+	}
+	return v, err
+}
+
+// TestAccessKeyCreateLostReplyKeepsInactiveKey: an activation that
+// committed and whose reply was lost, with the key made Inactive before
+// the create looks again, is committed. The create returns that key, keeps
+// it Inactive and makes no replacement (#165), with or without user_etag,
+// on memstore and kubestore. A second key is then allowed and a third is
+// LimitExceeded.
+func TestAccessKeyCreateLostReplyKeepsInactiveKey(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		backend  func() store.Backend
+		withEtag bool
+	}{
+		{"memstore/lock", func() store.Backend { return memstore.New() }, false},
+		{"memstore/user_etag", func() store.Backend { return memstore.New() }, true},
+		{"kubestore/lock", fakeKube, false},
+		{"kubestore/user_etag", fakeKube, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inner := tc.backend()
+			b := &deactivateOnActivate{Backend: inner, t: t}
+			now := time.Now().UTC()
+			e := newEnvOn(t, b, &now)
+			b.e = e
+			ctx := t.Context()
+			u := e.createUser(t, ctx, "alice")
+			req := &iamv1.CreateAccessKeyRequest{Parent: u.GetName()}
+			if tc.withEtag {
+				req.UserEtag = u.GetEtag()
+			}
+			created, err := e.keys.CreateAccessKey(ctx, req)
+			if err != nil {
+				t.Fatalf("create whose activation committed: %v, want the committed key", err)
+			}
+			if b.id == "" {
+				t.Fatal("no activation reply was lost")
+			}
+			if name := created.GetAccessKey().GetName(); !strings.HasSuffix(name, "/"+b.id) {
+				t.Fatalf("create returned %s, want the committed key %s", name, b.id)
+			}
+			k, err := store.Get[iam.AccessKey](ctx, store.Scoped(inner, proj), b.id)
+			if err != nil {
+				t.Fatalf("committed key %s: %v, want it kept", b.id, err)
+			}
+			if k.Object.Status != iam.KeyInactive {
+				t.Fatalf("committed key is %s, want Inactive", k.Object.Status)
+			}
+			if n := keysOf(t, inner, "alice"); n != 1 {
+				t.Fatalf("alice has %d stored keys, want only the committed one", n)
+			}
+			if _, err := e.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: u.GetName()}); err != nil {
+				t.Fatalf("second key: %v", err)
+			}
+			_, err = e.keys.CreateAccessKey(ctx, &iamv1.CreateAccessKeyRequest{Parent: u.GetName()})
+			wantAccessKeysPerUser(t, err)
+		})
+	}
+}
