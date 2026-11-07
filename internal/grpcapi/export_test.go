@@ -310,3 +310,24 @@ func (s *Server) CreateSAMLProvider(
 ) (SAMLProviderView, error) {
 	return s.createSAMLProvider(ctx, project, name, document, tags)
 }
+
+// SAMLProviderEntry is one provider of ListSAMLProviders.
+type SAMLProviderEntry = samlProviderEntry
+
+// GetSAMLProvider is IAM GetSAMLProvider, which vws-proto does not carry
+// yet.
+func (s *Server) GetSAMLProvider(ctx context.Context, project, arn string) (SAMLProviderView, error) {
+	return s.getSAMLProvider(ctx, project, arn)
+}
+
+// ListSAMLProviders is IAM ListSAMLProviders, which vws-proto does not
+// carry yet.
+func (s *Server) ListSAMLProviders(ctx context.Context, project string) ([]SAMLProviderEntry, error) {
+	return s.listSAMLProviders(ctx, project)
+}
+
+// DeleteSAMLProvider is IAM DeleteSAMLProvider, which vws-proto does not
+// carry yet.
+func (s *Server) DeleteSAMLProvider(ctx context.Context, project, arn string) error {
+	return s.deleteSAMLProvider(ctx, project, arn)
+}
