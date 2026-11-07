@@ -150,3 +150,34 @@ func TestManagedPolicyARNIncludesPath(t *testing.T) {
 		t.Errorf("attached policy with the wrong path: %v", err)
 	}
 }
+
+// TestAuthorizeBindsPrincipalID: a principal resolved with a unique id is
+// never evaluated as another user or role that holds its name now (one
+// deleted and created again), and is refused as an unknown one; without
+// an id the name decides, as before (#176).
+func TestAuthorizeBindsPrincipalID(t *testing.T) {
+	b := setup(t)
+	a := authz.New(b, acct, nil)
+	ctx := context.Background()
+	all := map[string]string{"all": `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*"}}`}
+	put(t, b, iam.User{Name: "ivy", ID: "30", InlinePolicies: all})
+	put(t, b, iam.Role{Name: "ops", ID: "31", AssumeRolePolicy: `{}`, InlinePolicies: all})
+	for _, p := range []authz.Principal{
+		{Kind: authz.User, Name: "ivy", ID: "29"},
+		{Kind: authz.User, Name: "IVY", ID: "29"},
+		{Kind: authz.Role, Name: "ops", ID: "28", ARN: "arn:vws:sts::" + acct + ":assumed-role/ops/s1"},
+	} {
+		if d, err := a.Authorize(ctx, p, "s3:GetObject", "*", nil); !errors.Is(err, authz.ErrNoSuchEntity) || d.Allowed {
+			t.Errorf("%s with id %s: %+v %v", p.Name, p.ID, d, err)
+		}
+	}
+	for _, p := range []authz.Principal{
+		{Kind: authz.User, Name: "ivy", ID: "30"},
+		{Kind: authz.User, Name: "ivy"},
+		{Kind: authz.Role, Name: "ops", ID: "31", ARN: "arn:vws:sts::" + acct + ":assumed-role/ops/s1"},
+	} {
+		if d, err := a.Authorize(ctx, p, "s3:GetObject", "*", nil); err != nil || !d.Allowed {
+			t.Errorf("%s with id %q: %+v %v", p.Name, p.ID, d, err)
+		}
+	}
+}
