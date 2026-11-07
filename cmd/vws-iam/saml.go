@@ -27,10 +27,10 @@ func samlFlags(fs *flag.FlagSet, sp *sts.SAMLServiceProvider) {
 }
 
 // checkSAML accepts both values or neither: an absolute URI audience (a
-// urn: or a URL) and an https sign-in URL with a host and no user info or
-// fragment, each at most maxSAMLValueLen bytes without spaces or control
-// characters. The values are kept exactly as given, because
-// assertions are compared with them byte for byte.
+// urn: or a URL) and an https sign-in URL with a host and no user info,
+// "?" or "#", each at most maxSAMLValueLen bytes without spaces or control
+// characters. The values are kept exactly as given, because assertions
+// are compared with them byte for byte.
 func checkSAML(sp sts.SAMLServiceProvider) error {
 	switch {
 	case sp == (sts.SAMLServiceProvider{}):
@@ -48,8 +48,9 @@ func checkSAML(sp sts.SAMLServiceProvider) error {
 		return errors.New("-saml-audience must be an absolute URI, such as urn:vws:iam or https://vws.example")
 	}
 	u, err := url.Parse(sp.SignInURL)
-	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.Fragment != "" || u.RawQuery != "" {
-		return errors.New("-saml-sign-in-url must be an https URL with a host and no user info, query or fragment")
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil ||
+		strings.ContainsAny(sp.SignInURL, "?#") {
+		return errors.New("-saml-sign-in-url must be an https URL with a host and no user info, ? or #")
 	}
 	return nil
 }

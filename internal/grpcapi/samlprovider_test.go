@@ -254,6 +254,48 @@ func TestStoredSAMLProviderStoreFailure(t *testing.T) {
 	}
 }
 
+// corruptSAMLGet answers every SAML provider read with a record whose
+// document no longer parses, as an operator edit of the custom resource
+// could leave it.
+type corruptSAMLGet struct{ store.Backend }
+
+func (c corruptSAMLGet) Get(ctx context.Context, k iam.Kind, key string) (store.Entry, error) {
+	if k != iam.KindSAMLProvider {
+		return c.Backend.Get(ctx, k, key)
+	}
+	spec, err := json.Marshal(iam.SAMLProvider{Name: "corp", MetadataDocument: "<md:EntityDescriptor>CANARY"})
+	return store.Entry{Key: key, Spec: spec, Version: "1"}, err
+}
+
+// TestStoredSAMLProviderCorruptDocument: a stored document that no longer
+// parses is InternalFailure without the document, never InvalidInput or
+// InvalidIdentityToken, and issues no credentials.
+func TestStoredSAMLProviderCorruptDocument(t *testing.T) {
+	f := newSAMLFixture(t, memstore.New())
+	f.b = corruptSAMLGet{Backend: f.b}
+	out, err := f.server(t).api.AssumeRoleWithSAML(t.Context(), f.signed(t, f.idp))
+	wantAWS(t, err, codes.Internal, "InternalFailure")
+	if strings.Contains(err.Error(), "CANARY") || out.Credentials.AccessKeyID != "" {
+		t.Fatalf("corrupt document: %v %+v", err, out.Credentials)
+	}
+}
+
+// TestStoredSAMLReplacesInjected: WithStoredSAML after WithSAML reads the
+// stored providers, not the injected ones, and WithSAML after
+// WithStoredSAML serves only the injected ones.
+func TestStoredSAMLReplacesInjected(t *testing.T) {
+	f := newSAMLFixture(t, memstore.New())
+	f.create(t, f.server(t), proj)
+	none := samltest.Providers{}
+	stored := newEnvOn(t, f.b, &f.now, grpcapi.WithSAML(none, f.sp), grpcapi.WithStoredSAML(f.sp))
+	if _, err := stored.api.AssumeRoleWithSAML(t.Context(), f.signed(t, f.idp)); err != nil {
+		t.Fatalf("WithSAML then WithStoredSAML: %v", err)
+	}
+	injected := newEnvOn(t, f.b, &f.now, grpcapi.WithStoredSAML(f.sp), grpcapi.WithSAML(none, f.sp))
+	_, err := injected.api.AssumeRoleWithSAML(t.Context(), f.signed(t, f.idp))
+	wantAWS(t, err, codes.InvalidArgument, "InvalidIdentityToken")
+}
+
 // TestStoredSAMLNeedsServiceProvider: WithStoredSAML with an empty audience
 // or sign-in URL refuses every call with InvalidIdentityToken, and
 // SAMLServiceProvider reports what was set.

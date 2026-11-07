@@ -43,6 +43,8 @@ func TestSAMLFlags(t *testing.T) {
 		{testAudience, "https://user:pw@signin.vws.example/saml", "https URL"},
 		{testAudience, "https://signin.vws.example/saml?x=1", "https URL"},
 		{testAudience, "https://signin.vws.example/saml#f", "https URL"},
+		{testAudience, "https://signin.vws.example/saml?", "https URL"},
+		{testAudience, "https://signin.vws.example/saml#", "https URL"},
 		{testAudience, "signin.vws.example/saml", "https URL"},
 		{testAudience, "https://signin.vws.example/\tsaml", "without spaces"},
 		{testAudience, long, "at most"},
