@@ -501,6 +501,14 @@ func TestAssumeRoleWithSAMLAttributeContext(t *testing.T) {
 	allowIf := allow + `,"Condition":{"StringEquals":{"SAML:eduPersonPrincipalName":"alice@corp.test"}}}`
 	denyMail := allow + "}" + deny("saml:mail", "mallory@corp.test")
 	denyStudent := allow + "}" + deny("SAML:eduPersonAffiliation", "student")
+	// The list-typed SAML keys tested the AWS way, with a set operator.
+	staffOrFaculty := `{"SAML:eduPersonAffiliation":["staff","faculty"]}`
+	allowAnyStaff := allow + `,"Condition":{"ForAnyValue:StringEquals":` + staffOrFaculty + `}}`
+	allowOnlyStaff := allow + `,"Condition":{"ForAllValues:StringEquals":` + staffOrFaculty +
+		`,"Null":{"SAML:eduPersonAffiliation":"false"}}}`
+	denyAnyStudent := allow + `},{"Effect":"Deny","Principal":"*","Action":"sts:AssumeRoleWithSAML",` +
+		`"Condition":{"ForAnyValue:StringEquals":{"SAML:eduPersonAffiliation":"student"}}}`
+	affiliations := func(v ...string) map[string][]string { return map[string][]string{affiliation: v} }
 	for _, tc := range []struct {
 		name, trust string
 		attrs       map[string][]string
@@ -514,6 +522,15 @@ func TestAssumeRoleWithSAMLAttributeContext(t *testing.T) {
 		{"deny not matched", denyMail, map[string][]string{adMail: {"alice@corp.test"}}, nil},
 		{"deny one of a list", denyStudent, map[string][]string{affiliation: {"staff", "student"}}, sts.ErrAccessDenied},
 		{"list without the denied value", denyStudent, map[string][]string{affiliation: {"staff"}}, nil},
+		{"any value: one listed", allowAnyStaff, affiliations("student", "staff"), nil},
+		{"any value: none listed", allowAnyStaff, affiliations("student", "alum"), sts.ErrAccessDenied},
+		{"any value: key absent", allowAnyStaff, nil, sts.ErrAccessDenied},
+		{"all values: every one listed", allowOnlyStaff, affiliations("faculty", "staff"), nil},
+		{"all values: one unlisted", allowOnlyStaff, affiliations("staff", "student"), sts.ErrAccessDenied},
+		{"all values: key absent", allowOnlyStaff, nil, sts.ErrAccessDenied},
+		{"deny any value: one denied", denyAnyStudent, affiliations("staff", "student"), sts.ErrAccessDenied},
+		{"deny any value: none denied", denyAnyStudent, affiliations("staff"), nil},
+		{"deny any value: key absent", denyAnyStudent, nil, nil},
 		{"string key with two values", denyMail, map[string][]string{
 			adMail: {"alice@corp.test", "mallory@corp.test"},
 		}, sts.ErrInvalidIdentityToken},

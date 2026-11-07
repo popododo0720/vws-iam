@@ -269,6 +269,9 @@ func TestMatchIsLinear(t *testing.T) {
 func FuzzParse(f *testing.F) {
 	f.Add(`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*"}}`)
 	f.Add(`{"Version":"2012-10-17","Statement":[{"Effect":"Deny","NotAction":["s3:*"],"NotResource":"arn:vws:s3:::x","Condition":{"StringLikeIfExists":{"k":["${aws:username}*"]},"Null":{"x":"true"}}}]}`)
+	f.Add(`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*","Condition":{` +
+		`"ForAllValues:StringNotLikeIfExists":{"aws:TagKeys":["a*","${aws:username}"]},` +
+		`"ForAnyValue:IpAddress":{"aws:SourceIp":"10.0.0.0/8"}}}}`)
 	f.Add(`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Principal":{"AWS":["1","arn:vws:iam::1:root"]},"Action":"sts:AssumeRole"}}`)
 	f.Fuzz(func(t *testing.T, doc string) {
 		d, err := policy.Parse(doc)

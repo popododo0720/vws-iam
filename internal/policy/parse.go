@@ -73,8 +73,38 @@ type Statement struct {
 type Condition struct {
 	Op       string // base operator, e.g. StringLike
 	IfExists bool
-	Key      string
-	Values   []string
+	// Set is the condition set operator qualifying Op, SetNone without one.
+	Set    SetOp
+	Key    string
+	Values []string
+}
+
+// SetOp is a condition set operator for multivalued context keys.
+type SetOp string
+
+// Set operators. ForAnyValue holds when some request value passes Op;
+// ForAllValues when every request value does, or the key is missing.
+const (
+	SetNone      SetOp = ""
+	ForAnyValue  SetOp = "ForAnyValue"
+	ForAllValues SetOp = "ForAllValues"
+)
+
+// splitOperator splits a condition operator such as
+// ForAnyValue:StringLikeIfExists into its set operator, base operator and
+// IfExists suffix. ok is false for an unknown operator, and for Null under a
+// set operator: Null tests the key's presence, not its values.
+func splitOperator(name string) (set SetOp, base string, ifExists, ok bool) {
+	base = name
+	for _, q := range []SetOp{ForAnyValue, ForAllValues} {
+		if rest, found := strings.CutPrefix(name, string(q)+":"); found {
+			set, base = q, rest
+			break
+		}
+	}
+	base, ifExists = strings.CutSuffix(base, "IfExists")
+	o, known := operators[base]
+	return set, base, ifExists, known && (set == SetNone || o.kind != kindNull)
 }
 
 type rawStatement struct {
@@ -305,8 +335,8 @@ func statement(r rawStatement) (Statement, error) {
 		return s, malformed("statement has neither Resource nor Principal")
 	}
 	for op, keys := range r.Condition {
-		base, ifExists := strings.CutSuffix(op, "IfExists")
-		if _, ok := operators[base]; !ok {
+		set, base, ifExists, ok := splitOperator(op)
+		if !ok {
 			return s, malformed("condition operator %q is not supported", op)
 		}
 		if len(keys) == 0 {
@@ -320,7 +350,9 @@ func statement(r rawStatement) (Statement, error) {
 			if err := checkValues(base, vals); err != nil {
 				return s, fmt.Errorf("condition %s key %q: %w", op, k, err)
 			}
-			s.Conditions = append(s.Conditions, Condition{Op: base, IfExists: ifExists, Key: strings.ToLower(k), Values: vals})
+			s.Conditions = append(s.Conditions, Condition{
+				Op: base, IfExists: ifExists, Set: set, Key: strings.ToLower(k), Values: vals,
+			})
 		}
 	}
 	return s, nil
