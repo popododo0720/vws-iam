@@ -40,6 +40,7 @@ import (
 	"github.com/popododo0720/vws-iam/internal/store"
 	"github.com/popododo0720/vws-iam/internal/store/kubestore"
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
+	"github.com/popododo0720/vws-iam/internal/sts"
 )
 
 type config struct {
@@ -53,7 +54,9 @@ type config struct {
 	tls       tlsFiles
 	// insecurePlaintext allows serving without TLS on a non-loopback address.
 	insecurePlaintext bool
-	getenv            func(string) string
+	// saml is the AssumeRoleWithSAML service provider; zero refuses it.
+	saml   sts.SAMLServiceProvider
+	getenv func(string) string
 }
 
 // Store modes of -store.
@@ -131,6 +134,7 @@ func parseConfigNS(args []string, stderr io.Writer, getenv func(string) string, 
 		"must chain to; a client without one is refused. The three TLS files are read again on every handshake")
 	fs.BoolVar(&c.insecurePlaintext, "insecure-plaintext", false, "serve gRPC without TLS on a non-loopback -listen "+
 		"address; only where another layer authenticates the channel")
+	samlFlags(fs, &c.saml)
 	fs.StringVar(&c.healthAddr, "health-listen", "127.0.0.1:9096", "HTTP address of /healthz and /readyz; empty disables")
 	if err := fs.Parse(args); err != nil {
 		return c, fmt.Errorf("flags: %w", err)
@@ -139,6 +143,9 @@ func parseConfigNS(args []string, stderr io.Writer, getenv func(string) string, 
 		return c, fmt.Errorf("unexpected arguments %q", fs.Args())
 	}
 	if err := c.resolveStore(); err != nil {
+		return c, err
+	}
+	if err := checkSAML(c.saml); err != nil {
 		return c, err
 	}
 	if !c.bootstrap {
@@ -405,7 +412,7 @@ func run(ctx context.Context, cfg config) (err error) {
 		return fmt.Errorf("listen: %w", err)
 	}
 	srv := grpc.NewServer(grpcapi.ServerOptions(transport...)...)
-	api := grpcapi.New(backend, keys)
+	api := grpcapi.New(backend, keys, apiOptions(cfg)...)
 	grpcapi.Register(srv, api)
 	go collectReplays(ctx, log, api)
 	hs := grpchealth.NewServer()
@@ -418,7 +425,8 @@ func run(ctx context.Context, cfg config) (err error) {
 		srv.GracefulStop()
 	}()
 	log.LogAttrs(ctx, slog.LevelInfo, "serving", slog.String("addr", lis.Addr().String()),
-		slog.String("store", cfg.storeMode), slog.String("namespace", cfg.namespace), slog.Bool("mtls", cfg.tls.enabled()))
+		slog.String("store", cfg.storeMode), slog.String("namespace", cfg.namespace), slog.Bool("mtls", cfg.tls.enabled()),
+		slog.Bool("saml", cfg.saml != (sts.SAMLServiceProvider{})))
 	if err := srv.Serve(lis); err != nil {
 		return fmt.Errorf("serve: %w", err)
 	}
