@@ -26,7 +26,7 @@ const (
 // gets role credentials, on both store backends, that the gateway's
 // Authenticate refuses until it can carry the SAML identity (#202); every
 // failure carries the AWS error code; a RoleArn of no project is
-// AccessDenied; and without WithSAML (no SAML provider store yet, #106)
+// AccessDenied; and without WithSAML or WithStoredSAML
 // every call is InvalidIdentityToken.
 func TestAssumeRoleWithSAML(t *testing.T) {
 	for _, bk := range renameBackends {
