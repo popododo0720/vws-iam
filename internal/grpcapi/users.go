@@ -216,8 +216,11 @@ func (s *Server) CreateUser(ctx context.Context, req *iamv1.CreateUserRequest) (
 
 // UpdateUser changes spec and labels.
 func (s *Server) UpdateUser(ctx context.Context, req *iamv1.UpdateUserRequest) (*longrunningpb.Operation, error) {
-	// TODO(#134): pass req.GetNewUserName() once vws-proto carries the
-	// AWS NewUserName field (popododo0720/vws-proto#79).
+	// TODO(#134): pass req.GetNewUserName() to updateUser. Until then a
+	// rename is refused, never served as an update without it.
+	if req.GetNewUserName() != "" {
+		return nil, unservedField("new_user_name")
+	}
 	return s.updateUser(ctx, req, "")
 }
 
@@ -415,7 +418,8 @@ func checkPassword(pw string) error {
 // SetLoginProfile sets the console password (argon2id at rest). Not an
 // operation, so the password never reaches an operation record. Only the
 // upsert mode is served; CREATE_ONLY and MUST_EXIST are UNIMPLEMENTED and
-// write nothing, never an upsert (TODO(#326)).
+// write nothing, never an upsert (TODO(#326)), as do the expected_user_arn
+// and user_etag preconditions (loginProfilePreconditions).
 func (s *Server) SetLoginProfile(ctx context.Context, req *iamv1.SetLoginProfileRequest) (*iamv1.SetLoginProfileResponse, error) {
 	pid, id, err := child(req.GetName(), "users")
 	if err != nil {
@@ -429,6 +433,9 @@ func (s *Server) SetLoginProfile(ctx context.Context, req *iamv1.SetLoginProfile
 		return nil, status.Error(codes.Unimplemented, "mode "+m.String()+" is not served yet")
 	default:
 		return nil, invalidSpec("mode must be a LoginProfileWriteMode")
+	}
+	if err := loginProfilePreconditions(req.GetExpectedUserArn(), req.GetUserEtag()); err != nil {
+		return nil, err
 	}
 	if err := checkPassword(req.GetPassword()); err != nil {
 		return nil, err
@@ -445,9 +452,14 @@ func (s *Server) SetLoginProfile(ctx context.Context, req *iamv1.SetLoginProfile
 }
 
 // DeleteLoginProfile removes the console password and ends nothing else.
+// The expected_user_arn and user_etag preconditions are UNIMPLEMENTED and
+// delete nothing (loginProfilePreconditions).
 func (s *Server) DeleteLoginProfile(ctx context.Context, req *iamv1.DeleteLoginProfileRequest) (*iamv1.DeleteLoginProfileResponse, error) {
 	pid, id, err := child(req.GetName(), "users")
 	if err != nil {
+		return nil, err
+	}
+	if err := loginProfilePreconditions(req.GetExpectedUserArn(), req.GetUserEtag()); err != nil {
 		return nil, err
 	}
 	_, err = store.Mutate(ctx, s.project(pid).b, id, func(u *iam.User) error {
@@ -458,6 +470,22 @@ func (s *Server) DeleteLoginProfile(ctx context.Context, req *iamv1.DeleteLoginP
 		return nil
 	})
 	return &iamv1.DeleteLoginProfileResponse{}, toStatus(ctx, err)
+}
+
+// loginProfilePreconditions refuses the expected_user_arn and user_etag
+// preconditions of SetLoginProfile and DeleteLoginProfile, which are not
+// served yet: a write without its precondition could land on a user the
+// caller did not read.
+//
+// TODO(#340): check them in the store mutation of the write.
+func loginProfilePreconditions(arn, etag string) error {
+	switch {
+	case arn != "":
+		return unservedField("expected_user_arn")
+	case etag != "":
+		return unservedField("user_etag")
+	}
+	return nil
 }
 
 // ChangePassword is the user's own change; old_password must verify.

@@ -8,7 +8,7 @@ require (
 	cloud.google.com/go/longrunning v1.3.0
 	github.com/beevik/etree v1.7.0
 	github.com/popododo0720/vws-lib v0.1.1
-	github.com/popododo0720/vws-proto v0.9.0
+	github.com/popododo0720/vws-proto v0.11.0
 	github.com/russellhaering/goxmldsig v1.6.1
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/metric v1.47.0

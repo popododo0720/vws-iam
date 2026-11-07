@@ -12,7 +12,7 @@ import (
 	"github.com/popododo0720/vws-iam/internal/sts"
 )
 
-// decodeAuthorizationMessage is STS DecodeAuthorizationMessage: the
+// DecodeAuthorizationMessage is STS DecodeAuthorizationMessage: the
 // caller is taken only from how it authenticated (a SigV4 request signed
 // for DecodeAuthorizationMessage, or a console session), and internal/sts
 // checks its sts:DecodeAuthorizationMessage permission before it opens the
@@ -20,32 +20,31 @@ import (
 // stored.
 //
 // The permission is evaluated with the aws:SourceIp of the current
-// request: the address in the SigV4 request, or consoleIP, the address
-// the gateway saw for this console request. The address stored with the
-// console session at Login is never used, so a session token reused from
-// another address meets the Deny for that address. With no consoleIP the
-// key is absent, as AWS evaluates a missing key: IpAddress conditions do
-// not match.
-//
-// TODO(#109): serve this as TokenService.DecodeAuthorizationMessage once
-// vws-proto carries the RPC (popododo0720/vws-proto#84); consoleIP then
-// comes from the request's gateway-observed source IP field.
-func (s *Server) decodeAuthorizationMessage(
-	ctx context.Context, sigv4 *iamv1.AuthenticateRequest, console, consoleIP, encoded string,
-) (decoded string, err error) {
+// request: the address in the SigV4 request, or, for a console session,
+// the request's source_ip, the address the gateway saw for this request.
+// The address stored with the console session at Login is never used, so
+// a session token reused from another address meets the Deny for that
+// address. With no source_ip the key is absent, as AWS evaluates a missing
+// key: IpAddress conditions do not match.
+func (s *Server) DecodeAuthorizationMessage(
+	ctx context.Context, req *iamv1.DecodeAuthorizationMessageRequest,
+) (resp *iamv1.DecodeAuthorizationMessageResponse, err error) {
 	defer func() {
 		s.m.add(ctx, s.m.decoded, attribute.String("result", result(err)))
 	}()
-	a, err := authnOf(sigv4, console)
+	a, err := authnOf(req.GetSigv4(), req.GetConsoleSessionToken())
 	if err != nil {
-		return "", toStatus(ctx, err)
+		return nil, toStatus(ctx, err)
 	}
 	p, c, o, err := s.authenticatedCallerFrom(ctx, a, "DecodeAuthorizationMessage")
 	if err != nil {
-		return "", toStatus(ctx, err)
+		return nil, toStatus(ctx, err)
 	}
-	decoded, err = p.sts.DecodeAuthorizationMessage(ctx, c, o.requestContext(consoleIP), encoded)
-	return decoded, toStatus(ctx, err)
+	decoded, err := p.sts.DecodeAuthorizationMessage(ctx, c, o.requestContext(req.GetSourceIp()), req.GetEncodedMessage())
+	if err != nil {
+		return nil, toStatus(ctx, err)
+	}
+	return &iamv1.DecodeAuthorizationMessageResponse{DecodedMessage: decoded}, nil
 }
 
 // authorizationMessage encodes the deny decision of an Authorize call

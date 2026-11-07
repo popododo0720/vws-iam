@@ -1,12 +1,14 @@
 package grpcapi_test
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
@@ -39,6 +41,37 @@ func (e *env) keyedUser(t *testing.T, name, doc string) keyed {
 
 const decodeAction = "DecodeAuthorizationMessage"
 
+// decode calls TokenService.DecodeAuthorizationMessage over gRPC with no
+// gateway-observed source IP.
+func (e *env) decode(ctx context.Context, sigv4 *iamv1.AuthenticateRequest, console, encoded string) (string, error) {
+	return e.decodeFrom(ctx, sigv4, console, "", encoded)
+}
+
+// decodeFrom calls TokenService.DecodeAuthorizationMessage over gRPC with
+// the source IP the gateway saw for the request.
+func (e *env) decodeFrom(
+	ctx context.Context, sigv4 *iamv1.AuthenticateRequest, console, sourceIP, encoded string,
+) (string, error) {
+	req := &iamv1.DecodeAuthorizationMessageRequest{EncodedMessage: encoded, SourceIp: sourceIP}
+	switch {
+	case sigv4 != nil:
+		req.Authentication = &iamv1.DecodeAuthorizationMessageRequest_Sigv4{Sigv4: sigv4}
+	case console != "":
+		req.Authentication = &iamv1.DecodeAuthorizationMessageRequest_ConsoleSessionToken{ConsoleSessionToken: console}
+	}
+	resp, err := e.token.DecodeAuthorizationMessage(ctx, req)
+	return resp.GetDecodedMessage(), err
+}
+
+// authorizeEncoded calls AuthService.Authorize over gRPC and returns its
+// encoded_message too.
+func (e *env) authorizeEncoded(
+	ctx context.Context, req *iamv1.AuthorizeRequest,
+) (*iamv1.AuthorizeResponse, string, error) {
+	resp, err := e.auth.Authorize(ctx, req)
+	return resp, resp.GetEncodedMessage(), err
+}
+
 // TestDecodeAuthorizationMessage: a deny from Authorize carries an
 // encoded message that only a caller allowed sts:DecodeAuthorizationMessage
 // can read, on any replica and after a restart, on both store backends.
@@ -61,29 +94,24 @@ func TestDecodeAuthorizationMessage(t *testing.T) {
 			pr := a.GetPrincipal()
 
 			// An allow carries no message; a deny does.
-			ok, enc, err := e.api.AuthorizeEncoded(ctx, &iamv1.AuthorizeRequest{Principal: pr, Action: "s3:GetObject"})
+			ok, enc, err := e.authorizeEncoded(ctx, &iamv1.AuthorizeRequest{Principal: pr, Action: "s3:GetObject"})
 			if err != nil || ok.GetDecision() != iamv1.Decision_DECISION_ALLOW || enc != "" {
 				t.Fatalf("allow: %v %q %v", ok, enc, err)
 			}
 			res := []string{"arn:vws:s3:::pub/a", "arn:vws:s3:::locked/b"}
-			deny, enc, err := e.api.AuthorizeEncoded(ctx, &iamv1.AuthorizeRequest{
+			deny, enc, err := e.authorizeEncoded(ctx, &iamv1.AuthorizeRequest{
 				Principal: pr, Action: "s3:DeleteObject", Resources: res,
 				Context: map[string]*iamv1.ContextValues{"s3:prefix": {Values: []string{"locked/"}}},
 			})
 			if err != nil || deny.GetDecision() != iamv1.Decision_DECISION_DENY_EXPLICIT || enc == "" {
 				t.Fatalf("deny: %v %q %v", deny, enc, err)
 			}
-			// Authorize itself answers exactly as before.
-			plain, err := e.auth.Authorize(ctx, &iamv1.AuthorizeRequest{
-				Principal: pr, Action: "s3:DeleteObject", Resources: res,
-			})
-			if err != nil || plain.GetDecision() != iamv1.Decision_DECISION_DENY_EXPLICIT ||
-				plain.GetMatchedStatement() != "NoDelete" {
-				t.Fatalf("authorize: %v %v", plain, err)
+			if deny.GetMatchedStatement() != "NoDelete" {
+				t.Fatalf("authorize: %v", deny)
 			}
 
 			signed := e.stsSign(auditor.id, auditor.secretKey, "", decodeAction)
-			got, err := e.api.DecodeAuthorizationMessage(ctx, signed, "", enc)
+			got, err := e.decode(ctx, signed, "", enc)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -148,38 +176,38 @@ func TestDecodeAuthorizationMessage(t *testing.T) {
 			}
 
 			// The same signed request cannot be used twice.
-			_, err = e.api.DecodeAuthorizationMessage(ctx, signed, "", enc)
+			_, err = e.decode(ctx, signed, "", enc)
 			wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
 			// A request signed for another STS action is refused.
-			_, err = e.api.DecodeAuthorizationMessage(ctx, e.stsSign(auditor.id, auditor.secretKey, "", "AssumeRole"), "", enc)
+			_, err = e.decode(ctx, e.stsSign(auditor.id, auditor.secretKey, "", "AssumeRole"), "", enc)
 			wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
 
 			// Another replica, and a restarted one, decode it the same.
 			replica := newEnvOn(t, b, &now)
 			fresh := e.stsSign(auditor.id, auditor.secretKey, "", decodeAction)
-			again, err := replica.api.DecodeAuthorizationMessage(ctx, fresh, "", enc)
+			again, err := replica.decode(ctx, fresh, "", enc)
 			if err != nil || again != got {
 				t.Fatalf("replica: %v\n%s\nwant\n%s", err, again, got)
 			}
 
 			// bob may not decode, valid message or not.
 			for _, msg := range []string{enc, "x"} {
-				_, err = e.api.DecodeAuthorizationMessage(ctx, e.stsSign(bob.id, bob.secretKey, "", decodeAction), "", msg)
+				_, err = e.decode(ctx, e.stsSign(bob.id, bob.secretKey, "", decodeAction), "", msg)
 				wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
 			}
 			// Tampered input and bounds.
 			last := enc[len(enc)-1]
 			flipped := enc[:len(enc)-1] + string("AB"[map[bool]int{true: 1}[last == 'A']])
 			for _, msg := range []string{flipped, enc + "\n", "k1." + strings.Repeat("A", 64)} {
-				_, err = e.api.DecodeAuthorizationMessage(ctx, e.stsSign(auditor.id, auditor.secretKey, "", decodeAction), "", msg)
+				_, err = e.decode(ctx, e.stsSign(auditor.id, auditor.secretKey, "", decodeAction), "", msg)
 				wantErr(t, err, codes.InvalidArgument, "INVALID_SPEC", "InvalidAuthorizationMessageException")
 			}
 			for _, msg := range []string{"", strings.Repeat("A", 10241)} {
-				_, err = e.api.DecodeAuthorizationMessage(ctx, e.stsSign(auditor.id, auditor.secretKey, "", decodeAction), "", msg)
+				_, err = e.decode(ctx, e.stsSign(auditor.id, auditor.secretKey, "", decodeAction), "", msg)
 				wantErr(t, err, codes.InvalidArgument, "INVALID_SPEC", "ValidationError")
 			}
 			// No authentication at all.
-			_, err = e.api.DecodeAuthorizationMessage(ctx, nil, "", enc)
+			_, err = e.decode(ctx, nil, "", enc)
 			wantErr(t, err, codes.Unauthenticated, "INVALID_CREDENTIALS", "MissingAuthenticationToken")
 
 			// A console session authenticates too, until logout.
@@ -192,14 +220,14 @@ func TestDecodeAuthorizationMessage(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			viaConsole, err := e.api.DecodeAuthorizationMessage(ctx, nil, l.GetSessionToken(), enc)
+			viaConsole, err := e.decode(ctx, nil, l.GetSessionToken(), enc)
 			if err != nil || viaConsole != got {
 				t.Fatalf("console: %v", err)
 			}
 			if _, err := e.auth.Logout(ctx, &iamv1.LogoutRequest{SessionToken: l.GetSessionToken()}); err != nil {
 				t.Fatal(err)
 			}
-			_, err = e.api.DecodeAuthorizationMessage(ctx, nil, l.GetSessionToken(), enc)
+			_, err = e.decode(ctx, nil, l.GetSessionToken(), enc)
 			wantErr(t, err, codes.Unauthenticated, "INVALID_CREDENTIALS", "InvalidClientTokenId")
 		})
 	}
@@ -225,7 +253,7 @@ func TestDecodeAuthorizationMessageSourceIPDeny(t *testing.T) {
 				t.Fatal(err)
 			}
 			req := &iamv1.AuthorizeRequest{Principal: a.GetPrincipal(), Action: "s3:DeleteObject"}
-			_, enc, err := e.api.AuthorizeEncoded(ctx, req)
+			_, enc, err := e.authorizeEncoded(ctx, req)
 			if err != nil || enc == "" {
 				t.Fatalf("deny: %q %v", enc, err)
 			}
@@ -234,10 +262,17 @@ func TestDecodeAuthorizationMessageSourceIPDeny(t *testing.T) {
 				r.SourceIp = ip
 				return r
 			}
-			_, err = e.api.DecodeAuthorizationMessage(ctx, from("10.1.2.3"), "", enc)
+			_, err = e.decode(ctx, from("10.1.2.3"), "", enc)
 			wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
-			if _, err := e.api.DecodeAuthorizationMessage(ctx, from("192.0.2.1"), "", enc); err != nil {
+			if _, err := e.decode(ctx, from("192.0.2.1"), "", enc); err != nil {
 				t.Fatalf("outside the denied range: %v", err)
+			}
+			// On the SigV4 path the address is the signed request's: the
+			// request's source_ip never replaces it, either way.
+			_, err = e.decodeFrom(ctx, from("10.1.2.3"), "", "192.0.2.1", enc)
+			wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+			if _, err := e.decodeFrom(ctx, from("192.0.2.1"), "", "10.1.2.3", enc); err != nil {
+				t.Fatalf("signed outside the denied range: %v", err)
 			}
 
 			const pw = "correct horse battery"
@@ -250,7 +285,7 @@ func TestDecodeAuthorizationMessageSourceIPDeny(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				_, err = e.api.DecodeAuthorizationMessageFrom(ctx, nil, l.GetSessionToken(), ip, enc)
+				_, err = e.decodeFrom(ctx, nil, l.GetSessionToken(), ip, enc)
 				if deny {
 					wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
 				} else if err != nil {
@@ -282,7 +317,7 @@ func TestDecodeAuthorizationMessageConsoleRequestIP(t *testing.T) {
 				t.Fatal(err)
 			}
 			req := &iamv1.AuthorizeRequest{Principal: a.GetPrincipal(), Action: "s3:DeleteObject"}
-			_, enc, err := e.api.AuthorizeEncoded(ctx, req)
+			_, enc, err := e.authorizeEncoded(ctx, req)
 			if err != nil || enc == "" {
 				t.Fatalf("deny: %q %v", enc, err)
 			}
@@ -301,20 +336,20 @@ func TestDecodeAuthorizationMessageConsoleRequestIP(t *testing.T) {
 
 			// Logged in from an allowed address, reused from a denied one.
 			allowed := login("192.0.2.7")
-			if _, err := e.api.DecodeAuthorizationMessageFrom(ctx, nil, allowed, "192.0.2.7", enc); err != nil {
+			if _, err := e.decodeFrom(ctx, nil, allowed, "192.0.2.7", enc); err != nil {
 				t.Fatalf("from the login address: %v", err)
 			}
-			_, err = e.api.DecodeAuthorizationMessageFrom(ctx, nil, allowed, "10.9.9.9", enc)
+			_, err = e.decodeFrom(ctx, nil, allowed, "10.9.9.9", enc)
 			wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
 
 			// Logged in from a denied address, used from an allowed one.
 			denied := login("10.9.9.9")
-			if _, err := e.api.DecodeAuthorizationMessageFrom(ctx, nil, denied, "192.0.2.7", enc); err != nil {
+			if _, err := e.decodeFrom(ctx, nil, denied, "192.0.2.7", enc); err != nil {
 				t.Fatalf("from an allowed address: %v", err)
 			}
 			// No request address: aws:SourceIp is absent, never the
 			// stored Login address, so the IpAddress Deny does not match.
-			if _, err := e.api.DecodeAuthorizationMessageFrom(ctx, nil, denied, "", enc); err != nil {
+			if _, err := e.decodeFrom(ctx, nil, denied, "", enc); err != nil {
 				t.Fatalf("no request address: %v", err)
 			}
 		})
@@ -357,7 +392,7 @@ func TestDecodeAuthorizationMessageMFAAgeDeny(t *testing.T) {
 				t.Fatal(err)
 			}
 			req := &iamv1.AuthorizeRequest{Principal: a.GetPrincipal(), Action: "s3:DeleteObject"}
-			_, enc, err := e.api.AuthorizeEncoded(ctx, req)
+			_, enc, err := e.authorizeEncoded(ctx, req)
 			if err != nil || enc == "" {
 				t.Fatalf("deny: %q %v", enc, err)
 			}
@@ -391,8 +426,8 @@ func TestDecodeAuthorizationMessageMFAAgeDeny(t *testing.T) {
 			}
 			decode := func() (sigv4, console error) {
 				signed := e.stsSign(c.GetAccessKeyId(), c.GetSecretAccessKey(), c.GetSessionToken(), decodeAction)
-				_, sigv4 = e.api.DecodeAuthorizationMessage(ctx, signed, "", enc)
-				_, console = e.api.DecodeAuthorizationMessage(ctx, nil, l.GetSessionToken(), enc)
+				_, sigv4 = e.decode(ctx, signed, "", enc)
+				_, console = e.decode(ctx, nil, l.GetSessionToken(), enc)
 				return sigv4, console
 			}
 			if sErr, cErr := decode(); sErr != nil || cErr != nil {
@@ -443,14 +478,14 @@ func TestDecodeAuthorizationMessageStatements(t *testing.T) {
 			}
 			decode := func(action, resource string, rc map[string]*iamv1.ContextValues) string {
 				t.Helper()
-				deny, enc, err := e.api.AuthorizeEncoded(ctx, &iamv1.AuthorizeRequest{
+				deny, enc, err := e.authorizeEncoded(ctx, &iamv1.AuthorizeRequest{
 					Principal: a.GetPrincipal(), Action: action, Resources: []string{resource}, Context: rc,
 				})
 				if err != nil || deny.GetDecision() != iamv1.Decision_DECISION_DENY_EXPLICIT || enc == "" {
 					t.Fatalf("%s: %v %v", action, deny, err)
 				}
 				signed := e.stsSign(auditor.id, auditor.secretKey, "", decodeAction)
-				got, err := e.api.DecodeAuthorizationMessage(ctx, signed, "", enc)
+				got, err := e.decode(ctx, signed, "", enc)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -486,6 +521,75 @@ func TestDecodeAuthorizationMessageStatements(t *testing.T) {
 				`"resources":{"items":[{"value":"*"}]},"conditions":{"items":[]}}]}`
 			if got != want {
 				t.Fatalf("group statement\n%s\nwant\n%s", got, want)
+			}
+		})
+	}
+}
+
+// TestAuthorizeEncodedMessage: over gRPC, Authorize sets encoded_message on
+// every deny decided by policy evaluation, implicit ones included, and
+// leaves it empty on ALLOW and on a principal the recheck refuses; the
+// message decodes on another server over the same store, on both
+// backends.
+func TestAuthorizeEncodedMessage(t *testing.T) {
+	for _, bk := range renameBackends {
+		t.Run(bk.name, func(t *testing.T) {
+			b := bk.open()
+			now := time.Now().UTC()
+			e := newEnvOn(t, b, &now)
+			ctx := t.Context()
+			bob := e.keyedUser(t, "bob", `{"Version":"2012-10-17","Statement":[
+				{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}]}`)
+			auditor := e.keyedUser(t, "auditor", `{"Version":"2012-10-17","Statement":[
+				{"Effect":"Allow","Action":"sts:DecodeAuthorizationMessage","Resource":"*"}]}`)
+			a, err := e.auth.Authenticate(ctx, e.sign(bob.id, bob.secretKey, ""))
+			if err != nil {
+				t.Fatal(err)
+			}
+			pr := a.GetPrincipal()
+
+			allow, err := e.auth.Authorize(ctx, &iamv1.AuthorizeRequest{Principal: pr, Action: "s3:GetObject"})
+			if err != nil || allow.GetDecision() != iamv1.Decision_DECISION_ALLOW || allow.GetEncodedMessage() != "" {
+				t.Fatalf("allow: %v %v", allow, err)
+			}
+			deny, err := e.auth.Authorize(ctx, &iamv1.AuthorizeRequest{
+				Principal: pr, Action: "s3:PutObject", Resources: []string{"arn:vws:s3:::b/k"},
+			})
+			if err != nil || deny.GetDecision() != iamv1.Decision_DECISION_DENY_IMPLICIT || deny.GetEncodedMessage() == "" {
+				t.Fatalf("implicit deny: %v %v", deny, err)
+			}
+			// A principal the recheck refuses was never evaluated: no message.
+			forged, ok := proto.Clone(pr).(*iamv1.Principal)
+			if !ok {
+				t.Fatal("clone is not a Principal")
+			}
+			forged.UniqueId = "AIDAFORGEDFORGEDFORG"
+			refused, err := e.auth.Authorize(ctx, &iamv1.AuthorizeRequest{Principal: forged, Action: "s3:PutObject"})
+			if err != nil || refused.GetDecision() != iamv1.Decision_DECISION_DENY_IMPLICIT ||
+				refused.GetEncodedMessage() != "" {
+				t.Fatalf("refused principal: %v %v", refused, err)
+			}
+
+			// Another server over the same store, as after a restart, decodes it.
+			restarted := newEnvOn(t, b, &now)
+			signed := restarted.stsSign(auditor.id, auditor.secretKey, "", decodeAction)
+			got, err := restarted.decode(ctx, signed, "", deny.GetEncodedMessage())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var m struct {
+				Allowed      bool `json:"allowed"`
+				ExplicitDeny bool `json:"explicitDeny"`
+				Context      struct {
+					Action   string `json:"action"`
+					Resource string `json:"resource"`
+				} `json:"context"`
+			}
+			if err := json.Unmarshal([]byte(got), &m); err != nil {
+				t.Fatal(err)
+			}
+			if m.Allowed || m.ExplicitDeny || m.Context.Action != "s3:PutObject" || m.Context.Resource != "arn:vws:s3:::b/k" {
+				t.Fatalf("decoded %s", got)
 			}
 		})
 	}

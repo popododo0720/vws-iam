@@ -29,3 +29,20 @@ func (s *Server) ResyncMfaDevice(
 ) (*iamv1.ResyncMfaDeviceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "ResyncMfaDevice is not served yet")
 }
+
+// GetAccessKeyInfo is not served yet.
+//
+// TODO(#108): serve it through getAccessKeyInfo, with the request's
+// source_ip as the console-path address.
+func (s *Server) GetAccessKeyInfo(
+	context.Context, *iamv1.GetAccessKeyInfoRequest,
+) (*iamv1.GetAccessKeyInfoResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "GetAccessKeyInfo is not served yet")
+}
+
+// unservedField answers UNIMPLEMENTED for a request field vws-proto
+// carries that this server does not honor yet, so the request is refused
+// before any write and never served as if the field were unset.
+func unservedField(field string) error {
+	return status.Error(codes.Unimplemented, field+" is not served yet")
+}
