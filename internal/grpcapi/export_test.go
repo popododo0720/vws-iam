@@ -299,3 +299,14 @@ func (s *Server) ListRoleTags(
 ) (RoleTagPage, error) {
 	return s.listRoleTags(ctx, project, roleName, marker, maxItems)
 }
+
+// SAMLProviderView is a SAML provider with its ARN.
+type SAMLProviderView = samlProviderView
+
+// CreateSAMLProvider is IAM CreateSAMLProvider, which vws-proto does not
+// carry yet (#196).
+func (s *Server) CreateSAMLProvider(
+	ctx context.Context, project, name, document string, tags []*iamv1.Tag,
+) (SAMLProviderView, error) {
+	return s.createSAMLProvider(ctx, project, name, document, tags)
+}

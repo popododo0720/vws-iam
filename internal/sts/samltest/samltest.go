@@ -74,6 +74,43 @@ func (p *IdP) Provider(arn string) sts.SAMLProvider {
 	return sts.SAMLProvider{ARN: arn, EntityID: p.EntityID, Certificates: []*x509.Certificate{p.Cert}}
 }
 
+// Metadata returns the SAML 2.0 metadata of this IdP, as an IdP
+// publishes it and as CreateSAMLProvider takes it: an EntityDescriptor
+// with its entity id and signing certificate and the sign-on endpoints,
+// valid until validUntil (not set when zero). It is more than
+// 1000 characters, the AWS minimum.
+func (p *IdP) Metadata(validUntil time.Time) string {
+	until := ""
+	if !validUntil.IsZero() {
+		until = fmt.Sprintf(` validUntil=%q`, validUntil.UTC().Format(time.RFC3339))
+	}
+	b64 := base64.StdEncoding.EncodeToString(p.Cert.Raw)
+	var cert strings.Builder
+	for len(b64) > 64 {
+		cert.WriteString(b64[:64] + "\n")
+		b64 = b64[64:]
+	}
+	cert.WriteString(b64)
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID=%q%s>
+  <md:IDPSSODescriptor WantAuthnRequestsSigned="false"
+      protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+    <md:KeyDescriptor use="signing">
+      <ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#">
+        <ds:X509Data>
+          <ds:X509Certificate>%s</ds:X509Certificate>
+        </ds:X509Data>
+      </ds:KeyInfo>
+    </md:KeyDescriptor>
+    <md:NameIDFormat>urn:oasis:names:tc:SAML:2.0:nameid-format:persistent</md:NameIDFormat>
+    <md:NameIDFormat>urn:oasis:names:tc:SAML:2.0:nameid-format:transient</md:NameIDFormat>
+    <md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location=%q/>
+    <md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location=%q/>
+  </md:IDPSSODescriptor>
+</md:EntityDescriptor>
+`, p.EntityID, until, cert.String(), p.EntityID+"/sso/post", p.EntityID+"/sso/redirect")
+}
+
 // Providers serves SAML providers by ARN.
 type Providers map[string]sts.SAMLProvider
 
