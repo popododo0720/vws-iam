@@ -326,6 +326,12 @@ func (s *Server) ListSAMLProviders(ctx context.Context, project string) ([]SAMLP
 	return s.listSAMLProviders(ctx, project)
 }
 
+// UpdateSAMLProvider is IAM UpdateSAMLProvider, which vws-proto does not
+// carry yet (#196).
+func (s *Server) UpdateSAMLProvider(ctx context.Context, project, arn, document string) (string, error) {
+	return s.updateSAMLProvider(ctx, project, arn, document)
+}
+
 // DeleteSAMLProvider is IAM DeleteSAMLProvider, which vws-proto does not
 // carry yet.
 func (s *Server) DeleteSAMLProvider(ctx context.Context, project, arn string) error {

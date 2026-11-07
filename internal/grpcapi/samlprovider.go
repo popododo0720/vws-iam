@@ -211,6 +211,101 @@ func (s *Server) deleteSAMLProvider(ctx context.Context, pid, arn string) error 
 	}
 }
 
+// updateSAMLProvider is IAM UpdateSAMLProvider: it replaces the metadata
+// document of the SAML provider arn names in project pid and returns the
+// provider's ARN. The name, tags and creation time stay. AssumeRoleWithSAML
+// reads the stored provider on every call, so every replica trusts the
+// new document's IdP, and only it, at once.
+//
+// The ARN errors are those of getSAMLProvider. VWS does not model the
+// assertion encryption settings and private keys of the AWS request, so
+// the document is the one thing to update and is required: outside 1000
+// to 10,000,000 characters is ValidationError, and a document that is not
+// usable IdP metadata InvalidInput with a fixed description that never
+// carries it, all before any store access. An unknown provider is
+// NoSuchEntity. A provider whose stored encoding would pass
+// iam.MaxSAMLProviderEncodedLen bytes is InvalidInput, as in Create. A
+// document equal to the stored one writes nothing, so a retry after a lost
+// response succeeds unchanged. The write is conditional on the version
+// read: a provider written in between is read again, up to
+// maxDeleteAttempts, then ConcurrentModification and the other writer's
+// provider stays. A request that was canceled or whose deadline passed
+// writes nothing. A store failure is InternalFailure. Authorization
+// (iam:UpdateSAMLProvider) is console-api's.
+//
+// TODO(#196): serve this as an RPC once vws-proto carries UpdateSAMLProvider.
+func (s *Server) updateSAMLProvider(ctx context.Context, pid, arn, document string) (string, error) {
+	if !iam.ValidProject(pid) {
+		return "", invalidID("project " + quote(pid) + " is not a project id")
+	}
+	missing := noSAMLProvider(arn)
+	name, err := samlProviderName(pid, arn, missing)
+	if err != nil {
+		return "", err
+	}
+	if err := checkSAMLDocument(document); err != nil {
+		return "", err
+	}
+	if _, err := iam.ParseSAMLMetadata(document); err != nil {
+		return "", invalidInput("the SAML metadata document is not usable: " + err.Error())
+	}
+	p := s.project(pid)
+	for attempt := 1; ; attempt++ {
+		cur, err := readSAMLProvider(ctx, p, name, missing)
+		if err != nil {
+			return "", err
+		}
+		sp := cur.Object
+		if sp.MetadataDocument == document {
+			return iam.SAMLProviderARN(p.id, sp), nil
+		}
+		sp.MetadataDocument = document
+		sp.Generation++
+		sp.Updated = s.now().UTC()
+		if err := sp.Validate(); err != nil {
+			return "", samlProviderInvalid(err, document)
+		}
+		if err := ctx.Err(); err != nil {
+			return "", toStatus(ctx, err) // the caller is gone; write nothing
+		}
+		_, err = store.Update(ctx, p.b, sp, cur.Version)
+		switch {
+		case err == nil:
+			return iam.SAMLProviderARN(p.id, sp), nil
+		case errors.Is(err, store.ErrConflict) && attempt < maxDeleteAttempts:
+			continue
+		case errors.Is(err, store.ErrNotFound):
+			return "", missing
+		default:
+			return "", toStatus(ctx, err)
+		}
+	}
+}
+
+// checkSAMLDocument is ValidationError for a SAMLMetadataDocument outside
+// the AWS 1000 to 10,000,000 characters.
+func checkSAMLDocument(document string) error {
+	if n := utf8.RuneCountInString(document); n < iam.MinSAMLMetadataLen || n > iam.MaxSAMLMetadataLen {
+		return invalidSpec("samlMetadataDocument must be " + strconv.Itoa(iam.MinSAMLMetadataLen) +
+			" to " + strconv.Itoa(iam.MaxSAMLMetadataLen) + " characters")
+	}
+	return nil
+}
+
+// samlProviderInvalid maps an error of SAMLProvider.Validate on a provider
+// holding document to its AWS answer, never carrying the document.
+func samlProviderInvalid(err error, document string) error {
+	switch {
+	case errors.Is(err, iam.ErrSAMLProviderTooLarge):
+		return invalidInput("this service stores a SAML provider in at most " +
+			strconv.Itoa(iam.MaxSAMLProviderEncodedLen) + " encoded bytes")
+	case errors.Is(err, iam.ErrSAMLMetadata):
+		_, why := iam.ParseSAMLMetadata(document) // fixed text, never the document
+		return invalidInput("the SAML metadata document is not usable: " + why.Error())
+	}
+	return invalidSpec(err.Error())
+}
+
 // createSAMLProvider is IAM CreateSAMLProvider: it creates SAML provider
 // name in project pid from the IdP metadata document, with tags, and
 // returns it with its ARN.
@@ -245,9 +340,8 @@ func (s *Server) createSAMLProvider(
 		return samlProviderView{}, invalidSpec("name must be 1 to " + strconv.Itoa(iam.MaxSAMLProviderNameLen) +
 			" characters of [\\w._-]")
 	}
-	if n := utf8.RuneCountInString(document); n < iam.MinSAMLMetadataLen || n > iam.MaxSAMLMetadataLen {
-		return samlProviderView{}, invalidSpec("samlMetadataDocument must be " + strconv.Itoa(iam.MinSAMLMetadataLen) +
-			" to " + strconv.Itoa(iam.MaxSAMLMetadataLen) + " characters")
+	if err := checkSAMLDocument(document); err != nil {
+		return samlProviderView{}, err
 	}
 	if len(tags) > iam.MaxSAMLProviderTags {
 		return samlProviderView{}, invalidSpec("tags must have at most " + strconv.Itoa(iam.MaxSAMLProviderTags) + " items")
@@ -267,15 +361,7 @@ func (s *Server) createSAMLProvider(
 		MetadataDocument: document, Tags: kept,
 	}
 	if err := sp.Validate(); err != nil {
-		switch {
-		case errors.Is(err, iam.ErrSAMLProviderTooLarge):
-			return samlProviderView{}, invalidInput("this service stores a SAML provider in at most " +
-				strconv.Itoa(iam.MaxSAMLProviderEncodedLen) + " encoded bytes")
-		case errors.Is(err, iam.ErrSAMLMetadata):
-			_, why := iam.ParseSAMLMetadata(document) // fixed text, never the document
-			return samlProviderView{}, invalidInput("the SAML metadata document is not usable: " + why.Error())
-		}
-		return samlProviderView{}, invalidSpec(err.Error())
+		return samlProviderView{}, samlProviderInvalid(err, document)
 	}
 	if err := ctx.Err(); err != nil {
 		return samlProviderView{}, toStatus(ctx, err) // the caller is gone; write nothing
