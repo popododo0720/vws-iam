@@ -35,6 +35,18 @@ type RenameState struct {
 	RenameRequestID string `json:"renameRequestId,omitempty"`
 	// RenameStarted is when the in-flight rename was accepted.
 	RenameStarted time.Time `json:"renameStarted,omitzero"`
+	// RenameUndo, on the old object, is what the object held before the
+	// request that set RenameTo also changed its path and labels, so a
+	// rename whose new name is taken before the copy exists restores
+	// them, whoever undoes it.
+	RenameUndo *RenameUndo `json:"renameUndo,omitempty"`
+}
+
+// RenameUndo is the path and labels of an object before its rename
+// request changed them with the mark.
+type RenameUndo struct {
+	Path   string            `json:"path,omitempty"`
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // Renaming reports whether a rename of this object is in flight.
@@ -48,6 +60,22 @@ func (r RenameState) RenamePartner() string {
 	return r.RenamedFrom
 }
 
+// IsRenamePartner reports whether v is u's counterpart in u's in-flight
+// rename: v holds the other name with u's UID and the reciprocal marker
+// (RenameTo naming u on the old object, RenamedFrom on the new one). A
+// user created again under the other name is someone else.
+func (u User) IsRenamePartner(v User) bool {
+	other := u.RenamePartner()
+	if other == "" || v.UID != u.UID || !strings.EqualFold(v.Name, other) {
+		return false
+	}
+	back := v.RenameTo
+	if u.RenameTo != "" {
+		back = v.RenamedFrom
+	}
+	return strings.EqualFold(back, u.Name)
+}
+
 // Rename returns the rename state; promoted to User and Group.
 func (r RenameState) Rename() RenameState { return r }
 
@@ -59,6 +87,10 @@ func (r RenameState) check(what, name string, valid func(string) bool) error {
 		return invalid("%s %q rename target %q", what, name, r.RenameTo)
 	case r.RenamedFrom != "" && (!valid(r.RenamedFrom) || strings.EqualFold(r.RenamedFrom, name)):
 		return invalid("%s %q rename source %q", what, name, r.RenamedFrom)
+	case r.RenameUndo != nil && r.RenameTo == "":
+		return invalid("%s %q rename undo without a target", what, name)
+	case r.RenameUndo != nil && r.RenameUndo.Path != "" && !ValidPath(r.RenameUndo.Path):
+		return invalid("%s %q rename undo path %q", what, name, r.RenameUndo.Path)
 	case r.RenameConfirmed && r.RenamedFrom == "":
 		return invalid("%s %q rename confirmed without a source", what, name)
 	case r.RenameRequestID != "" && !ValidRequestID(r.RenameRequestID):

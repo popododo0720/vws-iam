@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"time"
 
@@ -83,8 +84,11 @@ type renamer[T iam.Renamable] struct {
 	checkName func(string) error
 	// mutable returns the name and rename state of obj.
 	mutable func(obj *T) (*string, *iam.RenameState)
-	uid     func(T) string
-	bump    func(*T)
+	// undoable returns the path and labels a rename request may change
+	// with the mark, which undo restores (iam.RenameUndo).
+	undoable func(obj *T) (*string, *map[string]string)
+	uid      func(T) string
+	bump     func(*T)
 	// moveRefs moves every reference from one name to another; nil when
 	// nothing else names the object. A non-nil held returns, before each
 	// move, the precondition that the old object still holds the name.
@@ -96,6 +100,7 @@ func (s *Server) userRenamer(p project) renamer[iam.User] {
 		s: s, p: p, what: "user",
 		checkName: func(n string) error { return checkID(n, "new user name") },
 		mutable:   func(u *iam.User) (*string, *iam.RenameState) { return &u.Name, &u.RenameState },
+		undoable:  func(u *iam.User) (*string, *map[string]string) { return &u.Path, &u.Labels },
 		uid:       func(u iam.User) string { return u.UID },
 		bump: func(u *iam.User) {
 			u.Generation++
@@ -116,8 +121,9 @@ func (s *Server) groupRenamer(p project) renamer[iam.Group] {
 			}
 			return nil
 		},
-		mutable: func(g *iam.Group) (*string, *iam.RenameState) { return &g.Name, &g.RenameState },
-		uid:     func(g iam.Group) string { return g.UID },
+		mutable:  func(g *iam.Group) (*string, *iam.RenameState) { return &g.Name, &g.RenameState },
+		undoable: func(g *iam.Group) (*string, *map[string]string) { return &g.Path, &g.Labels },
+		uid:      func(g iam.Group) string { return g.UID },
 		bump: func(g *iam.Group) {
 			g.Generation++
 			g.Updated = s.now().UTC()
@@ -184,8 +190,9 @@ func renameEntity[T iam.Renamable](
 				return cur, nil
 			}
 			return r.drive(ctx, cur)
-		case st.RenamedFrom != "" && attempt < maxRenamePasses:
+		case st.RenamedFrom != "" && attempt < maxRenamePasses && !validateOnly:
 			// old is the new side of an earlier rename: finish it first.
+			// A dry run writes nothing and answers ErrRenaming below.
 			if _, err := r.finish(ctx, cur); err != nil {
 				return zero, err
 			}
@@ -196,6 +203,8 @@ func renameEntity[T iam.Renamable](
 		if err := checkEtag(etag, cur.Version); err != nil {
 			return zero, err
 		}
+		path, labels := r.undoable(&cur.Object)
+		before := &iam.RenameUndo{Path: *path, Labels: maps.Clone(*labels)}
 		if apply != nil {
 			if err := apply(&cur.Object); err != nil {
 				return zero, err
@@ -223,7 +232,7 @@ func renameEntity[T iam.Renamable](
 			*name = newName
 			cur.Version, err = store.Update(ctx, r.p.b, cur.Object, cur.Version)
 		} else {
-			st.RenameTo, st.RenameStarted = newName, r.s.now().UTC()
+			st.RenameTo, st.RenameStarted, st.RenameUndo = newName, r.s.now().UTC(), before
 			cur.Version, err = store.UpdateMarked(ctx, r.p.b, cur.Object, cur.Version)
 		}
 		if errors.Is(err, store.ErrConflict) && etag == "" && attempt < maxRenamePasses {
@@ -442,6 +451,7 @@ func (r renamer[T]) copyOf(ctx context.Context, src store.Versioned[T]) (store.V
 	// The copy starts unconfirmed: until drive confirms it under the old
 	// object's mark, finish never promotes it (RenameConfirmed).
 	*name, st.RenamedFrom, st.RenameTo, st.RenameConfirmed = src.Object.Rename().RenameTo, from, "", false
+	st.RenameUndo = nil
 	ver, err := store.CreateMarked(ctx, r.p.b, want)
 	if err == nil {
 		return store.Versioned[T]{Object: want, Version: ver}, true, nil
@@ -483,14 +493,19 @@ func (r renamer[T]) copyOf(ctx context.Context, src store.Versioned[T]) (store.V
 }
 
 // undo clears the mark of a rename whose new name was taken before the
-// copy existed. It runs even when ctx ended, so the object is not left
-// frozen.
+// copy existed and restores the path and labels the request changed with
+// it (AWS changes nothing on EntityAlreadyExists). It runs even when ctx
+// ended, so the object is not left frozen.
 func (r renamer[T]) undo(ctx context.Context, src store.Versioned[T]) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	obj := src.Object
 	_, st := r.mutable(&obj)
-	st.RenameTo, st.RenameRequestID, st.RenameStarted = "", "", time.Time{}
+	if before := st.RenameUndo; before != nil {
+		path, labels := r.undoable(&obj)
+		*path, *labels = before.Path, before.Labels
+	}
+	st.RenameTo, st.RenameRequestID, st.RenameStarted, st.RenameUndo = "", "", time.Time{}, nil
 	if _, err := store.UpdateMarked(ctx, r.p.b, obj, src.Version); err != nil {
 		return fmt.Errorf("undo rename of %s %q: %w", r.what, src.Object.Key(), err)
 	}
