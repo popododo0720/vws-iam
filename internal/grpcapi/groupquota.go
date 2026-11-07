@@ -245,6 +245,11 @@ func (p project) createGroup(
 	v.Object.Members = g.Members
 	o.record(&v.Object.Meta)
 	ver, err := p.commitGroup(ctx, v, prev)
+	if errors.Is(err, store.ErrConflict) && requestID != "" {
+		if done, ok := p.completedBy(ctx, staged, g.Members); ok {
+			return done, nil
+		}
+	}
 	if err != nil {
 		// A rename may have marked the group this request left (a retry
 		// adopts it with the mark). Only the rename coordinator may remove
@@ -258,6 +263,21 @@ func (p project) createGroup(
 	}
 	v.Version = ver
 	return v, nil
+}
+
+// completedBy reports the group a duplicate delivery of the request that
+// staged it completed first: the staged group (same UID, so its RequestID
+// is this request's), unmarked, holding exactly members. A member add that
+// lost to that duplicate answers as it did instead of ABORTED (#162).
+func (p project) completedBy(
+	ctx context.Context, staged store.Versioned[iam.Group], members []string,
+) (store.Versioned[iam.Group], bool) {
+	cur, err := store.Get[iam.Group](ctx, p.b, staged.Object.Name)
+	if err != nil || cur.Object.UID != staged.Object.UID || cur.Object.Renaming() ||
+		len(addedMembers(cur.Object.Members, members)) > 0 || len(addedMembers(members, cur.Object.Members)) > 0 {
+		return cur, false
+	}
+	return cur, true
 }
 
 // dropStaged removes the empty group a refused createGroup staged. Another
