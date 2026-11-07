@@ -95,21 +95,22 @@ func RootCaller(mfa bool, authTime time.Time) Caller {
 const rootID = "root"
 
 // ConsoleCaller is the IAM user of a console session that the server has
-// already validated (grpcapi ValidateSession); mfa and authTime come from
-// that stored session. The user must still exist.
+// already validated (grpcapi ValidateSession); uid, mfa and authTime come
+// from that stored session. The user must still exist and, when uid is set,
+// be the user (UID) that signed in.
 func (s *Service) ConsoleCaller(
-	ctx context.Context, userName string, mfa bool, authTime time.Time,
+	ctx context.Context, userName, uid string, mfa bool, authTime time.Time,
 ) (_ Caller, err error) {
 	ctx, end := start(ctx, "ConsoleCaller")
 	defer end(&err)
 	u, err := store.Get[iam.User](ctx, s.b, userName)
-	if errors.Is(err, store.ErrNotFound) {
+	if errors.Is(err, store.ErrNotFound) || (err == nil && uid != "" && u.Object.UID != uid) {
 		return Caller{}, ErrInvalidToken
 	}
 	if err != nil {
 		return Caller{}, fmt.Errorf("console user: %w", err)
 	}
-	return Caller{principal: authz.Principal{Kind: authz.User, Name: u.Object.Name}, principalID: u.Object.ID, mfa: mfa, authTime: authTime}, nil
+	return userCaller(u.Object, mfa, authTime), nil
 }
 
 // Credential is what a request was signed with. Resolve must only be given
@@ -384,7 +385,16 @@ func (s *Service) Resolve(ctx context.Context, cred Credential) (_ Caller, err e
 	if err != nil {
 		return Caller{}, fmt.Errorf("resolve user: %w", err)
 	}
-	return Caller{principal: authz.Principal{Kind: authz.User, Name: u.Object.Name}, principalID: u.Object.ID}, nil
+	return userCaller(u.Object, false, time.Time{}), nil
+}
+
+// userCaller is u as a caller, bound to its unique id so a user created
+// again under the same name is never evaluated in its place.
+func userCaller(u iam.User, mfa bool, authTime time.Time) Caller {
+	return Caller{
+		principal:   authz.Principal{Kind: authz.User, Name: u.Name, ID: u.ID},
+		principalID: u.ID, mfa: mfa, authTime: authTime,
+	}
 }
 
 // verifyMFA checks an MFA code for a long-term or session user caller.
@@ -744,8 +754,8 @@ func (s *Service) checkPrincipal(ctx context.Context, sess session) error {
 // principal is the authz.Principal a session acts as.
 func (sess session) principal() authz.Principal {
 	p := authz.Principal{
-		Kind: authz.PrincipalKind(sess.Kind), Name: sess.Name, ARN: sess.ARN, SessionPolicies: sess.Policies,
-		SessionPolicyARNs: sess.PolicyARNs, Federated: sess.Federated,
+		Kind: authz.PrincipalKind(sess.Kind), Name: sess.Name, ID: sess.PrincipalID, ARN: sess.ARN,
+		SessionPolicies: sess.Policies, SessionPolicyARNs: sess.PolicyARNs, Federated: sess.Federated,
 	}
 	if p.Kind != authz.Role && !p.Federated {
 		p.ARN = "" // a GetSessionToken session acts as the user (or root) itself

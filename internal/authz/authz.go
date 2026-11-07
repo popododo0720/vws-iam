@@ -33,6 +33,10 @@ const (
 type Principal struct {
 	Kind PrincipalKind
 	Name string // user or role name
+	// ID is the unique id the principal was resolved as. When set, a
+	// stored user or role of that name with another id is a different
+	// principal (one deleted and created again), so it is ErrNoSuchEntity.
+	ID string
 	// ARN overrides the computed ARN, e.g. an assumed-role session ARN.
 	ARN string
 	// SessionPolicies narrow an STS session; nil means none.
@@ -159,7 +163,7 @@ func (a *Authorizer) IdentityPolicies(ctx context.Context, p Principal) ([]polic
 	switch p.Kind {
 	case User:
 		u, err := store.Get[iam.User](ctx, a.b, p.Name)
-		if errors.Is(err, store.ErrNotFound) {
+		if errors.Is(err, store.ErrNotFound) || (err == nil && p.ID != "" && u.Object.ID != p.ID) {
 			return nil, "", fmt.Errorf("user %q: %w", p.Name, ErrNoSuchEntity)
 		}
 		if err != nil {
@@ -202,7 +206,7 @@ func (a *Authorizer) IdentityPolicies(ctx context.Context, p Principal) ([]polic
 		return out, arn, nil
 	case Role:
 		r, err := store.Get[iam.Role](ctx, a.b, p.Name)
-		if errors.Is(err, store.ErrNotFound) {
+		if errors.Is(err, store.ErrNotFound) || (err == nil && p.ID != "" && r.Object.ID != p.ID) {
 			return nil, "", fmt.Errorf("role %q: %w", p.Name, ErrNoSuchEntity)
 		}
 		if err != nil {

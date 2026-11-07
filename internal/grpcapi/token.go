@@ -123,7 +123,7 @@ func (s *Server) authenticatedCallerFrom(
 		if v.Root() {
 			return p, sts.RootCaller(v.MFA, v.AuthTime), "", nil
 		}
-		c, err := p.sts.ConsoleCaller(ctx, v.UserName, v.MFA, v.AuthTime)
+		c, err := p.sts.ConsoleCaller(ctx, v.UserName, v.UserUID, v.MFA, v.AuthTime)
 		return p, c, "", err
 	}
 	return project{}, sts.Caller{}, "", missingAuthentication()

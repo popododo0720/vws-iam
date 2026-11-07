@@ -176,7 +176,7 @@ func (s *Server) sessionPrincipal(ctx context.Context, sess sts.Session) (*iamv1
 		pr.Type, pr.Arn, pr.UniqueId = iamv1.PrincipalType_PRINCIPAL_TYPE_ROOT, rootARN(pid), pid
 	case authz.User:
 		u, err := store.Get[iam.User](ctx, p.b, sess.Principal.Name)
-		if err != nil {
+		if err != nil || u.Object.ID != sess.PrincipalID {
 			return nil, badCredentials()
 		}
 		pr.Type, pr.Arn, pr.UniqueId, pr.Resource = iamv1.PrincipalType_PRINCIPAL_TYPE_USER, iam.UserARN(pid, u.Object), u.Object.ID, name(pid, "users", u.Object.Name)
@@ -255,7 +255,7 @@ func (s *Server) recheck(ctx context.Context, pr *iamv1.Principal, ref string) (
 		if iam.UserARN(pid, u.Object) != pr.GetArn() || u.Object.ID != pr.GetUniqueId() {
 			return deny("user identity mismatch")
 		}
-		c.az, c.userName = authz.Principal{Kind: authz.User, Name: u.Object.Name}, u.Object.Name
+		c.az, c.userName = authz.Principal{Kind: authz.User, Name: u.Object.Name, ID: u.Object.ID}, u.Object.Name
 	case iamv1.PrincipalType_PRINCIPAL_TYPE_ASSUMED_ROLE:
 		_, id, err := child(pr.GetResource(), "roles")
 		if err != nil {
@@ -272,7 +272,7 @@ func (s *Server) recheck(ctx context.Context, pr *iamv1.Principal, ref string) (
 		if pr.GetSessionName() == "" || arn != pr.GetArn() || r.Object.ID+":"+pr.GetSessionName() != pr.GetUniqueId() {
 			return deny("role session identity mismatch")
 		}
-		c.az = authz.Principal{Kind: authz.Role, Name: r.Object.Name, ARN: arn}
+		c.az = authz.Principal{Kind: authz.Role, Name: r.Object.Name, ID: r.Object.ID, ARN: arn}
 	default:
 		return deny("type")
 	}
