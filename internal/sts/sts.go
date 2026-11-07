@@ -576,6 +576,7 @@ func (s *Service) AssumeRole(
 	}
 	tctx := s.callerContext(c, reqCtx)
 	tctx["aws:PrincipalArn"] = []string{callerARN}
+	setTimeKeys(tctx, s.now())
 	td := policy.Evaluate(policy.Request{Principal: callerARN, Account: s.account, Action: "sts:AssumeRole", Resource: roleARN, Context: tctx}, []policy.Named{{Name: roleARN + " trust policy", Doc: trust}}, nil)
 	if !td.Allowed {
 		return Credentials{}, fmt.Errorf("%w: %s does not trust %s", ErrAccessDenied, roleARN, callerARN)
