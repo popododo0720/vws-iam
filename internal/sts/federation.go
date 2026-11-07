@@ -137,6 +137,16 @@ func (s *Service) GetFederationToken(
 
 // packedPercent is the AWS PackedPolicySize of packed characters of
 // session policies: the percentage of MaxPackedPolicyChars, rounded up.
+//
+// This is a documented approximation, not the AWS value (#192). AWS
+// reports the share of an unpublished packed (compressed binary) form of
+// the session policies and session tags, so no packing VWS chose would
+// reproduce its numbers. VWS counts plaintext instead: the inline policy
+// in characters plus each policy ARN in bytes (validateSessionPolicies).
+// The figure is deterministic, and PackedPolicyTooLarge is the same
+// count over MaxPackedPolicyChars, so VWS may refuse a request whose
+// policies AWS would pack small enough to accept. Session tags are not
+// taken yet; when they are, they join this count.
 func packedPercent(packed int) int {
 	return (packed*100 + MaxPackedPolicyChars - 1) / MaxPackedPolicyChars
 }
