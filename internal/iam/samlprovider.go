@@ -14,12 +14,14 @@ import (
 // MaxSAMLProviderEncodedLen is a VWS limit: a provider is stored as one
 // custom resource, which must stay under the etcd request limit
 // (about 1.5 MiB), so its JSON encoding is bounded below that.
+// MaxSAMLProvidersPerAccount is the AWS SAMLProvidersPerAccount quota.
 const (
-	MaxSAMLProviderNameLen    = 128
-	MinSAMLMetadataLen        = 1000
-	MaxSAMLMetadataLen        = 10_000_000
-	MaxSAMLProviderTags       = 50
-	MaxSAMLProviderEncodedLen = 1 << 20
+	MaxSAMLProviderNameLen     = 128
+	MinSAMLMetadataLen         = 1000
+	MaxSAMLMetadataLen         = 10_000_000
+	MaxSAMLProviderTags        = 50
+	MaxSAMLProviderEncodedLen  = 1 << 20
+	MaxSAMLProvidersPerAccount = 100
 )
 
 // ErrSAMLProviderTooLarge is a SAML provider whose stored encoding would
@@ -41,12 +43,18 @@ func ValidSAMLProviderName(s string) bool { return samlProviderNameRE.MatchStrin
 // is the document as given: it holds public certificates only. What the
 // document means is read from it with ParseSAMLMetadata where it is
 // used, so there is one authoritative value.
+//
+// A Pending provider is a create that has not committed under the
+// SAMLProvidersPerAccount count: it holds its name and nothing else. No
+// read sees it, it is not counted, and the next create of its name
+// replaces it.
 type SAMLProvider struct {
 	Meta
 	Name             string            `json:"name"`
 	Created          time.Time         `json:"created"`
 	MetadataDocument string            `json:"metadataDocument"`
 	Tags             map[string]string `json:"tags,omitempty"`
+	Pending          bool              `json:"pending,omitempty"`
 }
 
 func (SAMLProvider) Kind() Kind    { return KindSAMLProvider }
@@ -75,7 +83,12 @@ func (p SAMLProvider) Validate() error {
 	if len(p.MetadataDocument) > MaxSAMLProviderEncodedLen {
 		return fmt.Errorf("%w: %w: SAML provider %q", ErrInvalid, ErrSAMLProviderTooLarge, p.Name)
 	}
-	enc, err := json.Marshal(p)
+	// The limit is on the provider as it serves: the pending marker of a
+	// create that has not committed is not counted, so every provider
+	// that fits once active can also be stored pending.
+	active := p
+	active.Pending = false
+	enc, err := json.Marshal(active)
 	if err != nil {
 		return fmt.Errorf("encode SAML provider %q: %w", p.Name, err)
 	}

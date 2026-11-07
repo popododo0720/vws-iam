@@ -24,7 +24,8 @@ type storedSAMLProviders struct{ s *Service }
 // SAMLProvider returns the stored provider arn names. The store finds a
 // name in any case; the returned ARN carries the name as stored, so
 // AssumeRoleWithSAML refuses an ARN that differs from it only in case. An
-// ARN of another account or kind and an unknown name are store.ErrNotFound.
+// ARN of another account or kind, an unknown name and a pending provider
+// (one whose create has not committed) are store.ErrNotFound.
 // A stored document that no longer parses is an error that is not
 // ErrNotFound (an operator fault, never a client one), and carries no
 // document text.
@@ -36,6 +37,9 @@ func (p storedSAMLProviders) SAMLProvider(ctx context.Context, arn string) (SAML
 	v, err := store.Get[iam.SAMLProvider](ctx, p.s.b, name)
 	if err != nil {
 		return SAMLProvider{}, fmt.Errorf("get SAML provider %q: %w", name, err)
+	}
+	if v.Object.Pending {
+		return SAMLProvider{}, store.ErrNotFound
 	}
 	md, err := iam.ParseSAMLMetadata(v.Object.MetadataDocument)
 	if err != nil {

@@ -138,9 +138,20 @@ func TestSAMLProviderValidateEncodedSize(t *testing.T) {
 	if err := at(comment).Validate(); err != nil {
 		t.Fatalf("at the limit: %v", err)
 	}
+	// The pending marker of an uncommitted create is not counted.
+	pending := at(comment)
+	pending.Pending = true
+	if err := pending.Validate(); err != nil {
+		t.Fatalf("pending at the limit: %v", err)
+	}
 	err := at(comment + "x").Validate()
 	if !errors.Is(err, iam.ErrSAMLProviderTooLarge) || !errors.Is(err, iam.ErrInvalid) {
 		t.Fatalf("one byte over: %v", err)
+	}
+	pending = at(comment + "x")
+	pending.Pending = true
+	if err := pending.Validate(); !errors.Is(err, iam.ErrSAMLProviderTooLarge) {
+		t.Fatalf("pending one byte over: %v", err)
 	}
 	// A document longer than the limit in plain bytes is refused without
 	// being encoded.
