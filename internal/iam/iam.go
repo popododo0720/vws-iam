@@ -38,6 +38,8 @@ const (
 	KindPasswordPolicy Kind = "IamAccountPasswordPolicy"
 	// KindRootLogin is the root user's console password (#34).
 	KindRootLogin Kind = "IamRootLogin"
+	// KindSAMLProvider is a SAML identity provider (#196).
+	KindSAMLProvider Kind = "IamSAMLProvider"
 )
 
 // Kinds lists every stored kind.
@@ -45,6 +47,7 @@ var Kinds = []Kind{
 	KindUser, KindGroup, KindRole, KindPolicy, KindAccessKey, KindMfaDevice,
 	KindKeyIndex, KindSession, KindOperation, KindReplay, KindAttempt, KindMemberLock, KindFidoDevice,
 	KindInstanceProfile, KindAccountAlias, KindAccountAliasClaim, KindPasswordPolicy, KindRootLogin,
+	KindSAMLProvider,
 }
 
 // Meta is the resource envelope every API resource carries.

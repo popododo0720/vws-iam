@@ -113,6 +113,10 @@ func TestARNs(t *testing.T) {
 	if want := "arn:vws:iam::000000000000:instance-profile/web"; got != want {
 		t.Fatal(got)
 	}
+	got = iam.SAMLProviderARN("000000000000", iam.SAMLProvider{Name: "corp.idp"})
+	if want := "arn:vws:iam::000000000000:saml-provider/corp.idp"; got != want {
+		t.Fatal(got)
+	}
 	got = iam.MfaDeviceARN("000000000000", iam.MfaDevice{Name: "d", Path: "/team/"})
 	if want := "arn:vws:iam::000000000000:mfa/team/d"; got != want {
 		t.Fatal(got)
