@@ -510,3 +510,59 @@ func TestLockoutBackoffCountsEnableFailures(t *testing.T) {
 		t.Fatalf("enable left lockouts: %v %d", err, d.Object.Lockouts)
 	}
 }
+
+// TestLongestDeviceNameSerial: in a 63-character project a device named
+// with the longest allowed name has a 256-character serial, the AWS
+// SerialNumber maximum, that enables, verifies and survives a restart; a
+// path that would push the serial past 256 is refused and nothing is
+// stored (#179).
+func TestLongestDeviceNameSerial(t *testing.T) {
+	ctx := context.Background()
+	keys, err := secret.NewKeyring("kek-1", map[string][]byte{"kek-1": make([]byte, 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := memstore.New()
+	if _, err := store.Create(ctx, b, iam.User{Meta: iam.Meta{UID: "uid-alice"}, Name: "alice", ID: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	clk := &clock{t: time.Unix(1_800_000_000, 0)}
+	project := strings.Repeat("p", 63)
+	svc := mfa.New(b, keys, project, clk.now)
+	name := strings.Repeat("M", iam.MaxMFADeviceNameLen)
+
+	if _, err := svc.CreateVirtual(ctx, "short", "/"+strings.Repeat("x", 170)+"/"); !errors.Is(err, iam.ErrInvalid) {
+		t.Fatalf("serial over 256 characters: %v", err)
+	}
+	if _, err := b.Get(ctx, iam.KindMfaDevice, "short"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("refused device was stored: %v", err)
+	}
+	if _, err := svc.CreateVirtual(ctx, name, "/a/"); !errors.Is(err, iam.ErrInvalid) {
+		t.Fatalf("longest name under a path: %v", err)
+	}
+
+	seed := enroll(t, svc, clk, "alice", name)
+	d, err := store.Get[iam.MfaDevice](ctx, b, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serial := svc.Serial(d.Object)
+	if len(serial) != iam.MaxSerialNumberLen {
+		t.Fatalf("serial of %d characters, want %d", len(serial), iam.MaxSerialNumberLen)
+	}
+	clk.t = clk.t.Add(totp.Period)
+	if err := svc.VerifySerial(ctx, "alice", serial, code(seed, clk.t, 0)); err != nil {
+		t.Fatalf("verify longest serial: %v", err)
+	}
+	clk.t = clk.t.Add(totp.Period)
+	restarted := mfa.New(b, keys, project, clk.now)
+	if err := restarted.VerifySerial(ctx, "alice", serial, code(seed, clk.t, 0)); err != nil {
+		t.Fatalf("verify longest serial after restart: %v", err)
+	}
+	if err := restarted.VerifySerial(ctx, "alice", serial, code(seed, clk.t, 0)); !errors.Is(err, mfa.ErrInvalidCode) {
+		t.Fatalf("replayed code on longest serial: %v", err)
+	}
+	if _, err := restarted.CreateVirtual(ctx, strings.ToLower(name), ""); !errors.Is(err, store.ErrExists) {
+		t.Fatalf("second create of the longest name: %v", err)
+	}
+}

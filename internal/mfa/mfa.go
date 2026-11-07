@@ -181,9 +181,15 @@ var b32 = base32.StdEncoding.WithPadding(base32.NoPadding)
 
 // CreateVirtual makes an unassigned device at path and returns its seed,
 // once. Path is part of the serial number and must be empty or end in "/".
+// A name and path whose serial number is longer than
+// iam.MaxSerialNumberLen are invalid: no call could name the device.
 func (s *Service) CreateVirtual(ctx context.Context, name, path string) (_ Enrollment, err error) {
 	ctx, end := start(ctx, "CreateVirtual")
 	defer end(&err)
+	if n := len(s.Serial(iam.MfaDevice{Name: name, Path: path})); n > iam.MaxSerialNumberLen {
+		return Enrollment{}, fmt.Errorf("create mfa device %s: %w: serial number of %d characters, at most %d",
+			name, iam.ErrInvalid, n, iam.MaxSerialNumberLen)
+	}
 	seed := make([]byte, 20)
 	if _, err := rand.Read(seed); err != nil {
 		return Enrollment{}, fmt.Errorf("create mfa device %s: seed: %w", name, err)

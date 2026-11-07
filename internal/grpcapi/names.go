@@ -52,6 +52,13 @@ func checkID(id, what string) error {
 	return nil
 }
 
+func checkMFADeviceID(id string) error {
+	if !iam.ValidMFADeviceName(id) {
+		return invalidID("mfa device id " + quote(id) + " must match " + iam.MFADeviceNamePattern())
+	}
+	return nil
+}
+
 func checkGroupID(id string) error {
 	if !iam.ValidGroupName(id) {
 		return invalidID("group id " + quote(id) + " must match " + iam.GroupNamePattern())

@@ -88,7 +88,7 @@ func (s *Server) CreateVirtualMfaDevice(ctx context.Context, req *iamv1.CreateVi
 	if err != nil {
 		return nil, err
 	}
-	if err := checkID(req.GetMfaDeviceId(), "mfa device"); err != nil {
+	if err := checkMFADeviceID(req.GetMfaDeviceId()); err != nil {
 		return nil, err
 	}
 	p := s.project(pid)

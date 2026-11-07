@@ -88,6 +88,16 @@ const (
 	// MaxGroupNameLen is the AWS GroupName limit; user, role, and other
 	// names stay at maxNameLen (#135).
 	MaxGroupNameLen = 128
+	// MaxSerialNumberLen is the AWS SerialNumber limit of every call that
+	// takes an MFA serial (EnableMFADevice, ResyncMFADevice,
+	// GetSessionToken, AssumeRole).
+	MaxSerialNumberLen = 256
+	// MaxMFADeviceNameLen bounds a virtual MFA device name. AWS
+	// VirtualMFADeviceName has no maximum, but its serial
+	// arn:vws:iam::<project>:mfa/<name> must fit MaxSerialNumberLen, so
+	// this is the longest name whose root-path serial fits in every
+	// project (#179).
+	MaxMFADeviceNameLen = MaxSerialNumberLen - len("arn:"+Partition+":iam::") - maxProjectLen - len(":mfa/")
 )
 
 func namePattern(max int) string {
@@ -102,10 +112,15 @@ func PolicyNamePattern() string { return namePattern(MaxPolicyNameLen) }
 // characters of the IAM name alphabet.
 func GroupNamePattern() string { return namePattern(MaxGroupNameLen) }
 
+// MFADeviceNamePattern is the virtual MFA device name rule: 1 to
+// MaxMFADeviceNameLen characters of the IAM name alphabet.
+func MFADeviceNamePattern() string { return namePattern(MaxMFADeviceNameLen) }
+
 var (
 	nameRE       = regexp.MustCompile("^" + ResourceNamePattern() + "$")
 	policyNameRE = regexp.MustCompile("^" + PolicyNamePattern() + "$")
 	groupNameRE  = regexp.MustCompile("^" + GroupNamePattern() + "$")
+	mfaNameRE    = regexp.MustCompile("^" + MFADeviceNamePattern() + "$")
 	pathRE       = regexp.MustCompile(`^/([\x21-\x7e]{1,510}/)?$`)
 )
 
@@ -134,6 +149,10 @@ func ValidPolicyName(s string) bool { return policyNameRE.MatchString(s) }
 // ValidGroupName reports whether s is a group name: 1 to 128 characters of
 // [A-Za-z0-9+=,.@_-], the AWS GroupName rule.
 func ValidGroupName(s string) bool { return groupNameRE.MatchString(s) }
+
+// ValidMFADeviceName reports whether s is a virtual MFA device name: 1 to
+// MaxMFADeviceNameLen characters of [A-Za-z0-9+=,.@_-].
+func ValidMFADeviceName(s string) bool { return mfaNameRE.MatchString(s) }
 
 // MaxPathPrefixLen is the AWS limit on a list call's PathPrefix.
 const MaxPathPrefixLen = 512
@@ -560,7 +579,10 @@ func (d MfaDevice) Validate() error {
 	if err := d.validRequests(); err != nil {
 		return err
 	}
-	if err := checkName("mfa device", d.Name, d.Path); err != nil {
+	if !ValidMFADeviceName(d.Name) {
+		return invalid("mfa device name %q", d.Name)
+	}
+	if err := checkPath("mfa device", d.Path); err != nil {
 		return err
 	}
 	if d.Enabled && d.UserName == "" {
