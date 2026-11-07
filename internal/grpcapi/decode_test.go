@@ -101,7 +101,12 @@ func TestDecodeAuthorizationMessage(t *testing.T) {
 					Resource   string `json:"resource"`
 					Conditions struct {
 						Items []struct {
-							Key string `json:"key"`
+							Key    string `json:"key"`
+							Values struct {
+								Items []struct {
+									Value string `json:"value"`
+								} `json:"items"`
+							} `json:"values"`
 						} `json:"items"`
 					} `json:"conditions"`
 				} `json:"context"`
@@ -117,12 +122,29 @@ func TestDecodeAuthorizationMessage(t *testing.T) {
 				c.Action != "s3:DeleteObject" || c.Resource != "arn:vws:s3:::locked/b" {
 				t.Fatalf("decoded %s", got)
 			}
-			keys := map[string]bool{}
+			// Every key the decision evaluated, those authz.Authorize sets
+			// included, with the values it evaluated.
+			keys := map[string]string{}
 			for _, it := range c.Conditions.Items {
-				keys[it.Key] = true
+				var vs []string
+				for _, v := range it.Values.Items {
+					vs = append(vs, v.Value)
+				}
+				keys[it.Key] = strings.Join(vs, ",")
 			}
-			if !keys["s3:prefix"] || !keys["aws:MultiFactorAuthPresent"] || !keys["aws:userid"] {
-				t.Fatalf("conditions %s", got)
+			want := map[string]string{
+				"s3:prefix": "locked/", "aws:MultiFactorAuthPresent": "false",
+				"aws:userid": bob.user.GetStatus().GetUniqueId(), "aws:PrincipalAccount": proj,
+				"aws:PrincipalArn": "arn:vws:iam::acme:user/bob", "aws:username": "bob",
+				"aws:CurrentTime": now.Format(time.RFC3339),
+			}
+			for k, v := range want {
+				if keys[k] != v {
+					t.Fatalf("condition %s = %q, want %q in %s", k, keys[k], v, got)
+				}
+			}
+			if len(keys) != len(want) {
+				t.Fatalf("conditions %v, want %v", keys, want)
 			}
 
 			// The same signed request cannot be used twice.
@@ -380,6 +402,91 @@ func TestDecodeAuthorizationMessageMFAAgeDeny(t *testing.T) {
 			sErr, cErr := decode()
 			wantErr(t, sErr, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
 			wantErr(t, cErr, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+		})
+	}
+}
+
+// TestDecodeAuthorizationMessageStatements: a decoded matched statement
+// carries the statement's actions, resources and conditions, and the
+// unique id of the user (principals) or group (principalGroups) whose
+// policy holds it, in the AWS shape, on both store backends.
+func TestDecodeAuthorizationMessageStatements(t *testing.T) {
+	for _, bk := range renameBackends {
+		t.Run(bk.name, func(t *testing.T) {
+			now := time.Now().UTC()
+			e := newEnvOn(t, bk.open(), &now)
+			ctx := t.Context()
+			carol := e.keyedUser(t, "carol", `{"Version":"2012-10-17","Statement":[
+				{"Effect":"Allow","Action":"s3:*","Resource":"*"},
+				{"Sid":"NoPublicPut","Effect":"Deny","Action":["s3:PutObject","s3:PutObjectAcl"],
+				 "Resource":["arn:vws:s3:::vault/*","arn:vws:s3:::safe/*"],
+				 "Condition":{"StringEquals":{"s3:x-amz-acl":["public-read","public-read-write"]}}}]}`)
+			if _, err := e.groups.CreateGroup(ctx, &iamv1.CreateGroupRequest{
+				Parent: parentName, GroupId: "ops",
+				Group: &iamv1.Group{Spec: &iamv1.GroupSpec{
+					Members: []string{userName("carol")},
+					InlinePolicies: map[string]string{"guard": `{"Version":"2012-10-17","Statement":
+						{"Sid":"NoDeleteBucket","Effect":"Deny","Action":"s3:DeleteBucket","Resource":"*"}}`},
+				}},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			g, err := e.groups.GetGroup(ctx, &iamv1.GetGroupRequest{Name: groupName("ops")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			auditor := e.keyedUser(t, "auditor", `{"Version":"2012-10-17","Statement":[
+				{"Effect":"Allow","Action":"sts:DecodeAuthorizationMessage","Resource":"*"}]}`)
+			a, err := e.auth.Authenticate(ctx, e.sign(carol.id, carol.secretKey, ""))
+			if err != nil {
+				t.Fatal(err)
+			}
+			decode := func(action, resource string, rc map[string]*iamv1.ContextValues) string {
+				t.Helper()
+				deny, enc, err := e.api.AuthorizeEncoded(ctx, &iamv1.AuthorizeRequest{
+					Principal: a.GetPrincipal(), Action: action, Resources: []string{resource}, Context: rc,
+				})
+				if err != nil || deny.GetDecision() != iamv1.Decision_DECISION_DENY_EXPLICIT || enc == "" {
+					t.Fatalf("%s: %v %v", action, deny, err)
+				}
+				signed := e.stsSign(auditor.id, auditor.secretKey, "", decodeAction)
+				got, err := e.api.DecodeAuthorizationMessage(ctx, signed, "", enc)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var m struct {
+					MatchedStatements json.RawMessage `json:"matchedStatements"`
+				}
+				if err := json.Unmarshal([]byte(got), &m); err != nil {
+					t.Fatal(err)
+				}
+				return string(m.MatchedStatements)
+			}
+
+			got := decode("s3:PutObject", "arn:vws:s3:::vault/a",
+				map[string]*iamv1.ContextValues{"s3:x-amz-acl": {Values: []string{"public-read"}}})
+			want := `{"items":[{"statementId":"NoPublicPut","effect":"DENY",` +
+				`"sourcePolicyName":"arn:vws:iam::acme:policy/carol-policy",` +
+				`"principals":{"items":[{"value":"` + carol.user.GetStatus().GetUniqueId() + `"}]},` +
+				`"principalGroups":{"items":[]},` +
+				`"actions":{"items":[{"value":"s3:PutObject"},{"value":"s3:PutObjectAcl"}]},` +
+				`"resources":{"items":[{"value":"arn:vws:s3:::vault/*"},{"value":"arn:vws:s3:::safe/*"}]},` +
+				`"conditions":{"items":[{"key":"s3:x-amz-acl",` +
+				`"values":{"items":[{"value":"public-read"},{"value":"public-read-write"}]}}]}}]}`
+			if got != want {
+				t.Fatalf("user statement\n%s\nwant\n%s", got, want)
+			}
+
+			got = decode("s3:DeleteBucket", "arn:vws:s3:::vault", nil)
+			want = `{"items":[{"statementId":"NoDeleteBucket","effect":"DENY",` +
+				`"sourcePolicyName":"arn:vws:iam::acme:group/ops:inline/guard",` +
+				`"principals":{"items":[]},` +
+				`"principalGroups":{"items":[{"value":"` + g.GetStatus().GetUniqueId() + `"}]},` +
+				`"actions":{"items":[{"value":"s3:DeleteBucket"}]},` +
+				`"resources":{"items":[{"value":"*"}]},"conditions":{"items":[]}}]}`
+			if got != want {
+				t.Fatalf("group statement\n%s\nwant\n%s", got, want)
+			}
 		})
 	}
 }

@@ -38,8 +38,10 @@ func sampleMessage() sts.AuthorizationMessage {
 	return sts.NewAuthorizationMessage(
 		sts.MessagePrincipal{ID: "3", Name: "bob", ARN: "arn:vws:iam::" + acct + ":user/bob"},
 		"ec2:StopInstances", "arn:vws:ec2:kr-1:"+acct+":instance/i-1",
-		policy.Decision{Explicit: true, Policy: "guard", Statement: "NoStop"},
-		map[string][]string{"ec2:Tenancy": {"default"}, "aws:MultiFactorAuthPresent": {"false"}},
+		policy.Decision{
+			Explicit: true, Policy: "guard", Statement: "NoStop",
+			Context: map[string][]string{"ec2:Tenancy": {"default"}, "aws:MultiFactorAuthPresent": {"false"}},
+		},
 	)
 }
 
@@ -62,7 +64,9 @@ func TestDecodeAuthorizationMessageRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := `{"allowed":false,"explicitDeny":true,` +
-		`"matchedStatements":{"items":[{"statementId":"NoStop","effect":"DENY","sourcePolicyName":"guard"}]},` +
+		`"matchedStatements":{"items":[{"statementId":"NoStop","effect":"DENY","sourcePolicyName":"guard",` +
+		`"principals":{"items":[]},"principalGroups":{"items":[]},"actions":{"items":[]},` +
+		`"resources":{"items":[]},"conditions":{"items":[]}}]},` +
 		`"failures":{"items":[]},` +
 		`"context":{"principal":{"id":"3","name":"bob","arn":"arn:vws:iam::` + acct + `:user/bob"},` +
 		`"action":"ec2:StopInstances","resource":"arn:vws:ec2:kr-1:` + acct + `:instance/i-1",` +
@@ -77,7 +81,7 @@ func TestDecodeAuthorizationMessageRoundTrip(t *testing.T) {
 		t.Fatalf("repeat by root: %v %s", err, again)
 	}
 	// An implicit deny with no matching statement has empty lists, not null.
-	implicit := sts.NewAuthorizationMessage(sts.MessagePrincipal{ID: "3"}, "s3:GetObject", "*", policy.Decision{}, nil)
+	implicit := sts.NewAuthorizationMessage(sts.MessagePrincipal{ID: "3"}, "s3:GetObject", "*", policy.Decision{})
 	enc, err = e.svc.EncodeAuthorizationMessage(implicit)
 	if err != nil {
 		t.Fatal(err)
@@ -224,7 +228,7 @@ func TestDecodeAuthorizationMessageLengthBounds(t *testing.T) {
 	for _, k := range []string{"a", "b", "c", "d", "e", "f", "g", "h"} {
 		big["vws:"+k] = []string{strings.Repeat(k, 1500)}
 	}
-	m := sts.NewAuthorizationMessage(sts.MessagePrincipal{ID: "3"}, "s3:PutObject", "*", policy.Decision{}, big)
+	m := sts.NewAuthorizationMessage(sts.MessagePrincipal{ID: "3"}, "s3:PutObject", "*", policy.Decision{Context: big})
 	enc, err := e.svc.EncodeAuthorizationMessage(m)
 	if err != nil {
 		t.Fatal(err)
@@ -242,9 +246,67 @@ func TestDecodeAuthorizationMessageLengthBounds(t *testing.T) {
 	if len(m.Context.Conditions.Items) != len(big) {
 		t.Fatal("encoding changed the caller's message")
 	}
+	// With a matched statement too, context keys go first, and the
+	// statement keeps every field until they are gone.
+	var res []string
+	for _, k := range []string{"a", "b", "c", "d", "e", "f"} {
+		res = append(res, "arn:vws:s3:::"+strings.Repeat(k, 1200))
+	}
+	withStmt := func(ctx map[string][]string, res []string) sts.AuthorizationMessage {
+		st := policy.Statement{
+			Sid: "NoPut", Effect: policy.Deny, Actions: []string{"s3:PutObject"}, Resources: res,
+			Conditions: []policy.Condition{{Op: "StringEquals", Key: "s3:x-amz-acl", Values: []string{"public-read"}}},
+		}
+		return sts.NewAuthorizationMessage(sts.MessagePrincipal{ID: "3"}, "s3:PutObject", "*", policy.Decision{
+			Explicit: true, Policy: "guard", Statement: "NoPut", Context: ctx,
+			Matched: &policy.Matched{Statement: st, Holder: policy.Holder{ID: "3"}},
+		})
+	}
+	reader := e.caller(t, "auditor")
+	decoded := func(m sts.AuthorizationMessage) sts.AuthorizationMessage {
+		t.Helper()
+		enc, err := e.svc.EncodeAuthorizationMessage(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(enc) > sts.MaxEncodedMessageLen {
+			t.Fatalf("encoded %d chars", len(enc))
+		}
+		got, err := e.svc.DecodeAuthorizationMessage(ctx, reader, nil, enc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out sts.AuthorizationMessage
+		if err := json.Unmarshal([]byte(got), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	small := map[string][]string{"vws:a": {strings.Repeat("a", 1500)}}
+	fits := decoded(withStmt(small, res[:2]))
+	if s := fits.MatchedStatements.Items[0]; len(fits.Context.Conditions.Items) != 1 || len(s.Resources.Items) != 2 ||
+		len(s.Conditions.Items) != 1 || len(s.Actions.Items) != 1 || len(s.Principals.Items) != 1 {
+		t.Fatalf("a message that fits lost items: %d context keys, %d resources, %d conditions",
+			len(fits.Context.Conditions.Items), len(s.Resources.Items), len(s.Conditions.Items))
+	}
+	m = withStmt(big, res)
+	trimmed := decoded(m)
+	s := trimmed.MatchedStatements.Items[0]
+	if len(trimmed.Context.Conditions.Items) != 0 || len(s.Conditions.Items) != 0 ||
+		len(s.Resources.Items) == 0 || len(s.Resources.Items) == len(res) ||
+		s.Resources.Items[0].Value != res[0] || len(s.Actions.Items) != 1 || len(s.Principals.Items) != 1 ||
+		s.StatementID != "NoPut" || s.Effect != "DENY" {
+		t.Fatalf("trim order: %d context keys, %d conditions, %d of %d resources, %d actions, %d principals",
+			len(trimmed.Context.Conditions.Items), len(s.Conditions.Items), len(s.Resources.Items), len(res),
+			len(s.Actions.Items), len(s.Principals.Items))
+	}
+	if ms := m.MatchedStatements.Items[0]; len(m.Context.Conditions.Items) != len(big) ||
+		len(ms.Resources.Items) != len(res) || len(ms.Conditions.Items) != 1 {
+		t.Fatal("encoding changed the caller's message")
+	}
 	// A message that cannot fit even with no conditions is refused.
 	long := strings.Repeat("r", sts.MaxEncodedMessageLen)
-	huge := sts.NewAuthorizationMessage(sts.MessagePrincipal{ID: "3"}, "s3:PutObject", long, policy.Decision{}, nil)
+	huge := sts.NewAuthorizationMessage(sts.MessagePrincipal{ID: "3"}, "s3:PutObject", long, policy.Decision{})
 	if _, err := e.svc.EncodeAuthorizationMessage(huge); !errors.Is(err, sts.ErrInvalidRequest) {
 		t.Fatalf("oversized message: %v", err)
 	}
@@ -310,5 +372,52 @@ func TestDecodeAuthorizationMessageAcrossKEKRotation(t *testing.T) {
 	_, err = dropped.DecodeAuthorizationMessage(ctx, c, nil, enc)
 	if !errors.Is(err, sts.ErrInvalidAuthorizationMessage) {
 		t.Fatalf("old KEK removed: %v", err)
+	}
+}
+
+// TestAuthorizationMessageNegatedElements: AWS has no field for
+// NotAction, NotResource or NotPrincipal, so a statement using them lists
+// no actions, resources or statement principals rather than the patterns
+// it excludes; the holder's id is still listed.
+func TestAuthorizationMessageNegatedElements(t *testing.T) {
+	st := policy.Statement{
+		Sid: "OnlyS3", Effect: policy.Deny, Actions: []string{"s3:*"}, NotAction: true,
+		Resources: []string{"arn:vws:s3:::pub/*"}, NotRes: true,
+		Principals: map[string][]string{"AWS": {"arn:vws:iam::" + acct + ":root"}}, NotPrincipal: true,
+	}
+	m := sts.NewAuthorizationMessage(sts.MessagePrincipal{ID: "3"}, "ec2:RunInstances", "*", policy.Decision{
+		Explicit: true, Policy: "guard", Statement: "OnlyS3",
+		Matched: &policy.Matched{Statement: st, Holder: policy.Holder{ID: "AIDA3"}},
+	})
+	b, err := json.Marshal(m.MatchedStatements)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"items":[{"statementId":"OnlyS3","effect":"DENY","sourcePolicyName":"guard",` +
+		`"principals":{"items":[{"value":"AIDA3"}]},"principalGroups":{"items":[]},` +
+		`"actions":{"items":[]},"resources":{"items":[]},"conditions":{"items":[]}}]}`
+	if string(b) != want {
+		t.Fatalf("got\n%s\nwant\n%s", b, want)
+	}
+}
+
+// TestAuthorizationMessageFromEarlierRelease: a message sealed before
+// matched statements had their lists decodes them as empty lists, not
+// null.
+func TestAuthorizationMessageFromEarlierRelease(t *testing.T) {
+	e := msgEnv(t)
+	old := sts.AuthorizationMessage{MatchedStatements: sts.Items[sts.MatchedStatement]{
+		Items: []sts.MatchedStatement{{StatementID: "NoStop", Effect: "DENY", SourcePolicyName: "guard"}},
+	}}
+	enc, err := e.svc.EncodeAuthorizationMessage(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.svc.DecodeAuthorizationMessage(context.Background(), e.caller(t, "auditor"), nil, enc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, "null") || !strings.Contains(got, `"principals":{"items":[]}`) {
+		t.Fatalf("decoded %s", got)
 	}
 }

@@ -3,6 +3,8 @@ package authz_test
 import (
 	"context"
 	"errors"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -179,5 +181,48 @@ func TestAuthorizeBindsPrincipalID(t *testing.T) {
 		if d, err := a.Authorize(ctx, p, "s3:GetObject", "*", nil); err != nil || !d.Allowed {
 			t.Errorf("%s with id %q: %+v %v", p.Name, p.ID, d, err)
 		}
+	}
+}
+
+// TestAuthorizeReportsEvaluatedContext: the decision carries the context
+// it evaluated, the keys Authorize sets included and request keys that
+// differ from them only in case replaced, and the matched statement with
+// the unique id of the identity whose policy holds it.
+func TestAuthorizeReportsEvaluatedContext(t *testing.T) {
+	now := time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)
+	a := authz.New(setup(t), acct, func() time.Time { return now })
+	ctx := context.Background()
+	alice := authz.Principal{Kind: authz.User, Name: "alice"}
+	rc := map[string][]string{
+		"s3:prefix": {"home/"}, "AWS:PRINCIPALARN": {"arn:vws:iam::" + acct + ":root"},
+		"aws:currenttime": {"1999-01-01T00:00:00Z"}, "Aws:UserName": {"mallory"},
+	}
+	d, err := a.Authorize(ctx, alice, "ec2:TerminateInstances", "*", rc)
+	if err != nil || !d.Explicit {
+		t.Fatalf("%+v %v", d, err)
+	}
+	want := map[string][]string{
+		"s3:prefix": {"home/"}, "aws:PrincipalArn": {"arn:vws:iam::" + acct + ":user/alice"},
+		"aws:CurrentTime": {"2026-10-14T00:00:00Z"}, "aws:username": {"alice"},
+	}
+	if !maps.EqualFunc(d.Context, want, slices.Equal) {
+		t.Fatalf("context %v, want %v", d.Context, want)
+	}
+	if m := d.Matched; m == nil || m.Statement.Sid != "NoTerminate" || m.Holder != (policy.Holder{ID: "3", Group: true}) {
+		t.Fatalf("matched %+v", d.Matched)
+	}
+	d, err = a.Authorize(ctx, alice, "s3:GetObject", "*", nil)
+	if err != nil || !d.Allowed || d.Matched == nil || d.Matched.Holder != (policy.Holder{ID: "4"}) {
+		t.Fatalf("attached policy: %+v %v", d, err)
+	}
+	if len(rc) != 4 || rc["Aws:UserName"][0] != "mallory" {
+		t.Fatalf("Authorize changed the request context: %v", rc)
+	}
+	// A session refused before its policies are read still reports the
+	// request context it was asked with.
+	gst := authz.Principal{Kind: authz.User, Name: "alice", SessionToken: true}
+	d, err = a.Authorize(ctx, gst, "iam:ListUsers", "*", map[string][]string{"s3:prefix": {"home/"}})
+	if err != nil || d.Allowed || d.Context["s3:prefix"] == nil || d.Context["aws:username"][0] != "alice" {
+		t.Fatalf("refused session: %+v %v", d, err)
 	}
 }

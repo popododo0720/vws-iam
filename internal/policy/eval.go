@@ -324,6 +324,16 @@ type Named struct {
 	// ID and Type name the policy in simulator results (AWS
 	// SourcePolicyId and SourcePolicyType); evaluation ignores them.
 	ID, Type string
+	// Holder is the identity the policy is attached to, reported with a
+	// matched statement; evaluation ignores it.
+	Holder Holder
+}
+
+// Holder is the unique id of the user, role or (Group) group that holds
+// a policy. A session or trust policy has none.
+type Holder struct {
+	ID    string
+	Group bool
 }
 
 // Decision is the result of an evaluation.
@@ -336,9 +346,23 @@ type Decision struct {
 	Policy    string
 	Statement string
 	Reason    string
+	// Matched is the statement Policy and Statement name, nil when none.
+	Matched *Matched
+	// Context is the request context the decision evaluated.
+	Context map[string][]string
 }
 
-type hit struct{ policy, stmt string }
+// Matched is the statement that decided an evaluation and the identity
+// holding its policy.
+type Matched struct {
+	Statement Statement
+	Holder    Holder
+}
+
+type hit struct {
+	policy, stmt string
+	matched      *Matched
+}
 
 func (h hit) String() string {
 	if h.policy == "" {
@@ -359,11 +383,12 @@ func scan(set []Named, r Request) (deny, allow hit) {
 			if id == "" {
 				id = "#" + strconv.Itoa(i)
 			}
+			h := hit{n.Name, id, &Matched{Statement: s, Holder: n.Holder}}
 			if s.Effect == Deny && deny.policy == "" {
-				deny = hit{n.Name, id}
+				deny = h
 			}
 			if s.Effect == Allow && allow.policy == "" {
-				allow = hit{n.Name, id}
+				allow = h
 			}
 		}
 	}
@@ -371,8 +396,15 @@ func scan(set []Named, r Request) (deny, allow hit) {
 }
 
 // Evaluate applies identity policies and, when sessionPolicies is non-nil,
-// session policies that can only narrow the identity's permissions.
+// session policies that can only narrow the identity's permissions. The
+// decision carries r.Context, the context it evaluated.
 func Evaluate(r Request, identity []Named, sessionPolicies []Named) Decision {
+	d := decide(r, identity, sessionPolicies)
+	d.Context = r.Context
+	return d
+}
+
+func decide(r Request, identity []Named, sessionPolicies []Named) Decision {
 	deny, allow := scan(identity, r)
 	var sdeny, sallow hit
 	if sessionPolicies != nil {
@@ -380,13 +412,22 @@ func Evaluate(r Request, identity []Named, sessionPolicies []Named) Decision {
 	}
 	switch {
 	case deny.policy != "":
-		return Decision{Explicit: true, Policy: deny.policy, Statement: deny.stmt, Reason: "explicit deny in " + deny.String()}
+		return Decision{
+			Explicit: true, Policy: deny.policy, Statement: deny.stmt, Matched: deny.matched,
+			Reason: "explicit deny in " + deny.String(),
+		}
 	case sdeny.policy != "":
-		return Decision{Explicit: true, Policy: sdeny.policy, Statement: sdeny.stmt, Reason: "explicit deny in session policy " + sdeny.String()}
+		return Decision{
+			Explicit: true, Policy: sdeny.policy, Statement: sdeny.stmt, Matched: sdeny.matched,
+			Reason: "explicit deny in session policy " + sdeny.String(),
+		}
 	case allow.policy == "":
 		return Decision{Reason: fmt.Sprintf("no identity-based policy allows %s on %s", r.Action, r.Resource)}
 	case sessionPolicies != nil && sallow.policy == "":
 		return Decision{Reason: fmt.Sprintf("no session policy allows %s on %s", r.Action, r.Resource)}
 	}
-	return Decision{Allowed: true, Policy: allow.policy, Statement: allow.stmt, Reason: "allowed by " + allow.String()}
+	return Decision{
+		Allowed: true, Policy: allow.policy, Statement: allow.stmt, Matched: allow.matched,
+		Reason: "allowed by " + allow.String(),
+	}
 }
