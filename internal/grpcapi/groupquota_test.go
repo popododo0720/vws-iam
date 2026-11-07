@@ -200,3 +200,69 @@ func testConcurrentGroupsPerUser(t *testing.T, backend func(*testing.T) store.Ba
 		t.Fatalf("alice in %d groups after concurrent adds, want 10", n)
 	}
 }
+
+// TestRefusedCreateDropsRelabeledGroup: a CreateGroup with members stages
+// the group empty. When another add fills the user's tenth slot first,
+// the create is refused, and a label update that lands on the staged
+// group before the cleanup does not leave the empty group behind (#161).
+// A staged group another writer gave a member or a policy is kept.
+func TestRefusedCreateDropsRelabeledGroup(t *testing.T) {
+	for _, bk := range renameBackends {
+		t.Run(bk.name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name     string
+				mask     string
+				group    *iamv1.Group
+				wantKept bool
+			}{
+				{"labels", "labels", &iamv1.Group{Labels: map[string]string{"team": "ops"}}, false},
+				{"member", "spec.members", &iamv1.Group{Spec: &iamv1.GroupSpec{Members: []string{userName("bob")}}}, true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					testRefusedCreateDropsRelabeledGroup(t, bk.open(), tc.mask, tc.group, tc.wantKept)
+				})
+			}
+		})
+	}
+}
+
+func testRefusedCreateDropsRelabeledGroup(
+	t *testing.T, b store.Backend, mask string, change *iamv1.Group, wantKept bool,
+) {
+	now := time.Now().UTC()
+	other := newEnvOn(t, b, &now)
+	h := &hooked{Backend: b}
+	e := newEnvOn(t, h, &now)
+	ctx := t.Context()
+	other.createUser(t, ctx, "alice")
+	other.createUser(t, ctx, "bob")
+	for i := 1; i < iam.MaxGroupsPerUser; i++ {
+		other.createGroupWith(t, fmt.Sprintf("g%d", i), userName("alice"))
+	}
+	other.createGroupWith(t, "last")
+	h.at("create", iam.KindGroup, "staged", func() error {
+		if err := other.setMembers(ctx, "last", "", false, userName("alice")); err != nil {
+			return err
+		}
+		h.at("delete", iam.KindGroup, "staged", func() error {
+			change.Name = groupName("staged")
+			_, err := other.groups.UpdateGroup(ctx, &iamv1.UpdateGroupRequest{
+				Group: change, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{mask}},
+			})
+			return err
+		})
+		return nil
+	})
+	wantGroupsPerUser(t, e.newGroup(ctx, "staged", false, userName("alice")))
+	_, err := other.groups.GetGroup(ctx, &iamv1.GetGroupRequest{Name: groupName("staged")})
+	if wantKept {
+		if err != nil {
+			t.Fatalf("staged group another writer filled was dropped: %v", err)
+		}
+	} else {
+		wantErr(t, err, codes.NotFound, "RESOURCE_NOT_FOUND", "NoSuchEntity")
+	}
+	if n := groupsOf(t, b, "alice"); n != iam.MaxGroupsPerUser {
+		t.Fatalf("alice in %d groups, want 10", n)
+	}
+}

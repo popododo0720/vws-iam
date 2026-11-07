@@ -241,26 +241,49 @@ func (p project) createGroup(
 	if len(addedMembers(prev, g.Members)) == 0 {
 		return v, nil
 	}
+	staged := v
 	v.Object.Members = g.Members
 	o.record(&v.Object.Meta)
 	ver, err := p.commitGroup(ctx, v, prev)
 	if err != nil {
 		// A rename may have marked the group this request left (a retry
 		// adopts it with the mark). Only the rename coordinator may remove
-		// a marked group; the versioned delete below fails if a mark lands
-		// after v was read.
-		if len(prev) == 0 && !v.Object.Renaming() && !errors.Is(err, store.ErrRenaming) {
-			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			defer cancel()
-			// Best effort: an empty group left behind holds no quota.
-			if derr := store.Delete[iam.Group](dctx, p.b, g.Name, v.Version); derr != nil {
-				return store.Versioned[iam.Group]{}, err
-			}
+		// a marked group; dropStaged reads the group again before each
+		// delete and every delete is versioned, so a mark that lands
+		// after a read makes it fail.
+		if len(prev) == 0 && !errors.Is(err, store.ErrRenaming) {
+			p.dropStaged(ctx, staged)
 		}
 		return store.Versioned[iam.Group]{}, err
 	}
 	v.Version = ver
 	return v, nil
+}
+
+// dropStaged removes the empty group a refused createGroup staged. Another
+// writer may have changed it since (a label or path update), so a stale
+// delete reads the group again (#161). It is deleted only while it is
+// still the group staged (same UID), unmarked and empty: no members and
+// no policies, so nothing another writer gave it is lost. Best effort:
+// an empty group left behind holds no quota.
+func (p project) dropStaged(ctx context.Context, staged store.Versioned[iam.Group]) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	cur := staged
+	for attempt := 0; ; attempt++ {
+		g := cur.Object
+		if g.UID != staged.Object.UID || g.Renaming() ||
+			len(g.Members) > 0 || len(g.AttachedPolicies) > 0 || len(g.InlinePolicies) > 0 {
+			return
+		}
+		err := store.Delete[iam.Group](ctx, p.b, g.Name, cur.Version)
+		if !errors.Is(err, store.ErrConflict) || backoff(ctx, attempt) != nil {
+			return
+		}
+		if cur, err = store.Get[iam.Group](ctx, p.b, g.Name); err != nil {
+			return
+		}
+	}
 }
 
 // updateGroup is update for groups, committing through commitGroup. A group
