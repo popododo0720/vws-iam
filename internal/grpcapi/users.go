@@ -15,6 +15,7 @@ import (
 
 	"cloud.google.com/go/longrunning/autogen/longrunningpb"
 
+	"github.com/popododo0720/vws-iam/internal/authz"
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/password"
 	"github.com/popododo0720/vws-iam/internal/store"
@@ -48,25 +49,28 @@ func (p project) extras(ctx context.Context) (userExtras, error) {
 	return x, nil
 }
 
-// of returns the entries of m for user u. While a rename of u is in
-// flight a reference may still name the other side (#134).
-func of(m map[string][]string, u iam.User) []string {
+// of returns the entries of m for user u and its rename partner, the
+// other name of u's in-flight rename that a reference may still name
+// (#134); "" when there is none or it holds someone else.
+func of(m map[string][]string, u iam.User, partner string) []string {
 	out := m[store.Fold(u.Name)]
-	if o := u.RenamePartner(); o != "" {
-		out = append(append([]string(nil), out...), m[store.Fold(o)]...)
+	if partner != "" {
+		out = append(append([]string(nil), out...), m[store.Fold(partner)]...)
 	}
 	return out
 }
 
-func (p project) userProto(v store.Versioned[iam.User], x userExtras) *iamv1.User {
+// userProto renders v; partner is its checked rename partner
+// (authz.RenamePartner, or iam.User.IsRenamePartner on a listing).
+func (p project) userProto(v store.Versioned[iam.User], x userExtras, partner string) *iamv1.User {
 	u := v.Object
 	return &iamv1.User{
 		Name: name(p.id, "users", u.Name), Uid: u.UID, Generation: u.Generation, Etag: v.Version, Labels: labels(u.Labels),
 		Spec: &iamv1.UserSpec{Path: defaultPath(u.Path), AttachedPolicies: p.policyNames(u.AttachedPolicies), InlinePolicies: u.InlinePolicies},
 		Status: &iamv1.UserStatus{
 			Observed: ready(u.Generation), Arn: iam.UserARN(p.id, u), UniqueId: u.ID,
-			Groups: of(x.groups, u), LoginProfile: u.PasswordHash != "", PasswordResetRequired: u.PasswordResetRequired,
-			PasswordLastUsedTime: ts(u.PasswordLastUsed), MfaDevices: of(x.mfa, u),
+			Groups: of(x.groups, u, partner), LoginProfile: u.PasswordHash != "", PasswordResetRequired: u.PasswordResetRequired,
+			PasswordLastUsedTime: ts(u.PasswordLastUsed), MfaDevices: of(x.mfa, u, partner),
 			SessionsRevokeTime: ts(u.SessionsRevokedBefore),
 		},
 		CreateTime: ts(u.Created), UpdateTime: ts(u.Updated),
@@ -74,11 +78,15 @@ func (p project) userProto(v store.Versioned[iam.User], x userExtras) *iamv1.Use
 }
 
 func (s *Server) userOne(ctx context.Context, p project, v store.Versioned[iam.User]) (*iamv1.User, error) {
+	partner, err := authz.RenamePartner(ctx, p.b, v.Object)
+	if err != nil {
+		return nil, err
+	}
 	x, err := p.extras(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return p.userProto(v, x), nil
+	return p.userProto(v, x, partner), nil
 }
 
 func bumpUser(u *iam.User) { u.Generation++ }
@@ -109,6 +117,10 @@ func (s *Server) ListUsers(ctx context.Context, req *iamv1.ListUsersRequest) (*i
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
+	byName := make(map[string]iam.User, len(all))
+	for _, v := range all {
+		byName[store.Fold(v.Object.Name)] = v.Object
+	}
 	all = store.Visible(all)
 	items, next, err := page(all, func(v store.Versioned[iam.User]) string { return v.Object.Name }, req.GetPageSize(), req.GetPageToken())
 	if err != nil {
@@ -120,7 +132,11 @@ func (s *Server) ListUsers(ctx context.Context, req *iamv1.ListUsersRequest) (*i
 	}
 	out := &iamv1.ListUsersResponse{NextPageToken: next}
 	for _, v := range items {
-		out.Users = append(out.Users, p.userProto(v, x))
+		partner := v.Object.RenamePartner()
+		if !v.Object.IsRenamePartner(byName[store.Fold(partner)]) {
+			partner = ""
+		}
+		out.Users = append(out.Users, p.userProto(v, x, partner))
 	}
 	return out, nil
 }
@@ -381,7 +397,7 @@ func (s *Server) DeleteUser(ctx context.Context, req *iamv1.DeleteUserRequest) (
 	}
 	resp := &iamv1.User{Name: req.GetName()}
 	if v.Object.Name != "" {
-		resp = p.userProto(v, x)
+		resp = p.userProto(v, x, "")
 		resp.DeleteTime = timestamppb.New(s.now())
 	}
 	op, err := s.done(ctx, opArgs{project: pid, method: "DeleteUser", requestID: req.GetRequestId(), req: req, resource: req.GetName(), verb: commonv1.OperationVerb_OPERATION_VERB_DELETE, generation: v.Object.Generation, response: resp})

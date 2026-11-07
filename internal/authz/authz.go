@@ -348,11 +348,7 @@ func RenamePartner(ctx context.Context, b store.Backend, u iam.User) (string, er
 	if err != nil {
 		return "", fmt.Errorf("get rename partner %q of user %q: %w", other, u.Name, err)
 	}
-	back := v.Object.RenameTo
-	if u.RenameTo != "" {
-		back = v.Object.RenamedFrom
-	}
-	if v.Object.UID != u.UID || store.Fold(back) != store.Fold(u.Name) {
+	if !u.IsRenamePartner(v.Object) {
 		return "", nil
 	}
 	return other, nil
