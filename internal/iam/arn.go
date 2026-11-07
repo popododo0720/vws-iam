@@ -42,6 +42,11 @@ func InstanceProfileARN(account string, p InstanceProfile) string {
 	return ARN("iam", "", account, "instance-profile"+pathOf(p.Path)+p.Name)
 }
 
+// SAMLProviderARN is the ARN of a SAML provider in account.
+func SAMLProviderARN(account string, p SAMLProvider) string {
+	return ARN("iam", "", account, "saml-provider/"+p.Name)
+}
+
 // MfaDeviceARN is the ARN of a virtual MFA device in account. Its path is
 // part of the serial number, as in AWS.
 func MfaDeviceARN(account string, d MfaDevice) string {

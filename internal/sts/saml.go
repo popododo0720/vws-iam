@@ -56,8 +56,6 @@ var (
 	// samlARNRE is the AWS RoleArn/PrincipalArn pattern; validARN also
 	// checks the 20-2048 character length.
 	samlARNRE = regexp.MustCompile(`^[\t\n\r\x{20}-\x{7E}\x{85}\x{A0}-\x{D7FF}\x{E000}-\x{FFFD}\x{10000}-\x{10FFFF}]+$`)
-	// samlProviderNameRE is the IAM SAML provider name.
-	samlProviderNameRE = regexp.MustCompile(`^[\w._-]{1,128}$`)
 	// sourceIdentityRE is the SourceIdentity SAML attribute: 2 to 256
 	// characters of [\w+=,.@-] (IAM User Guide, Configure SAML assertions
 	// for the authentication response).
@@ -334,7 +332,7 @@ func validARN(s string) bool {
 // account.
 func (s *Service) samlProviderName(arn string) (string, bool) {
 	name, ok := strings.CutPrefix(arn, "arn:"+iam.Partition+":iam::"+s.account+":saml-provider/")
-	return name, ok && samlProviderNameRE.MatchString(name)
+	return name, ok && iam.ValidSAMLProviderName(name)
 }
 
 // samlRole reads the role roleARN names; an unknown role, or one whose
