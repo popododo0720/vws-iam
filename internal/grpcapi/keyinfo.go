@@ -30,13 +30,10 @@ func (s *Server) getAccessKeyInfo(
 	if err != nil {
 		return "", toStatus(ctx, err)
 	}
-	p, c, ip, err := s.authenticatedCallerFrom(ctx, a, "GetAccessKeyInfo")
+	p, c, o, err := s.authenticatedCallerFrom(ctx, a, "GetAccessKeyInfo")
 	if err != nil {
 		return "", toStatus(ctx, err)
 	}
-	if a.sigv4 == nil {
-		ip = consoleIP
-	}
-	account, err = p.sts.GetAccessKeyInfo(ctx, c, sourceIPContext(ip), accessKeyID)
+	account, err = p.sts.GetAccessKeyInfo(ctx, c, o.requestContext(consoleIP), accessKeyID)
 	return account, toStatus(ctx, err)
 }

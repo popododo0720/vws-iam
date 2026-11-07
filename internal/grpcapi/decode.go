@@ -40,26 +40,12 @@ func (s *Server) decodeAuthorizationMessage(
 	if err != nil {
 		return "", toStatus(ctx, err)
 	}
-	p, c, ip, err := s.authenticatedCallerFrom(ctx, a, "DecodeAuthorizationMessage")
+	p, c, o, err := s.authenticatedCallerFrom(ctx, a, "DecodeAuthorizationMessage")
 	if err != nil {
 		return "", toStatus(ctx, err)
 	}
-	if a.sigv4 == nil {
-		ip = consoleIP
-	}
-	decoded, err = p.sts.DecodeAuthorizationMessage(ctx, c, sourceIPContext(ip), encoded)
+	decoded, err = p.sts.DecodeAuthorizationMessage(ctx, c, o.requestContext(consoleIP), encoded)
 	return decoded, toStatus(ctx, err)
-}
-
-// sourceIPContext is the trusted request context of an STS call: the
-// caller's aws:SourceIp, so an IP-conditioned Deny applies. With no
-// recorded address the key is absent, and IpAddress conditions do not
-// match (AWS semantics for a missing key).
-func sourceIPContext(ip string) map[string][]string {
-	if ip == "" {
-		return nil
-	}
-	return map[string][]string{"aws:SourceIp": {ip}}
 }
 
 // authorizationMessage encodes the deny decision of an Authorize call

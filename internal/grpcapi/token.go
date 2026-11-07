@@ -95,38 +95,63 @@ func (s *Server) authenticatedCaller(ctx context.Context, a authn, action string
 	return p, c, err
 }
 
-// authenticatedCallerFrom is authenticatedCaller that also returns the
-// source IP the gateway saw for a SigV4 request. A console session gives
-// none: the address stored with it at Login is not the address of the
-// current request, so the caller must supply that one itself.
+// authenticatedCallerFrom is authenticatedCaller that also returns where
+// the request came from, as the server knows it, for the request context
+// (origin.requestContext).
 func (s *Server) authenticatedCallerFrom(
 	ctx context.Context, a authn, action string,
-) (project, sts.Caller, string, error) {
+) (project, sts.Caller, origin, error) {
 	switch {
 	case a.sigv4 != nil:
 		resp, _, err := s.authenticate(ctx, a.sigv4, false)
 		if err != nil {
-			return project{}, sts.Caller{}, "", err
+			return project{}, sts.Caller{}, origin{}, err
 		}
 		if err := s.stsSigv4(ctx, a.sigv4, action); err != nil {
-			return project{}, sts.Caller{}, "", err
+			return project{}, sts.Caller{}, origin{}, err
 		}
 		p := s.project(resp.GetAccount())
 		c, err := p.sts.Resolve(ctx, sts.Credential{AccessKeyID: a.sigv4.GetAccessKeyId(), SessionToken: a.sigv4.GetSessionToken()})
-		return p, c, a.sigv4.GetSourceIp(), err
+		return p, c, origin{signed: true, ip: a.sigv4.GetSourceIp()}, err
 	case a.console != "":
 		v, err := s.consoleSession(ctx, a.console)
 		if err != nil {
-			return project{}, sts.Caller{}, "", err
+			return project{}, sts.Caller{}, origin{}, err
 		}
 		p := s.project(v.Project)
+		o := origin{ip: v.SourceIP}
 		if v.Root() {
-			return p, sts.RootCaller(v.MFA, v.AuthTime), "", nil
+			return p, sts.RootCaller(v.MFA, v.AuthTime), o, nil
 		}
 		c, err := p.sts.ConsoleCaller(ctx, v.UserName, v.UserUID, v.MFA, v.AuthTime)
-		return p, c, "", err
+		return p, c, o, err
 	}
-	return project{}, sts.Caller{}, "", missingAuthentication()
+	return project{}, sts.Caller{}, origin{}, missingAuthentication()
+}
+
+// origin is where an authenticated STS request came from: the address the
+// gateway put in the SigV4 request (signed), or the address the gateway
+// saw when the console session logged in. Neither comes from a field the
+// client sets in the request body.
+type origin struct {
+	signed bool
+	ip     string
+}
+
+// requestContext is the trusted request context of an STS call, the one
+// builder every STS RPC uses: aws:SourceIp is the SigV4 request's address,
+// or for a console session consoleIP, the address the gateway saw for this
+// request. With no address the key is absent, and IpAddress conditions do
+// not match (AWS semantics for a missing key).
+func (o origin) requestContext(consoleIP string) map[string][]string {
+	ip := consoleIP
+	if o.signed {
+		ip = o.ip
+	}
+	if ip == "" {
+		return map[string][]string{}
+	}
+	return map[string][]string{"aws:SourceIp": {ip}}
 }
 
 // AssumeRole issues role credentials to the authenticated caller, of the
@@ -148,7 +173,7 @@ func (s *Server) assumeRole(ctx context.Context, req *iamv1.AssumeRoleRequest, a
 	if err != nil {
 		return nil, err
 	}
-	p, c, err := s.authenticatedCaller(ctx, a, "AssumeRole")
+	p, c, o, err := s.authenticatedCallerFrom(ctx, a, "AssumeRole")
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
@@ -160,7 +185,9 @@ func (s *Server) assumeRole(ctx context.Context, req *iamv1.AssumeRoleRequest, a
 	if d == 0 {
 		d = defaultAssumeRole
 	}
-	rc := map[string][]string{}
+	// TODO(#344): AssumeRoleRequest carries no gateway-observed address for
+	// a console request yet, so the address recorded at Login stands in.
+	rc := o.requestContext(o.ip)
 	if req.GetExternalId() != "" {
 		rc["sts:ExternalId"] = []string{req.GetExternalId()}
 	}
