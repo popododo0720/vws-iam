@@ -82,12 +82,16 @@ type FederationRequest struct {
 // it is a sealed token, so nothing is stored and no secret is kept in
 // plaintext.
 func (s *Service) GetFederationToken(
-	ctx context.Context, c Caller, reqCtx map[string][]string, req FederationRequest,
+	ctx context.Context, c Caller, reqCtx map[string][]string, req FederationRequest, opts ...IssueOption,
 ) (_ FederationToken, err error) {
 	ctx, end := start(ctx, "GetFederationToken")
 	defer end(&err)
 	if c.principalID == "" {
 		return FederationToken{}, fmt.Errorf("%w: unresolved caller", ErrAccessDenied)
+	}
+	o, err := issueOpts(opts)
+	if err != nil {
+		return FederationToken{}, err
 	}
 	if (c.principal.Kind != authz.User && c.principal.Kind != authz.Root) || c.temporary {
 		return FederationToken{}, fmt.Errorf("%w: GetFederationToken needs long-term user credentials", ErrAccessDenied)
@@ -125,7 +129,7 @@ func (s *Service) GetFederationToken(
 		PolicyARNs: req.PolicyARNs, Federated: true, PrincipalID: c.principalID, AuthTime: c.authTime,
 		SessionName: req.Name,
 	}
-	creds, err := s.issue(ctx, sess, d)
+	creds, err := s.issue(ctx, sess, d, o)
 	if err != nil {
 		return FederationToken{}, fmt.Errorf("get federation token: %w", err)
 	}

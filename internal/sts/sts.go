@@ -143,6 +143,11 @@ type Credentials struct {
 	// PackedPolicySize is set by AssumeRole: the percentage (0-100) of
 	// MaxPackedPolicyChars that its session policies use.
 	PackedPolicySize int
+	// SessionTokenSize is the size of SessionToken in bytes, and
+	// SessionTokenUtilization its percentage of MaxSessionTokenSize,
+	// rounded up (AWS response fields, #199).
+	SessionTokenSize        int
+	SessionTokenUtilization int
 }
 
 // SessionPolicies are the AWS session policy parameters of AssumeRole: the
@@ -192,6 +197,9 @@ type session struct {
 	// SAML is the cross-service SAML identity (AssumeRoleWithSAML, and
 	// role sessions chained from it).
 	SAML *SAMLIdentity `json:"saml,omitempty"`
+	// Pad only grows the token to MinimumSessionTokenSize (#199); nothing
+	// reads it. A release before it ignores the unknown field.
+	Pad string `json:"z,omitempty"`
 }
 
 // Session is a validated temporary session.
@@ -494,12 +502,16 @@ func (s *Service) revokeGen(ctx context.Context, kind authz.PrincipalKind, name 
 // nothing about the project's policies.
 func (s *Service) AssumeRole(
 	ctx context.Context, c Caller, reqCtx map[string][]string, roleARN, sessionName string,
-	duration time.Duration, sp SessionPolicies, m MFA,
+	duration time.Duration, sp SessionPolicies, m MFA, opts ...IssueOption,
 ) (_ Credentials, err error) {
 	ctx, end := start(ctx, "AssumeRole")
 	defer end(&err)
 	if c.principalID == "" {
 		return Credentials{}, fmt.Errorf("%w: unresolved caller", ErrAccessDenied)
+	}
+	o, err := issueOpts(opts)
+	if err != nil {
+		return Credentials{}, err
 	}
 	if !sessionNameRE.MatchString(sessionName) {
 		return Credentials{}, fmt.Errorf("%w: RoleSessionName %q", ErrInvalidRequest, sessionName)
@@ -590,7 +602,7 @@ func (s *Service) AssumeRole(
 		Policies: policies, PolicyARNs: policyARNs,
 		PrincipalID: r.Object.ID, AuthTime: c.authTime, RoleID: r.Object.ID, SessionName: sessionName,
 		SAML: c.saml.clone(), // a chained session keeps the SAML identity
-	}, duration)
+	}, duration, o)
 	creds.AssumedRoleARN = arn
 	creds.PackedPolicySize = packedPercent(packed)
 	return creds, err
@@ -600,10 +612,14 @@ func (s *Service) AssumeRole(
 // SerialNumber and TokenCode, when given, are verified here; only then does
 // the session carry MFA (or the root caller authenticated with MFA).
 func (s *Service) GetSessionToken(
-	ctx context.Context, c Caller, duration time.Duration, m MFA,
+	ctx context.Context, c Caller, duration time.Duration, m MFA, opts ...IssueOption,
 ) (_ Credentials, err error) {
 	ctx, end := start(ctx, "GetSessionToken")
 	defer end(&err)
+	o, err := issueOpts(opts)
+	if err != nil {
+		return Credentials{}, err
+	}
 	if (c.principal.Kind != authz.User && c.principal.Kind != authz.Root) || c.temporary || c.principalID == "" {
 		return Credentials{}, fmt.Errorf("%w: GetSessionToken needs long-term user credentials", ErrAccessDenied)
 	}
@@ -628,17 +644,23 @@ func (s *Service) GetSessionToken(
 			return Credentials{}, err
 		}
 	}
-	return s.issue(ctx, session{Kind: int(c.principal.Kind), Name: c.principal.Name, ARN: arn, MFA: mfa, PrincipalID: c.principalID, AuthTime: c.authTime}, duration)
+	return s.issue(ctx, session{
+		Kind: int(c.principal.Kind), Name: c.principal.Name, ARN: arn, MFA: mfa,
+		PrincipalID: c.principalID, AuthTime: c.authTime,
+	}, duration, o)
 }
 
-func (s *Service) issue(ctx context.Context, sess session, d time.Duration) (Credentials, error) {
-	return s.issueBy(ctx, sess, d, time.Time{})
+func (s *Service) issue(ctx context.Context, sess session, d time.Duration, o issueOptions) (Credentials, error) {
+	return s.issueBy(ctx, sess, d, time.Time{}, o)
 }
 
 // issueBy is issue with an absolute latest expiry (zero means none): the
 // session ends at notAfter if that comes before now plus d, and a
 // notAfter already passed is ErrExpired.
-func (s *Service) issueBy(ctx context.Context, sess session, d time.Duration, notAfter time.Time) (Credentials, error) {
+// The token is padded to o.minTokenSize.
+func (s *Service) issueBy(
+	ctx context.Context, sess session, d time.Duration, notAfter time.Time, o issueOptions,
+) (Credentials, error) {
 	// Read the generation before the token exists: a revocation that
 	// commits after this read bumps it and rejects the token.
 	gen, err := s.revokeGen(ctx, authz.PrincipalKind(sess.Kind), sess.Name)
@@ -668,12 +690,8 @@ func (s *Service) issueBy(ctx context.Context, sess session, d time.Duration, no
 		if err != nil {
 			return Credentials{}, err
 		}
-		sess.AccessKeyID = id
-		b, err := json.Marshal(sess)
-		if err != nil {
-			return Credentials{}, fmt.Errorf("session: %w", err)
-		}
-		sealed, err := s.keys.Seal(b, tokenAAD+"/"+id)
+		sess.AccessKeyID, sess.Pad = id, ""
+		token, err := padToken(&sess, o.minTokenSize, s.sealSession)
 		if err != nil {
 			return Credentials{}, err
 		}
@@ -684,10 +702,25 @@ func (s *Service) issueBy(ctx context.Context, sess session, d time.Duration, no
 		if err != nil {
 			return Credentials{}, err
 		}
-		token := sealed.KeyID + "." + base64.RawURLEncoding.EncodeToString(sealed.Ciphertext)
-		return Credentials{AccessKeyID: id, Secret: sec, SessionToken: token, Expiration: sess.Expires}, nil
+		return Credentials{
+			AccessKeyID: id, Secret: sec, SessionToken: token, Expiration: sess.Expires,
+			SessionTokenSize: len(token), SessionTokenUtilization: tokenUtilization(len(token)),
+		}, nil
 	}
 	return Credentials{}, fmt.Errorf("session key index: %d key ids taken: %w", maxKeyIDAttempts, store.ErrExists)
+}
+
+// sealSession seals sess as a session token bound to its key id.
+func (s *Service) sealSession(sess *session) (string, error) {
+	b, err := json.Marshal(sess)
+	if err != nil {
+		return "", fmt.Errorf("session: %w", err)
+	}
+	sealed, err := s.keys.Seal(b, tokenAAD+"/"+sess.AccessKeyID)
+	if err != nil {
+		return "", err
+	}
+	return sealed.KeyID + "." + base64.RawURLEncoding.EncodeToString(sealed.Ciphertext), nil
 }
 
 // maxKeyIDAttempts bounds the fresh ASIA ids issueBy tries. A random id is
