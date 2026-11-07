@@ -149,8 +149,11 @@ func (s *Server) CreateGroup(ctx context.Context, req *iamv1.CreateGroupRequest)
 
 // UpdateGroup changes spec (including members) and labels.
 func (s *Server) UpdateGroup(ctx context.Context, req *iamv1.UpdateGroupRequest) (*longrunningpb.Operation, error) {
-	// TODO(#134): pass req.GetNewGroupName() once vws-proto carries the
-	// AWS NewGroupName field (popododo0720/vws-proto#79).
+	// TODO(#134): pass req.GetNewGroupName() to updateGroup. Until then a
+	// rename is refused, never served as an update without it.
+	if req.GetNewGroupName() != "" {
+		return nil, unservedField("new_group_name")
+	}
 	return s.updateGroup(ctx, req, "")
 }
 

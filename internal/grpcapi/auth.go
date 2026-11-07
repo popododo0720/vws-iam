@@ -330,38 +330,38 @@ var serverKeys = map[string]bool{
 
 // Authorize evaluates identity policies after rechecking the principal.
 // No resources means "*". The decision is ALLOW only if every resource is
-// allowed; an explicit deny anywhere wins.
+// allowed; an explicit deny anywhere wins. A deny decided by policy
+// evaluation carries its encoded authorization message for
+// DecodeAuthorizationMessage; an ALLOW, and a principal refused by the
+// recheck, carry none.
 func (s *Server) Authorize(ctx context.Context, req *iamv1.AuthorizeRequest) (*iamv1.AuthorizeResponse, error) {
-	// TODO(#109): set resp.EncodedMessage on a deny once vws-proto
-	// carries AuthorizeResponse.encoded_message (popododo0720/vws-proto#84).
 	// TODO(#20): pass req.GetPrincipal().GetSessionRef() once vws-proto's
 	// Principal carries it (popododo0720/vws-proto#146), and refuse an ASSUMED_ROLE
 	// principal without one: until then the gateway cannot send a reference
 	// and a revoked session is not caught here.
-	resp, _, err := s.authorize(ctx, req, "", false)
-	return resp, err
+	return s.authorize(ctx, req, "")
 }
 
 // authorize is Authorize with the session reference of the STS session
-// behind the principal ("" for none, #20); with encode, a deny decided by
-// policy evaluation also returns its encoded authorization message
-// (authorizationMessage) for DecodeAuthorizationMessage.
+// behind the principal ("" for none, #20). A deny decided by policy
+// evaluation carries its encoded authorization message
+// (authorizationMessage) in EncodedMessage.
 func (s *Server) authorize(
-	ctx context.Context, req *iamv1.AuthorizeRequest, ref string, encode bool,
-) (resp *iamv1.AuthorizeResponse, encoded string, err error) {
+	ctx context.Context, req *iamv1.AuthorizeRequest, ref string,
+) (resp *iamv1.AuthorizeResponse, err error) {
 	defer func() {
 		s.m.add(ctx, s.m.authz, attribute.String("result", result(err)), attribute.String("decision", resp.GetDecision().String()))
 	}()
 	if req.GetAction() == "" || !strings.Contains(req.GetAction(), ":") {
-		return nil, "", invalidSpec("action must look like service:Action")
+		return nil, invalidSpec("action must look like service:Action")
 	}
 	c, err := s.recheck(ctx, req.GetPrincipal(), ref)
 	if err != nil {
 		var ae *apiError
 		if errors.As(err, &ae) {
-			return &iamv1.AuthorizeResponse{Decision: iamv1.Decision_DECISION_DENY_IMPLICIT, Reason: ae.msg}, "", nil
+			return &iamv1.AuthorizeResponse{Decision: iamv1.Decision_DECISION_DENY_IMPLICIT, Reason: ae.msg}, nil
 		}
-		return nil, "", toStatus(ctx, err)
+		return nil, toStatus(ctx, err)
 	}
 	// saml:* keys come only from a verified assertion or a sealed SAML
 	// session, never from the request; Authenticate refuses SAML sessions
@@ -391,9 +391,9 @@ func (s *Server) authorize(
 				gone := &iamv1.AuthorizeResponse{
 					Decision: iamv1.Decision_DECISION_DENY_IMPLICIT, Reason: "principal no longer exists",
 				}
-				return gone, "", nil
+				return gone, nil
 			}
-			return nil, "", toStatus(ctx, err)
+			return nil, toStatus(ctx, err)
 		}
 		out := &iamv1.AuthorizeResponse{MatchedPolicy: d.Policy, MatchedStatement: d.Statement, Reason: d.Reason}
 		switch {
@@ -412,14 +412,12 @@ func (s *Server) authorize(
 		}
 	}
 	if denyResp == nil {
-		return allow, "", nil
+		return allow, nil
 	}
-	if encode {
-		if encoded, err = authorizationMessage(c, req.GetPrincipal(), req.GetAction(), deny); err != nil {
-			return nil, "", toStatus(ctx, err)
-		}
+	if denyResp.EncodedMessage, err = authorizationMessage(c, req.GetPrincipal(), req.GetAction(), deny); err != nil {
+		return nil, toStatus(ctx, err)
 	}
-	return denyResp, encoded, nil
+	return denyResp, nil
 }
 
 func hashToken(tok string) string {

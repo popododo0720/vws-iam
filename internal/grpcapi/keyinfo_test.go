@@ -52,7 +52,7 @@ func TestGetAccessKeyInfo(t *testing.T) {
 				return e.stsSign(auditor.id, auditor.secretKey, "", keyInfoAction)
 			}
 			for id, want := range map[string]string{bob.id: proj, theirs.AccessKeyID: "globex"} {
-				got, err := e.api.GetAccessKeyInfo(ctx, sign(), "", "", id)
+				got, err := e.api.AccessKeyInfo(ctx, sign(), "", "", id)
 				if err != nil || got != want {
 					t.Fatalf("GetAccessKeyInfo(%s) = %q, %v; want %q", id, got, err, want)
 				}
@@ -61,39 +61,39 @@ func TestGetAccessKeyInfo(t *testing.T) {
 			replica := newEnvOn(t, b, &now)
 			replica.nonce = 1000
 			r := replica.stsSign(auditor.id, auditor.secretKey, "", keyInfoAction)
-			if got, err := replica.api.GetAccessKeyInfo(ctx, r, "", "", theirs.AccessKeyID); err != nil || got != "globex" {
+			if got, err := replica.api.AccessKeyInfo(ctx, r, "", "", theirs.AccessKeyID); err != nil || got != "globex" {
 				t.Fatalf("replica: %q, %v", got, err)
 			}
 
 			// The same signed request cannot be used twice, and a request
 			// signed for another STS action is refused.
 			once := sign()
-			if _, err := e.api.GetAccessKeyInfo(ctx, once, "", "", bob.id); err != nil {
+			if _, err := e.api.AccessKeyInfo(ctx, once, "", "", bob.id); err != nil {
 				t.Fatal(err)
 			}
-			_, err = e.api.GetAccessKeyInfo(ctx, once, "", "", bob.id)
+			_, err = e.api.AccessKeyInfo(ctx, once, "", "", bob.id)
 			wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
-			_, err = e.api.GetAccessKeyInfo(ctx, e.stsSign(auditor.id, auditor.secretKey, "", "AssumeRole"), "", "", bob.id)
+			_, err = e.api.AccessKeyInfo(ctx, e.stsSign(auditor.id, auditor.secretKey, "", "AssumeRole"), "", "", bob.id)
 			wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
 
 			// No permission: AccessDenied even for an existing key.
-			_, err = e.api.GetAccessKeyInfo(ctx, e.stsSign(bob.id, bob.secretKey, "", keyInfoAction), "", "", theirs.AccessKeyID)
+			_, err = e.api.AccessKeyInfo(ctx, e.stsSign(bob.id, bob.secretKey, "", keyInfoAction), "", "", theirs.AccessKeyID)
 			wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
 			// An IP-conditioned Deny applies to the SigV4 address.
 			from := sign()
 			from.SourceIp = "10.1.2.3"
-			_, err = e.api.GetAccessKeyInfo(ctx, from, "", "", bob.id)
+			_, err = e.api.AccessKeyInfo(ctx, from, "", "", bob.id)
 			wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
 
 			// Unknown and malformed key ids.
-			_, err = e.api.GetAccessKeyInfo(ctx, sign(), "", "", "AKIA"+strings.Repeat("A", 16))
+			_, err = e.api.AccessKeyInfo(ctx, sign(), "", "", "AKIA"+strings.Repeat("A", 16))
 			wantErr(t, err, codes.NotFound, "RESOURCE_NOT_FOUND", "InvalidClientTokenId")
 			for _, id := range []string{"", strings.Repeat("A", 15), strings.Repeat("A", 129), "AKIA-AAAAAAAAAAAAAAA"} {
-				_, err = e.api.GetAccessKeyInfo(ctx, sign(), "", "", id)
+				_, err = e.api.AccessKeyInfo(ctx, sign(), "", "", id)
 				wantErr(t, err, codes.InvalidArgument, "INVALID_SPEC", "ValidationError")
 			}
 			// No authentication at all.
-			_, err = e.api.GetAccessKeyInfo(ctx, nil, "", "", bob.id)
+			_, err = e.api.AccessKeyInfo(ctx, nil, "", "", bob.id)
 			wantErr(t, err, codes.Unauthenticated, "INVALID_CREDENTIALS", "MissingAuthenticationToken")
 
 			// A console session authenticates too; the Deny applies to the
@@ -107,11 +107,11 @@ func TestGetAccessKeyInfo(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, err := e.api.GetAccessKeyInfo(ctx, nil, l.GetSessionToken(), "192.0.2.1", theirs.AccessKeyID)
+			got, err := e.api.AccessKeyInfo(ctx, nil, l.GetSessionToken(), "192.0.2.1", theirs.AccessKeyID)
 			if err != nil || got != "globex" {
 				t.Fatalf("console: %q, %v", got, err)
 			}
-			_, err = e.api.GetAccessKeyInfo(ctx, nil, l.GetSessionToken(), "10.9.9.9", theirs.AccessKeyID)
+			_, err = e.api.AccessKeyInfo(ctx, nil, l.GetSessionToken(), "10.9.9.9", theirs.AccessKeyID)
 			wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
 		})
 	}

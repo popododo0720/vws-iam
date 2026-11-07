@@ -42,15 +42,6 @@ func (s *Server) UpdateGroupRename(
 	return s.updateGroup(ctx, req, newName)
 }
 
-// AuthorizeEncoded is Authorize that also returns the encoded
-// authorization message of a deny, which vws-proto does not carry yet
-// (#109).
-func (s *Server) AuthorizeEncoded(
-	ctx context.Context, req *iamv1.AuthorizeRequest,
-) (*iamv1.AuthorizeResponse, string, error) {
-	return s.authorize(ctx, req, "", true)
-}
-
 // AuthenticateRef is Authenticate that also returns the session reference
 // of an STS session, which vws-proto's Principal does not carry yet (#20).
 // It is "" for a long-term key.
@@ -65,33 +56,15 @@ func (s *Server) AuthenticateRef(
 func (s *Server) AuthorizeRef(
 	ctx context.Context, req *iamv1.AuthorizeRequest, ref string,
 ) (*iamv1.AuthorizeResponse, error) {
-	resp, _, err := s.authorize(ctx, req, ref, false)
-	return resp, err
+	return s.authorize(ctx, req, ref)
 }
 
-// DecodeAuthorizationMessage is STS DecodeAuthorizationMessage, which
-// vws-proto does not carry yet (#109).
-func (s *Server) DecodeAuthorizationMessage(
-	ctx context.Context, sigv4 *iamv1.AuthenticateRequest, console, encoded string,
-) (string, error) {
-	return s.decodeAuthorizationMessage(ctx, sigv4, console, "", encoded)
-}
-
-// GetAccessKeyInfo is STS GetAccessKeyInfo, which vws-proto does not
-// carry yet (#108).
-func (s *Server) GetAccessKeyInfo(
+// AccessKeyInfo is STS GetAccessKeyInfo, which this server does not serve
+// yet (#108).
+func (s *Server) AccessKeyInfo(
 	ctx context.Context, sigv4 *iamv1.AuthenticateRequest, console, consoleIP, accessKeyID string,
 ) (string, error) {
 	return s.getAccessKeyInfo(ctx, sigv4, console, consoleIP, accessKeyID)
-}
-
-// DecodeAuthorizationMessageFrom is DecodeAuthorizationMessage with the
-// gateway-observed source IP of a console request, which vws-proto does
-// not carry yet (#109).
-func (s *Server) DecodeAuthorizationMessageFrom(
-	ctx context.Context, sigv4 *iamv1.AuthenticateRequest, console, consoleIP, encoded string,
-) (string, error) {
-	return s.decodeAuthorizationMessage(ctx, sigv4, console, consoleIP, encoded)
 }
 
 // GetFederationToken is STS GetFederationToken, which vws-proto does not

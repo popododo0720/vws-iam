@@ -90,7 +90,7 @@ func TestSessionTokenIAMNeedsMFA(t *testing.T) {
 						t.Fatalf("AssumeRole from a session: %v %v", ar, err)
 					}
 					info := r.stsSign(c.GetAccessKeyId(), c.GetSecretAccessKey(), c.GetSessionToken(), keyInfoAction)
-					_, err = r.api.GetAccessKeyInfo(ctx, info, "", "", alice.id)
+					_, err = r.api.AccessKeyInfo(ctx, info, "", "", alice.id)
 					wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
 				}
 			}
@@ -105,7 +105,7 @@ func TestSessionTokenIAMNeedsMFA(t *testing.T) {
 				t.Fatalf("iam:CreateAccessKey with the long-term key: %v %v", d, err)
 			}
 			info := e.stsSign(alice.id, alice.secretKey, "", keyInfoAction)
-			if got, err := e.api.GetAccessKeyInfo(ctx, info, "", "", alice.id); err != nil || got != proj {
+			if got, err := e.api.AccessKeyInfo(ctx, info, "", "", alice.id); err != nil || got != proj {
 				t.Fatalf("GetAccessKeyInfo with the long-term key: %q %v", got, err)
 			}
 		})

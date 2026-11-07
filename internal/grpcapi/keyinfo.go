@@ -17,9 +17,8 @@ import (
 // or consoleIP, the address the gateway saw for this console request;
 // with neither the key is absent.
 //
-// TODO(#108): serve this as TokenService.GetAccessKeyInfo once vws-proto
-// carries the RPC (popododo0720/vws-proto#85); consoleIP then comes from
-// the request's gateway-observed source IP field.
+// TODO(#108): serve this as TokenService.GetAccessKeyInfo (unserved.go),
+// with consoleIP from the request's gateway-observed source_ip.
 func (s *Server) getAccessKeyInfo(
 	ctx context.Context, sigv4 *iamv1.AuthenticateRequest, console, consoleIP, accessKeyID string,
 ) (account string, err error) {
