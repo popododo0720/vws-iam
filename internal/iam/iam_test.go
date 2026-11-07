@@ -35,6 +35,8 @@ func TestValidateRejectsHostileInput(t *testing.T) {
 		iam.MfaDevice{Name: "d", Path: "team", Seed: seal},
 		iam.MfaDevice{Name: "d", Seed: seal, Lockouts: -1},
 		iam.MfaDevice{Name: "d", Seed: seal, FailedAttempts: -1},
+		iam.KeyIndex{ID: "AKIAABCDEFGHIJKLMNOP", Project: "p", Expires: time.Unix(1, 0)},
+		iam.KeyIndex{ID: "ASIAABCDEFGHIJKLMNOP", Project: "Bad_Project", Expires: time.Unix(1, 0)},
 	}
 	for i, o := range bad {
 		if err := o.Validate(); !errors.Is(err, iam.ErrInvalid) {

@@ -131,6 +131,14 @@ func (s *Server) GCReplayEntries(ctx context.Context) (int, error) {
 	return gcPaged(ctx, s, func(r iam.ReplayEntry) bool { return now.After(r.Expires) })
 }
 
+// GCSessionKeys deletes the key index entries of STS session keys whose
+// session has expired (#188). Long-term key entries have no expiry and are
+// never collected here.
+func (s *Server) GCSessionKeys(ctx context.Context) (int, error) {
+	now := s.now()
+	return gcPaged(ctx, s, func(k iam.KeyIndex) bool { return k.Session() && now.After(k.Expires) })
+}
+
 // gcPageSize bounds one GC list call (Limit/Continue), so a large backlog
 // is not read into memory at once.
 const gcPageSize = 500
