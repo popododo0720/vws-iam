@@ -19,8 +19,7 @@ import (
 // assertion and is never logged.
 //
 // TODO(#106): serve this as TokenService.AssumeRoleWithSAML once
-// vws-proto carries the RPC (popododo0720/vws-proto#87), and wire
-// WithSAML to the SAML provider store once vws-iam has one (#196).
+// vws-proto carries the RPC (popododo0720/vws-proto#87).
 func (s *Server) assumeRoleWithSAML(ctx context.Context, req sts.SAMLRequest) (out sts.SAMLRoleSession, err error) {
 	defer func() {
 		s.m.add(ctx, s.m.issued, attribute.String("rpc", "AssumeRoleWithSAML"), attribute.String("result", result(err)))

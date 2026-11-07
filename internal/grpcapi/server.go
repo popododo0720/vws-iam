@@ -61,7 +61,8 @@ type Server struct {
 	stsSeen sync.Map
 	// gcPage is the GC list page size (gcPageSize; tests lower it).
 	gcPage int
-	// saml and samlSP serve AssumeRoleWithSAML (WithSAML).
+	// saml and samlSP serve AssumeRoleWithSAML (WithSAML); a nil saml
+	// with samlSP set reads the stored providers (WithStoredSAML).
 	saml   sts.SAMLProviders
 	samlSP sts.SAMLServiceProvider
 	// linked is the catalog of services that can own service-linked
@@ -76,12 +77,24 @@ type Option func(*Server)
 func WithClock(now func() time.Time) Option { return func(s *Server) { s.now = now } }
 
 // WithSAML sets the SAML providers and the service provider audience and
-// sign-in URL of AssumeRoleWithSAML. Without it (there is no SAML
-// provider store yet, #196) every AssumeRoleWithSAML call is
+// sign-in URL of AssumeRoleWithSAML (tests). Production uses
+// WithStoredSAML. Without either every AssumeRoleWithSAML call is
 // InvalidIdentityToken.
 func WithSAML(p sts.SAMLProviders, sp sts.SAMLServiceProvider) Option {
 	return func(s *Server) { s.saml, s.samlSP = p, sp }
 }
+
+// WithStoredSAML serves AssumeRoleWithSAML from the SAML providers each
+// project stores (CreateSAMLProvider, sts.WithStoredSAML), with sp as the
+// service provider audience and sign-in URL. With either value empty every
+// call is InvalidIdentityToken. It replaces an earlier WithSAML.
+func WithStoredSAML(sp sts.SAMLServiceProvider) Option {
+	return func(s *Server) { s.saml, s.samlSP = nil, sp }
+}
+
+// SAMLServiceProvider is the service provider audience and sign-in URL of
+// AssumeRoleWithSAML, zero when none is set.
+func (s *Server) SAMLServiceProvider() sts.SAMLServiceProvider { return s.samlSP }
 
 // WithLinkedServices sets the services CreateServiceLinkedRole accepts,
 // by service principal (case-sensitive, as in AWS). Without it (no
@@ -121,8 +134,11 @@ func Register(g *grpc.Server, s *Server) {
 // stsOptions are the sts.Service options of project id.
 func (s *Server) stsOptions(m *mfa.Service, id string) []sts.Option {
 	opts := []sts.Option{sts.WithMFA(mfaVerifier{m: m, s: s, project: id}), sts.WithKeyIndex(s.b)}
-	if s.saml != nil {
+	switch {
+	case s.saml != nil:
 		opts = append(opts, sts.WithSAML(s.saml, s.samlSP))
+	case s.samlSP != (sts.SAMLServiceProvider{}):
+		opts = append(opts, sts.WithStoredSAML(s.samlSP))
 	}
 	return opts
 }

@@ -126,79 +126,148 @@ func TestCreateSAMLProviderNoTags(t *testing.T) {
 	}
 }
 
-// TestCreateSAMLProviderServesAssumeRoleWithSAML: the document a provider
-// was created with, read from the store by another replica and parsed with
-// iam.ParseSAMLMetadata, is what sts.WithSAML needs: a SAML response
-// signed by the IdP gets role credentials, and a response signed by an
-// IdP the document does not name does not.
+// samlFixture is a server serving AssumeRoleWithSAML from the stored
+// providers (WithStoredSAML, as cmd/vws-iam wires it), the role saml-dev
+// trusting provider corp, and the IdP whose responses corp should accept.
+type samlFixture struct {
+	b    store.Backend
+	now  time.Time
+	idp  *samltest.IdP
+	sp   sts.SAMLServiceProvider
+	good samltest.Assertion
+}
+
+func newSAMLFixture(t *testing.T, b store.Backend) *samlFixture {
+	t.Helper()
+	f := &samlFixture{b: b, now: time.Now().UTC(), sp: sts.SAMLServiceProvider{Audience: samlSPID, SignInURL: samlAud}}
+	idp, err := samltest.New(samlIssuer, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.idp = idp
+	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Federated":"` + samlIdpARN + `"},
+		"Action":"sts:AssumeRoleWithSAML","Condition":{"StringEquals":{"SAML:aud":"` + samlAud + `"}}}]}`
+	if _, err := f.server(t).roles.CreateRole(t.Context(), &iamv1.CreateRoleRequest{
+		Parent: parentName, RoleId: "saml-dev", Role: &iamv1.Role{Spec: &iamv1.RoleSpec{AssumeRolePolicy: trust}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.good = samltest.Assertion{
+		Issuer: samlIssuer, Audience: samlSPID, Recipient: samlAud, Destination: samlAud,
+		NameID: "alice@corp.test", NameIDFormat: "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
+		Roles: []string{samlRoleARN + "," + samlIdpARN}, SessionName: "alice",
+		NotBefore: f.now.Add(-time.Minute), NotOnOrAfter: f.now.Add(5 * time.Minute),
+		ConfirmNotOnOrAfter: f.now.Add(5 * time.Minute),
+	}
+	return f
+}
+
+// server is a new replica on the fixture's store, as cmd/vws-iam builds
+// one from -saml-audience and -saml-sign-in-url.
+func (f *samlFixture) server(t *testing.T) *env {
+	t.Helper()
+	return newEnvOn(t, f.b, &f.now, grpcapi.WithStoredSAML(f.sp))
+}
+
+// create makes provider corp of project pid from the fixture's IdP
+// through CreateSAMLProvider on e.
+func (f *samlFixture) create(t *testing.T, e *env, pid string) {
+	t.Helper()
+	doc := f.idp.Metadata(f.now.Add(time.Hour))
+	if _, err := e.api.CreateSAMLProvider(t.Context(), pid, "corp", doc, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (f *samlFixture) signed(t *testing.T, p *samltest.IdP) sts.SAMLRequest {
+	t.Helper()
+	r, err := p.Response(f.good, samltest.SignAssertion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sts.SAMLRequest{RoleARN: samlRoleARN, PrincipalARN: samlIdpARN, Assertion: r}
+}
+
+// TestCreateSAMLProviderServesAssumeRoleWithSAML: a provider created
+// through CreateSAMLProvider on one replica serves AssumeRoleWithSAML on
+// another started later (WithStoredSAML, the cmd/vws-iam wiring), with no
+// provider injected: a response signed by its IdP gets role credentials,
+// and one signed by an IdP the document does not name is
+// InvalidIdentityToken. Before the create and after the provider is
+// deleted every call is InvalidIdentityToken, and a provider of the same
+// name in another project serves only that project. On both store
+// backends.
 func TestCreateSAMLProviderServesAssumeRoleWithSAML(t *testing.T) {
 	for _, bk := range renameBackends {
 		t.Run(bk.name, func(t *testing.T) {
-			b := bk.open()
-			now := time.Now().UTC()
-			idp, err := samltest.New(samlIssuer, now)
+			f := newSAMLFixture(t, bk.open())
+			other, err := samltest.New(samlIssuer, f.now)
 			if err != nil {
 				t.Fatal(err)
 			}
-			other, err := samltest.New(samlIssuer, now)
-			if err != nil {
-				t.Fatal(err)
-			}
-			writer := newEnvOn(t, b, &now)
-			created, err := writer.api.CreateSAMLProvider(t.Context(), proj, "corp", idp.Metadata(now.Add(time.Hour)), nil)
+			writer := f.server(t)
+			_, err = writer.api.AssumeRoleWithSAML(t.Context(), f.signed(t, f.idp))
+			wantAWS(t, err, codes.InvalidArgument, "InvalidIdentityToken")
+
+			// Same name in another project: not this project's provider.
+			f.create(t, writer, "beta")
+			_, err = writer.api.AssumeRoleWithSAML(t.Context(), f.signed(t, f.idp))
+			wantAWS(t, err, codes.InvalidArgument, "InvalidIdentityToken")
+
+			created, err := writer.api.CreateSAMLProvider(t.Context(), proj, "corp", f.idp.Metadata(f.now.Add(time.Hour)), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if created.ARN != samlIdpARN {
 				t.Fatalf("Arn = %q, want %q", created.ARN, samlIdpARN)
 			}
-
-			// A replica started later reads the provider from the store.
-			md, err := iam.ParseSAMLMetadata(storedSAML(t, b, "corp").Object.MetadataDocument)
+			e := f.server(t)
+			out, err := e.api.AssumeRoleWithSAML(t.Context(), f.signed(t, f.idp))
 			if err != nil {
-				t.Fatalf("the stored document does not parse: %v", err)
-			}
-			if md.EntityID != samlIssuer || len(md.Certificates) != 1 || !md.Certificates[0].Equal(idp.Cert) ||
-				!md.ValidUntil.Equal(now.Add(time.Hour).Truncate(time.Second)) {
-				t.Fatalf("parsed %+v, want the IdP %q with its certificate", md, samlIssuer)
-			}
-			providers := samltest.Providers{samlIdpARN: sts.SAMLProvider{
-				ARN: created.ARN, EntityID: md.EntityID, Certificates: md.Certificates, ValidUntil: md.ValidUntil,
-			}}
-			sp := sts.SAMLServiceProvider{Audience: samlSPID, SignInURL: samlAud}
-			e := newEnvOn(t, b, &now, grpcapi.WithSAML(providers, sp))
-			trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Federated":"` + samlIdpARN + `"},
-				"Action":"sts:AssumeRoleWithSAML","Condition":{"StringEquals":{"SAML:aud":"` + samlAud + `"}}}]}`
-			if _, err := e.roles.CreateRole(t.Context(), &iamv1.CreateRoleRequest{
-				Parent: parentName, RoleId: "saml-dev", Role: &iamv1.Role{Spec: &iamv1.RoleSpec{AssumeRolePolicy: trust}},
-			}); err != nil {
-				t.Fatal(err)
-			}
-			good := samltest.Assertion{
-				Issuer: samlIssuer, Audience: samlSPID, Recipient: samlAud, Destination: samlAud,
-				NameID: "alice@corp.test", NameIDFormat: "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
-				Roles: []string{samlRoleARN + "," + samlIdpARN}, SessionName: "alice",
-				NotBefore: now.Add(-time.Minute), NotOnOrAfter: now.Add(5 * time.Minute),
-				ConfirmNotOnOrAfter: now.Add(5 * time.Minute),
-			}
-			signed := func(p *samltest.IdP) sts.SAMLRequest {
-				r, err := p.Response(good, samltest.SignAssertion)
-				if err != nil {
-					t.Fatal(err)
-				}
-				return sts.SAMLRequest{RoleARN: samlRoleARN, PrincipalARN: samlIdpARN, Assertion: r}
-			}
-			out, err := e.api.AssumeRoleWithSAML(t.Context(), signed(idp))
-			if err != nil {
-				t.Fatalf("AssumeRoleWithSAML with the stored provider: %v", err)
+				t.Fatalf("AssumeRoleWithSAML with the created provider: %v", err)
 			}
 			if out.Credentials.AssumedRoleARN != "arn:vws:sts::"+proj+":assumed-role/saml-dev/alice" {
 				t.Fatalf("assumed %q", out.Credentials.AssumedRoleARN)
 			}
-			if _, err := e.api.AssumeRoleWithSAML(t.Context(), signed(other)); err == nil {
-				t.Fatal("a response signed by another key was accepted")
+			_, err = e.api.AssumeRoleWithSAML(t.Context(), f.signed(t, other))
+			wantAWS(t, err, codes.InvalidArgument, "InvalidIdentityToken")
+
+			v := storedSAML(t, f.b, "corp")
+			if err := store.Scoped(f.b, proj).Delete(t.Context(), iam.KindSAMLProvider, "corp", v.Version); err != nil {
+				t.Fatal(err)
 			}
+			_, err = e.api.AssumeRoleWithSAML(t.Context(), f.signed(t, f.idp))
+			wantAWS(t, err, codes.InvalidArgument, "InvalidIdentityToken")
 		})
+	}
+}
+
+// TestStoredSAMLProviderStoreFailure: a store failure reading the provider
+// is UNAVAILABLE and issues no credentials, never InvalidIdentityToken.
+func TestStoredSAMLProviderStoreFailure(t *testing.T) {
+	f := newSAMLFixture(t, memstore.New())
+	f.create(t, f.server(t), proj)
+	f.b = failingGet{Backend: f.b, k: iam.KindSAMLProvider, err: store.ErrUnavailable}
+	out, err := f.server(t).api.AssumeRoleWithSAML(t.Context(), f.signed(t, f.idp))
+	if status.Code(err) != codes.Unavailable || out.Credentials.AccessKeyID != "" {
+		t.Fatalf("store down: %v %+v, want UNAVAILABLE and no credentials", err, out.Credentials)
+	}
+}
+
+// TestStoredSAMLNeedsServiceProvider: WithStoredSAML with an empty audience
+// or sign-in URL refuses every call with InvalidIdentityToken, and
+// SAMLServiceProvider reports what was set.
+func TestStoredSAMLNeedsServiceProvider(t *testing.T) {
+	f := newSAMLFixture(t, memstore.New())
+	f.create(t, f.server(t), proj)
+	for _, sp := range []sts.SAMLServiceProvider{{}, {Audience: samlSPID}, {SignInURL: samlAud}} {
+		f.sp = sp
+		e := f.server(t)
+		if got := e.api.SAMLServiceProvider(); got != sp {
+			t.Fatalf("SAMLServiceProvider = %+v, want %+v", got, sp)
+		}
+		_, err := e.api.AssumeRoleWithSAML(t.Context(), f.signed(t, f.idp))
+		wantAWS(t, err, codes.InvalidArgument, "InvalidIdentityToken")
 	}
 }
 
