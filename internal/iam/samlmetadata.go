@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ErrSAMLMetadata wraps every fault of a SAML metadata document. It is
@@ -27,6 +28,11 @@ const (
 	xmlDSigNS      = "http://www.w3.org/2000/09/xmldsig#"
 	// maxSAMLMetadataDepth bounds element nesting.
 	maxSAMLMetadataDepth = 64
+	// xmlSpace is the XML whitespace class; Unicode spaces are not in it.
+	xmlSpace = " \t\r\n"
+	// xsDateTimeNoZone is an xs:dateTime without a time zone, which SAML
+	// core 1.3.3 says is UTC.
+	xsDateTimeNoZone = "2006-01-02T15:04:05.999999999"
 )
 
 // samlCertPath is where a signing certificate sits in an IdP's metadata.
@@ -65,11 +71,18 @@ func samlMetadataFault(what string) error { return fmt.Errorf("%w: %s", ErrSAMLM
 // a base64 DER X.509 certificate, an exact duplicate dropped. A DTD or
 // entity declaration, an EntitiesDescriptor or any other root, a second
 // root, content after the root, nesting deeper than 64 elements, a
-// malformed validUntil and a document with no signing certificate are
-// errors. Element names are matched with their namespace, so a prefix
+// malformed or zero validUntil and a document with no signing certificate
+// are errors, as is anything that is not well-formed XML 1.0 that the Go
+// decoder lets through: invalid UTF-8 anywhere, a repeated attribute, an
+// XML declaration that is not at the very start, an element inside an
+// X509Certificate. A validUntil without a time zone is UTC. Element names are matched with their namespace, so a prefix
 // bound to another namespace does not count.
 func ParseSAMLMetadata(doc string) (SAMLMetadata, error) {
-	d := xml.NewDecoder(strings.NewReader(strings.TrimPrefix(doc, utf8BOM)))
+	if !utf8.ValidString(doc) {
+		return SAMLMetadata{}, samlMetadataFault("the document is not UTF-8")
+	}
+	body := strings.TrimPrefix(doc, utf8BOM)
+	d := xml.NewDecoder(strings.NewReader(body))
 	var (
 		md       SAMLMetadata
 		path     []xml.Name
@@ -85,9 +98,17 @@ func ParseSAMLMetadata(doc string) (SAMLMetadata, error) {
 				if a.Name.Space != "" || a.Name.Local != "validUntil" {
 					continue
 				}
-				t, err := time.Parse(time.RFC3339, strings.TrimSpace(a.Value))
+				v := strings.Trim(a.Value, xmlSpace)
+				t, err := time.Parse(time.RFC3339, v)
+				if err != nil {
+					t, err = time.Parse(xsDateTimeNoZone, v)
+				}
 				if err != nil {
 					return samlMetadataFault("validUntil is not an xs:dateTime")
+				}
+				if t.IsZero() {
+					// Zero means no expiry to the callers.
+					return samlMetadataFault("validUntil is out of range")
 				}
 				if md.ValidUntil.IsZero() || t.Before(md.ValidUntil) {
 					md.ValidUntil = t
@@ -96,7 +117,7 @@ func ParseSAMLMetadata(doc string) (SAMLMetadata, error) {
 			return nil
 		}
 	)
-	for {
+	for first := true; ; first = false {
 		tok, err := d.Token()
 		if errors.Is(err, io.EOF) {
 			break
@@ -107,14 +128,26 @@ func ParseSAMLMetadata(doc string) (SAMLMetadata, error) {
 		switch t := tok.(type) {
 		case xml.Directive:
 			return fail("a DTD or entity declaration is not allowed")
+		case xml.ProcInst:
+			if strings.EqualFold(t.Target, "xml") && (t.Target != "xml" || !first || !strings.HasPrefix(body, "<?xml")) {
+				return fail("an XML declaration is allowed only at the start")
+			}
 		case xml.CharData:
 			switch {
-			case len(path) == 0 && len(bytes.TrimSpace(t)) > 0:
+			case len(path) == 0 && len(bytes.Trim(t, xmlSpace)) > 0:
 				return fail("text outside the root element")
 			case capture && len(path) == len(samlCertPath):
 				pem.Write(t)
 			}
 		case xml.StartElement:
+			if capture {
+				return fail("an X509Certificate holds an element")
+			}
+			for i, a := range t.Attr {
+				if slices.ContainsFunc(t.Attr[:i], func(b xml.Attr) bool { return b.Name == a.Name }) {
+					return fail("an element repeats an attribute")
+				}
+			}
 			if len(path) == 0 {
 				if rooted {
 					return fail("more than one root element")
@@ -191,9 +224,15 @@ func ParseSAMLMetadata(doc string) (SAMLMetadata, error) {
 }
 
 // decodeSAMLCertificate reads an X509Certificate element's text: base64
-// DER with whitespace allowed anywhere.
+// DER with XML whitespace allowed anywhere.
 func decodeSAMLCertificate(text string) (*x509.Certificate, error) {
-	der, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(text), ""))
+	b64 := strings.Map(func(r rune) rune {
+		if strings.ContainsRune(xmlSpace, r) {
+			return -1
+		}
+		return r
+	}, text)
+	der, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
 		return nil, samlMetadataFault("an X509Certificate is not base64")
 	}
