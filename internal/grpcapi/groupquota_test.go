@@ -19,6 +19,8 @@ import (
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
 )
 
+const s3Doc = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*"}]}`
+
 var membersMask = &fieldmaskpb.FieldMask{Paths: []string{"spec.members"}}
 
 func userName(n string) string { return parentName + "/users/" + n }
@@ -217,6 +219,12 @@ func TestRefusedCreateDropsRelabeledGroup(t *testing.T) {
 			}{
 				{"labels", "labels", &iamv1.Group{Labels: map[string]string{"team": "ops"}}, false},
 				{"member", "spec.members", &iamv1.Group{Spec: &iamv1.GroupSpec{Members: []string{userName("bob")}}}, true},
+				{"attached", "spec.attached_policies", &iamv1.Group{Spec: &iamv1.GroupSpec{
+					AttachedPolicies: []string{parentName + "/policies/s3"},
+				}}, true},
+				{"inline", "spec.inline_policies", &iamv1.Group{Spec: &iamv1.GroupSpec{
+					InlinePolicies: map[string]string{"s3": s3Doc},
+				}}, true},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					testRefusedCreateDropsRelabeledGroup(t, bk.open(), tc.mask, tc.group, tc.wantKept)
@@ -236,6 +244,7 @@ func testRefusedCreateDropsRelabeledGroup(
 	ctx := t.Context()
 	other.createUser(t, ctx, "alice")
 	other.createUser(t, ctx, "bob")
+	other.createPolicy(t, ctx, "s3", s3Doc)
 	for i := 1; i < iam.MaxGroupsPerUser; i++ {
 		other.createGroupWith(t, fmt.Sprintf("g%d", i), userName("alice"))
 	}
