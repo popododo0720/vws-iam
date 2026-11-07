@@ -399,10 +399,10 @@ func (s *Server) authorize(
 		switch {
 		case d.Explicit:
 			out.Decision = iamv1.Decision_DECISION_DENY_EXPLICIT
-			denyResp, deny = out, denied{resource: res, d: d, ctx: rc}
+			denyResp, deny = out, denied{resource: res, d: d}
 		case !d.Allowed && denyResp == nil:
 			out.Decision = iamv1.Decision_DECISION_DENY_IMPLICIT
-			denyResp, deny = out, denied{resource: res, d: d, ctx: rc}
+			denyResp, deny = out, denied{resource: res, d: d}
 		case d.Allowed && allow == nil:
 			out.Decision = iamv1.Decision_DECISION_ALLOW
 			allow = out

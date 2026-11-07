@@ -50,15 +50,15 @@ func (s *Server) decodeAuthorizationMessage(
 
 // authorizationMessage encodes the deny decision of an Authorize call
 // for DecodeAuthorizationMessage.
-// The message names the rechecked principal and carries the evaluated
-// context, server keys included.
+// The message names the rechecked principal and carries the context the
+// decision evaluated, the keys authz.Authorize sets included.
 func authorizationMessage(c checked, pr *iamv1.Principal, action string, deny denied) (string, error) {
 	name := c.az.Name
 	if c.az.Kind == authz.Root {
 		name = "root"
 	}
 	who := sts.MessagePrincipal{ID: pr.GetUniqueId(), Name: name, ARN: pr.GetArn()}
-	m := sts.NewAuthorizationMessage(who, action, deny.resource, deny.d, deny.ctx)
+	m := sts.NewAuthorizationMessage(who, action, deny.resource, deny.d)
 	return c.project.sts.EncodeAuthorizationMessage(m)
 }
 
@@ -66,5 +66,4 @@ func authorizationMessage(c checked, pr *iamv1.Principal, action string, deny de
 type denied struct {
 	resource string
 	d        policy.Decision
-	ctx      map[string][]string
 }

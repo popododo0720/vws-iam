@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -37,18 +38,43 @@ type Items[T any] struct {
 	Items []T `json:"items"`
 }
 
+// MarshalJSON writes no items as [], never null, also for a message
+// sealed by a release whose statements had fewer lists.
+func (i Items[T]) MarshalJSON() ([]byte, error) {
+	if i.Items == nil {
+		i.Items = []T{}
+	}
+	b, err := json.Marshal(struct {
+		Items []T `json:"items"`
+	}{i.Items})
+	if err != nil {
+		return nil, fmt.Errorf("authorization message items: %w", err)
+	}
+	return b, nil
+}
+
 // Value is one AWS list value: {"value":"..."}.
 type Value struct {
 	Value string `json:"value"`
 }
 
-// MatchedStatement is a statement that decided the request.
+// MatchedStatement is a statement that decided the request, in the AWS
+// shape. A NotAction, NotResource or NotPrincipal statement lists no
+// actions, resources or principals: AWS has no field for the negation.
 type MatchedStatement struct {
 	StatementID string `json:"statementId"`
 	// Effect is "ALLOW" or "DENY", as AWS writes it.
 	Effect string `json:"effect"`
 	// SourcePolicyName names the policy that holds the statement.
 	SourcePolicyName string `json:"sourcePolicyName,omitempty"`
+	// Principals is the unique id of the user or role that holds the
+	// policy, and the patterns of the statement's Principal element;
+	// PrincipalGroups the unique id of the group that holds it.
+	Principals      Items[Value]     `json:"principals"`
+	PrincipalGroups Items[Value]     `json:"principalGroups"`
+	Actions         Items[Value]     `json:"actions"`
+	Resources       Items[Value]     `json:"resources"`
+	Conditions      Items[Condition] `json:"conditions"`
 }
 
 // Condition is one condition key of the request context.
@@ -83,10 +109,10 @@ type AuthorizationMessage struct {
 }
 
 // NewAuthorizationMessage describes the decision d on action and resource
-// for principal, with the evaluated request context (keys sorted, so the
-// same request always reads the same).
+// for principal, with the context d evaluated (keys sorted, so the same
+// request always reads the same).
 func NewAuthorizationMessage(
-	principal MessagePrincipal, action, resource string, d policy.Decision, reqCtx map[string][]string,
+	principal MessagePrincipal, action, resource string, d policy.Decision,
 ) AuthorizationMessage {
 	m := AuthorizationMessage{
 		Allowed:           d.Allowed,
@@ -99,26 +125,61 @@ func NewAuthorizationMessage(
 		},
 	}
 	if d.Policy != "" {
-		effect := "ALLOW"
-		if d.Explicit {
-			effect = "DENY"
-		}
-		st := MatchedStatement{StatementID: d.Statement, Effect: effect, SourcePolicyName: d.Policy}
-		m.MatchedStatements.Items = append(m.MatchedStatements.Items, st)
+		m.MatchedStatements.Items = append(m.MatchedStatements.Items, matchedStatement(d))
 	}
-	keys := make([]string, 0, len(reqCtx))
-	for k := range reqCtx {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	for _, k := range keys {
-		c := Condition{Key: k, Values: Items[Value]{Items: []Value{}}}
-		for _, v := range reqCtx[k] {
-			c.Values.Items = append(c.Values.Items, Value{Value: v})
-		}
-		m.Context.Conditions.Items = append(m.Context.Conditions.Items, c)
+	for _, k := range slices.Sorted(maps.Keys(d.Context)) {
+		m.Context.Conditions.Items = append(m.Context.Conditions.Items, condition(k, d.Context[k]))
 	}
 	return m
+}
+
+func matchedStatement(d policy.Decision) MatchedStatement {
+	effect := "ALLOW"
+	if d.Explicit {
+		effect = "DENY"
+	}
+	st := MatchedStatement{
+		StatementID: d.Statement, Effect: effect, SourcePolicyName: d.Policy,
+		Principals: values(nil), PrincipalGroups: values(nil), Actions: values(nil), Resources: values(nil),
+		Conditions: Items[Condition]{Items: []Condition{}},
+	}
+	if d.Matched == nil {
+		return st
+	}
+	s, h := d.Matched.Statement, d.Matched.Holder
+	switch {
+	case h.ID != "" && h.Group:
+		st.PrincipalGroups = values([]string{h.ID})
+	case h.ID != "":
+		st.Principals = values([]string{h.ID})
+	}
+	if !s.NotPrincipal {
+		for _, t := range slices.Sorted(maps.Keys(s.Principals)) {
+			st.Principals.Items = append(st.Principals.Items, values(s.Principals[t]).Items...)
+		}
+	}
+	if !s.NotAction {
+		st.Actions = values(s.Actions)
+	}
+	if !s.NotRes {
+		st.Resources = values(s.Resources)
+	}
+	for _, c := range s.Conditions {
+		st.Conditions.Items = append(st.Conditions.Items, condition(c.Key, c.Values))
+	}
+	return st
+}
+
+func condition(key string, vs []string) Condition {
+	return Condition{Key: key, Values: values(vs)}
+}
+
+func values(vs []string) Items[Value] {
+	out := Items[Value]{Items: make([]Value, 0, len(vs))}
+	for _, v := range vs {
+		out.Items = append(out.Items, Value{Value: v})
+	}
+	return out
 }
 
 // envelope is the sealed plaintext of an encoded message.
@@ -130,12 +191,32 @@ type envelope struct {
 
 // EncodeAuthorizationMessage seals m for this project with AES-256-GCM
 // under the active KEK, so only DecodeAuthorizationMessage in the same
-// project can read it and any change is detected. Condition keys are
-// dropped from the end until the encoded message fits
-// MaxEncodedMessageLen; a message that still does not fit is an error.
+// project can read it and any change is detected. Until the encoded
+// message fits MaxEncodedMessageLen, items are dropped from the end of
+// the context's condition keys, then of each matched statement's
+// conditions, resources, actions, principal groups and principals, in
+// that order; a message that still does not fit is an error.
 func (s *Service) EncodeAuthorizationMessage(m AuthorizationMessage) (string, error) {
 	env := envelope{Project: s.account, IssuedAt: s.now().UTC(), Message: m}
-	env.Message.Context.Conditions.Items = slices.Clone(m.Context.Conditions.Items)
+	msg := &env.Message
+	msg.Context.Conditions.Items = slices.Clone(m.Context.Conditions.Items)
+	msg.MatchedStatements.Items = slices.Clone(m.MatchedStatements.Items)
+	trims := []func() bool{func() bool { return pop(&msg.Context.Conditions.Items) }}
+	for i := range msg.MatchedStatements.Items {
+		st := &msg.MatchedStatements.Items[i]
+		st.Conditions.Items = slices.Clone(st.Conditions.Items)
+		st.Resources.Items = slices.Clone(st.Resources.Items)
+		st.Actions.Items = slices.Clone(st.Actions.Items)
+		st.PrincipalGroups.Items = slices.Clone(st.PrincipalGroups.Items)
+		st.Principals.Items = slices.Clone(st.Principals.Items)
+		trims = append(trims,
+			func() bool { return pop(&st.Conditions.Items) },
+			func() bool { return pop(&st.Resources.Items) },
+			func() bool { return pop(&st.Actions.Items) },
+			func() bool { return pop(&st.PrincipalGroups.Items) },
+			func() bool { return pop(&st.Principals.Items) },
+		)
+	}
 	for {
 		enc, err := s.seal(env)
 		if err != nil {
@@ -144,13 +225,23 @@ func (s *Service) EncodeAuthorizationMessage(m AuthorizationMessage) (string, er
 		if len(enc) <= MaxEncodedMessageLen {
 			return enc, nil
 		}
-		items := env.Message.Context.Conditions.Items
-		if len(items) == 0 {
+		for len(trims) > 0 && !trims[0]() {
+			trims = trims[1:]
+		}
+		if len(trims) == 0 {
 			return "", fmt.Errorf("%w: authorization message is longer than %d characters",
 				ErrInvalidRequest, MaxEncodedMessageLen)
 		}
-		env.Message.Context.Conditions.Items = items[:len(items)-1]
 	}
+}
+
+// pop drops the last item of s, false when s is empty.
+func pop[T any](s *[]T) bool {
+	if len(*s) == 0 {
+		return false
+	}
+	*s = (*s)[:len(*s)-1]
+	return true
 }
 
 func (s *Service) seal(env envelope) (string, error) {

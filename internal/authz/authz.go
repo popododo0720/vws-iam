@@ -130,7 +130,11 @@ func (a *Authorizer) managed(ctx context.Context, arn string) (policy.Named, err
 
 // source is the user, group or role a policy is attached to: its
 // simulator policy type ("user", "group" or "role"), name and ARN.
-type source struct{ kind, name, arn string }
+type source struct{ kind, name, arn, id string }
+
+func (s source) holder() policy.Holder {
+	return policy.Holder{ID: s.id, Group: s.kind == "group"}
+}
 
 func (a *Authorizer) collect(
 	ctx context.Context, src source, attached []string, inline map[string]string, out []policy.Named,
@@ -140,6 +144,7 @@ func (a *Authorizer) collect(
 		if err != nil {
 			return nil, err
 		}
+		n.Holder = src.holder()
 		out = append(out, n)
 	}
 	for _, name := range slices.Sorted(maps.Keys(inline)) {
@@ -151,7 +156,7 @@ func (a *Authorizer) collect(
 		}
 		out = append(out, policy.Named{
 			Name: src.arn + ":inline/" + name, Doc: d,
-			ID: src.kind + "_" + src.name + "_" + name, Type: src.kind,
+			ID: src.kind + "_" + src.name + "_" + name, Type: src.kind, Holder: src.holder(),
 		})
 	}
 	return out, nil
@@ -170,7 +175,7 @@ func (a *Authorizer) IdentityPolicies(ctx context.Context, p Principal) ([]polic
 			return nil, "", fmt.Errorf("get user %q: %w", p.Name, err)
 		}
 		arn := iam.UserARN(a.account, u.Object)
-		src := source{"user", u.Object.Name, arn}
+		src := source{"user", u.Object.Name, arn, u.Object.ID}
 		if out, err = a.collect(ctx, src, u.Object.AttachedPolicies, u.Object.InlinePolicies, out); err != nil {
 			return nil, "", err
 		}
@@ -198,7 +203,7 @@ func (a *Authorizer) IdentityPolicies(ctx context.Context, p Principal) ([]polic
 			}
 		}
 		for _, g := range groups {
-			src := source{"group", g.Name, iam.GroupARN(a.account, g)}
+			src := source{"group", g.Name, iam.GroupARN(a.account, g), g.ID}
 			if out, err = a.collect(ctx, src, g.AttachedPolicies, g.InlinePolicies, out); err != nil {
 				return nil, "", err
 			}
@@ -213,7 +218,8 @@ func (a *Authorizer) IdentityPolicies(ctx context.Context, p Principal) ([]polic
 			return nil, "", fmt.Errorf("get role %q: %w", p.Name, err)
 		}
 		arn := iam.RoleARN(a.account, r.Object)
-		out, err = a.collect(ctx, source{"role", r.Object.Name, arn}, r.Object.AttachedPolicies, r.Object.InlinePolicies, out)
+		src := source{"role", r.Object.Name, arn, r.Object.ID}
+		out, err = a.collect(ctx, src, r.Object.AttachedPolicies, r.Object.InlinePolicies, out)
 		return out, arn, err
 	}
 	return nil, "", fmt.Errorf("principal kind %d: %w", p.Kind, ErrNoSuchEntity)
@@ -231,7 +237,7 @@ func (a *Authorizer) GroupPolicies(ctx context.Context, name string) ([]policy.N
 		return nil, "", fmt.Errorf("get group %q: %w", name, err)
 	}
 	arn := iam.GroupARN(a.account, g.Object)
-	src := source{"group", g.Object.Name, arn}
+	src := source{"group", g.Object.Name, arn, g.Object.ID}
 	out, err := a.collect(ctx, src, g.Object.AttachedPolicies, g.Object.InlinePolicies, nil)
 	return out, arn, err
 }
@@ -244,7 +250,9 @@ func (a *Authorizer) ManagedPolicy(ctx context.Context, arn string) (policy.Name
 
 // Authorize decides whether p may perform action on resource. reqCtx
 // carries request keys such as aws:SourceIp and aws:MultiFactorAuthPresent;
-// aws:username, aws:PrincipalArn, aws:userid and aws:CurrentTime are set here.
+// aws:username, aws:PrincipalArn and aws:CurrentTime are set here, replacing
+// any key of reqCtx that differs from one of them only in case. The
+// decision carries the context it evaluated.
 func (a *Authorizer) Authorize(
 	ctx context.Context, p Principal, action, resource string, reqCtx map[string][]string,
 ) (d policy.Decision, err error) {
@@ -257,10 +265,10 @@ func (a *Authorizer) authorize(
 	ctx context.Context, p Principal, action, resource string, reqCtx map[string][]string,
 ) (policy.Decision, error) {
 	if why := sessionDenied(p, action); why != "" {
-		return policy.Decision{Reason: why}, nil
+		return policy.Decision{Reason: why, Context: a.context(p, p.ARN, reqCtx)}, nil
 	}
 	if p.Kind == Root && !p.Federated {
-		return policy.Decision{Allowed: true, Reason: "root user"}, nil
+		return policy.Decision{Allowed: true, Reason: "root user", Context: a.context(p, p.ARN, reqCtx)}, nil
 	}
 	var ids []policy.Named
 	var arn string
@@ -279,17 +287,33 @@ func (a *Authorizer) authorize(
 	if err != nil {
 		return policy.Decision{}, err
 	}
-	c := make(map[string][]string, len(reqCtx)+4)
+	c := a.context(p, arn, reqCtx)
+	r := policy.Request{Principal: arn, Account: a.account, Action: action, Resource: resource, Context: c}
+	return policy.Evaluate(r, ids, session), nil
+}
+
+// authzKeys are the context keys Authorize sets itself.
+var authzKeys = []string{"aws:PrincipalArn", "aws:CurrentTime", "aws:username"}
+
+// context is reqCtx with the keys Authorize sets for p, whose ARN is
+// arn ("" when not resolved, as for a session refused before its
+// policies are read). Request keys keep their spelling, so a decoded authorization
+// message shows them as sent.
+func (a *Authorizer) context(p Principal, arn string, reqCtx map[string][]string) map[string][]string {
+	c := make(map[string][]string, len(reqCtx)+len(authzKeys))
 	for k, v := range reqCtx {
-		c[strings.ToLower(k)] = v
+		if !slices.ContainsFunc(authzKeys, func(s string) bool { return strings.EqualFold(s, k) }) {
+			c[k] = v
+		}
 	}
-	c["aws:principalarn"] = []string{arn}
-	c["aws:currenttime"] = []string{a.now().UTC().Format(time.RFC3339)}
+	if arn != "" {
+		c["aws:PrincipalArn"] = []string{arn}
+	}
+	c["aws:CurrentTime"] = []string{a.now().UTC().Format(time.RFC3339)}
 	if p.Kind == User && !p.Federated {
 		c["aws:username"] = []string{p.Name}
 	}
-	r := policy.Request{Principal: arn, Account: a.account, Action: action, Resource: resource, Context: c}
-	return policy.Evaluate(r, ids, session), nil
+	return c
 }
 
 // sessionPolicies returns p's session policies: nil when p has none, so
