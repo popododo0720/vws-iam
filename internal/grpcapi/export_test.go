@@ -286,17 +286,17 @@ func (s *Server) GetAccountSummary(ctx context.Context, project string) (map[str
 	return s.getAccountSummary(ctx, project)
 }
 
-// RoleTagPage is one page of ListRoleTags.
-type RoleTagPage = roleTagPage
+// TagPage is one page of ListRoleTags or ListSAMLProviderTags.
+type TagPage = tagPage
 
-// RoleTag is one tag of a RoleTagPage.
-type RoleTag = roleTag
+// AWSTag is one tag of a TagPage.
+type AWSTag = awsTag
 
 // ListRoleTags is IAM ListRoleTags, which vws-proto does not carry yet
 // (#73).
 func (s *Server) ListRoleTags(
 	ctx context.Context, project, roleName, marker string, maxItems int,
-) (RoleTagPage, error) {
+) (TagPage, error) {
 	return s.listRoleTags(ctx, project, roleName, marker, maxItems)
 }
 
@@ -330,6 +330,26 @@ func (s *Server) ListSAMLProviders(ctx context.Context, project string) ([]SAMLP
 // carry yet (#196).
 func (s *Server) UpdateSAMLProvider(ctx context.Context, project, arn, document string) (string, error) {
 	return s.updateSAMLProvider(ctx, project, arn, document)
+}
+
+// TagSAMLProvider is IAM TagSAMLProvider, which vws-proto does not carry
+// yet (#196).
+func (s *Server) TagSAMLProvider(ctx context.Context, project, arn string, tags []*iamv1.Tag) error {
+	return s.tagSAMLProvider(ctx, project, arn, tags)
+}
+
+// UntagSAMLProvider is IAM UntagSAMLProvider, which vws-proto does not
+// carry yet (#196).
+func (s *Server) UntagSAMLProvider(ctx context.Context, project, arn string, keys []string) error {
+	return s.untagSAMLProvider(ctx, project, arn, keys)
+}
+
+// ListSAMLProviderTags is IAM ListSAMLProviderTags, which vws-proto does
+// not carry yet (#196).
+func (s *Server) ListSAMLProviderTags(
+	ctx context.Context, project, arn, marker string, maxItems int,
+) (TagPage, error) {
+	return s.listSAMLProviderTags(ctx, project, arn, marker, maxItems)
 }
 
 // DeleteSAMLProvider is IAM DeleteSAMLProvider, which vws-proto does not

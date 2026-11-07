@@ -10,16 +10,17 @@ import (
 	"github.com/popododo0720/vws-iam/internal/store"
 )
 
-// roleTag is one AWS Tag of a role.
-type roleTag struct {
+// awsTag is one AWS Tag.
+type awsTag struct {
 	Key   string
 	Value string
 }
 
-// roleTagPage is one page of ListRoleTags. When IsTruncated is set,
-// Marker continues the listing.
-type roleTagPage struct {
-	Tags        []roleTag
+// tagPage is one page of a tag listing (ListRoleTags,
+// ListSAMLProviderTags). When IsTruncated is set, Marker continues the
+// listing.
+type tagPage struct {
+	Tags        []awsTag
 	IsTruncated bool
 	Marker      string
 }
@@ -45,45 +46,52 @@ type roleTagPage struct {
 // TODO(#73): serve this as an RPC once vws-proto carries it
 // (popododo0720/vws-proto#139); console-api dispatch is
 // popododo0720/vws-console-api#558.
-func (s *Server) listRoleTags(ctx context.Context, pid, roleName, marker string, maxItems int) (roleTagPage, error) {
+func (s *Server) listRoleTags(ctx context.Context, pid, roleName, marker string, maxItems int) (tagPage, error) {
 	if !iam.ValidProject(pid) {
-		return roleTagPage{}, invalidID("project " + quote(pid) + " is not a project id")
+		return tagPage{}, invalidID("project " + quote(pid) + " is not a project id")
 	}
 	if !iam.ValidName(roleName) {
-		return roleTagPage{}, invalidSpec("roleName must be 1 to 64 characters of [\\w+=,.@-]")
+		return tagPage{}, invalidSpec("roleName must be 1 to 64 characters of [\\w+=,.@-]")
 	}
 	maxItems, err := listPageSize(maxItems)
 	if err != nil {
-		return roleTagPage{}, err
+		return tagPage{}, err
 	}
 	after, err := decodeTagMarker(marker)
 	if err != nil {
-		return roleTagPage{}, err
+		return tagPage{}, err
 	}
 	r, err := store.Get[iam.Role](ctx, s.project(pid).b, roleName)
 	if errors.Is(err, store.ErrNotFound) {
-		return roleTagPage{}, notFound("The role with name " + roleName + " cannot be found.")
+		return tagPage{}, notFound("The role with name " + roleName + " cannot be found.")
 	}
 	if err != nil {
-		return roleTagPage{}, readFailure(ctx, err)
+		return tagPage{}, readFailure(ctx, err)
 	}
-	keys := make([]string, 0, len(r.Object.Tags))
-	for k := range r.Object.Tags {
+	return pageTags(r.Object.Tags, after, maxItems), nil
+}
+
+// pageTags is the page of tags after key after (every key when ""),
+// sorted by key in byte order, at most maxItems long; when more remain,
+// its marker (the base64url of its last key) continues after that key.
+func pageTags(tags map[string]string, after string, maxItems int) tagPage {
+	keys := make([]string, 0, len(tags))
+	for k := range tags {
 		if after == "" || k > after {
 			keys = append(keys, k)
 		}
 	}
 	slices.Sort(keys)
-	var out roleTagPage
+	var out tagPage
 	if len(keys) > maxItems {
 		keys = keys[:maxItems]
 		out.IsTruncated = true
 		out.Marker = base64.RawURLEncoding.EncodeToString([]byte(keys[maxItems-1]))
 	}
 	for _, k := range keys {
-		out.Tags = append(out.Tags, roleTag{Key: k, Value: r.Object.Tags[k]})
+		out.Tags = append(out.Tags, awsTag{Key: k, Value: tags[k]})
 	}
-	return out, nil
+	return out
 }
 
 // decodeTagMarker returns the tag key a tag listing marker continues

@@ -72,6 +72,20 @@ func samlProviderName(pid, arn string, missing error) (string, error) {
 	return name, nil
 }
 
+// samlProviderArg checks project pid and the SAMLProviderArn arn
+// (samlProviderName, missing for another account's) before any store
+// access, and returns the project and the provider name.
+func (s *Server) samlProviderArg(pid, arn string, missing error) (project, string, error) {
+	if !iam.ValidProject(pid) {
+		return project{}, "", invalidID("project " + quote(pid) + " is not a project id")
+	}
+	name, err := samlProviderName(pid, arn, missing)
+	if err != nil {
+		return project{}, "", err
+	}
+	return s.project(pid), name, nil
+}
+
 // readSAMLProvider reads the provider arn names in project p. The store
 // finds a name in any case, but the ARN must carry the name as stored, as
 // AssumeRoleWithSAML requires (sts.WithStoredSAML): an ARN differing only
@@ -109,15 +123,11 @@ func noSAMLProvider(arn string) error {
 //
 // TODO(#196): serve this as an RPC once vws-proto carries GetSAMLProvider.
 func (s *Server) getSAMLProvider(ctx context.Context, pid, arn string) (samlProviderView, error) {
-	if !iam.ValidProject(pid) {
-		return samlProviderView{}, invalidID("project " + quote(pid) + " is not a project id")
-	}
 	missing := noSAMLProvider(arn)
-	name, err := samlProviderName(pid, arn, missing)
+	p, name, err := s.samlProviderArg(pid, arn, missing)
 	if err != nil {
 		return samlProviderView{}, err
 	}
-	p := s.project(pid)
 	cur, err := readSAMLProvider(ctx, p, name, missing)
 	if err != nil {
 		return samlProviderView{}, err
@@ -180,15 +190,11 @@ func (s *Server) listSAMLProviders(ctx context.Context, pid string) ([]samlProvi
 //
 // TODO(#196): serve this as an RPC once vws-proto carries DeleteSAMLProvider.
 func (s *Server) deleteSAMLProvider(ctx context.Context, pid, arn string) error {
-	if !iam.ValidProject(pid) {
-		return invalidID("project " + quote(pid) + " is not a project id")
-	}
 	missing := noSAMLProvider(arn)
-	name, err := samlProviderName(pid, arn, missing)
+	p, name, err := s.samlProviderArg(pid, arn, missing)
 	if err != nil {
 		return err
 	}
-	p := s.project(pid)
 	for attempt := 1; ; attempt++ {
 		cur, err := readSAMLProvider(ctx, p, name, missing)
 		if err != nil {
@@ -235,11 +241,8 @@ func (s *Server) deleteSAMLProvider(ctx context.Context, pid, arn string) error 
 //
 // TODO(#196): serve this as an RPC once vws-proto carries UpdateSAMLProvider.
 func (s *Server) updateSAMLProvider(ctx context.Context, pid, arn, document string) (string, error) {
-	if !iam.ValidProject(pid) {
-		return "", invalidID("project " + quote(pid) + " is not a project id")
-	}
 	missing := noSAMLProvider(arn)
-	name, err := samlProviderName(pid, arn, missing)
+	p, name, err := s.samlProviderArg(pid, arn, missing)
 	if err != nil {
 		return "", err
 	}
@@ -249,35 +252,68 @@ func (s *Server) updateSAMLProvider(ctx context.Context, pid, arn, document stri
 	if _, err := iam.ParseSAMLMetadata(document); err != nil {
 		return "", invalidInput("the SAML metadata document is not usable: " + err.Error())
 	}
-	p := s.project(pid)
+	sp, err := s.changeSAMLProvider(ctx, p, name, missing, func(sp *iam.SAMLProvider) (bool, error) {
+		if sp.MetadataDocument == document {
+			return false, nil
+		}
+		sp.MetadataDocument = document
+		return true, nil
+	})
+	if err != nil {
+		return "", toStatus(ctx, err)
+	}
+	return iam.SAMLProviderARN(p.id, sp), nil
+}
+
+// changeSAMLProvider reads the SAML provider name of project p (missing
+// when there is none, see readSAMLProvider), applies change to it and
+// writes it at the version read, with the generation moved and Updated
+// set, and returns the provider as stored. When change reports nothing to
+// change, nothing is written. A provider written in between is read again
+// and changed anew, up to maxDeleteAttempts, then the store conflict; a
+// changed provider that does not validate is answered by
+// samlProviderInvalid and not written, unless the stored one does not
+// validate either, which is an internal error; a request that was canceled or whose deadline passed
+// writes nothing. A store failure is returned as is, for the caller to
+// map.
+func (s *Server) changeSAMLProvider(
+	ctx context.Context, p project, name string, missing error,
+	change func(*iam.SAMLProvider) (bool, error),
+) (iam.SAMLProvider, error) {
 	for attempt := 1; ; attempt++ {
 		cur, err := readSAMLProvider(ctx, p, name, missing)
 		if err != nil {
-			return "", err
+			return iam.SAMLProvider{}, err
 		}
 		sp := cur.Object
-		if sp.MetadataDocument == document {
-			return iam.SAMLProviderARN(p.id, sp), nil
+		changed, err := change(&sp)
+		if err != nil || !changed {
+			return cur.Object, err
 		}
-		sp.MetadataDocument = document
 		sp.Generation++
 		sp.Updated = s.now().UTC()
 		if err := sp.Validate(); err != nil {
-			return "", samlProviderInvalid(err, document)
+			if cur.Object.Validate() != nil {
+				// The stored provider is invalid (an operator edit; every write
+				// validates it): a service fault, not the caller's input, and
+				// never carrying the document.
+				return iam.SAMLProvider{}, fmt.Errorf("stored SAML provider %q does not validate", sp.Name)
+			}
+			return iam.SAMLProvider{}, samlProviderInvalid(err, sp.MetadataDocument)
 		}
 		if err := ctx.Err(); err != nil {
-			return "", toStatus(ctx, err) // the caller is gone; write nothing
+			return iam.SAMLProvider{}, fmt.Errorf("SAML provider %q: %w", sp.Name, err) // the caller is gone; write nothing
 		}
 		_, err = store.Update(ctx, p.b, sp, cur.Version)
 		switch {
 		case err == nil:
-			return iam.SAMLProviderARN(p.id, sp), nil
+			return sp, nil
 		case errors.Is(err, store.ErrConflict) && attempt < maxDeleteAttempts:
 			continue
 		case errors.Is(err, store.ErrNotFound):
-			return "", missing
+			return iam.SAMLProvider{}, missing
 		default:
-			return "", toStatus(ctx, err)
+			return iam.SAMLProvider{}, err
 		}
 	}
 }
