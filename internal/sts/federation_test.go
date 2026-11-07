@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/popododo0720/vws-iam/internal/accesskey"
 	"github.com/popododo0720/vws-iam/internal/authz"
@@ -120,9 +121,9 @@ func TestGetFederationToken(t *testing.T) {
 	if !c.Expiration.Equal(e.clk.t.Add(sts.DefaultFederationDuration)) {
 		t.Fatalf("expiration %v", c.Expiration)
 	}
-	want := (len(s3PutOnly) + len(s3ReadARN)) * 100 / sts.MaxPackedPolicyChars
-	if tok.PackedPolicySize < want || tok.PackedPolicySize > want+1 {
-		t.Fatalf("PackedPolicySize %d, want about %d", tok.PackedPolicySize, want)
+	want := ((len(s3PutOnly)+len(s3ReadARN))*100 + sts.MaxPackedPolicyChars - 1) / sts.MaxPackedPolicyChars
+	if tok.PackedPolicySize != want {
+		t.Fatalf("PackedPolicySize %d, want %d", tok.PackedPolicySize, want)
 	}
 	for _, s := range []string{fmt.Sprint(tok), fmt.Sprint(c), c.SessionToken} {
 		if strings.Contains(s, c.Secret) {
@@ -352,6 +353,52 @@ func TestGetFederationTokenValidation(t *testing.T) {
 				t.Fatalf("got %v, want %v", err, c.want)
 			case c.want != nil && tok.Credentials.SessionToken != "":
 				t.Fatal("credentials returned with an error")
+			}
+		})
+	}
+}
+
+// TestPackedPolicySizeIsPlaintextShare pins the documented approximation
+// (#192): PackedPolicySize is the share of MaxPackedPolicyChars that the
+// inline policy characters (not bytes) and the ARN bytes use, rounded up,
+// and PackedPolicyTooLarge starts at one character past the limit.
+func TestPackedPolicySizeIsPlaintextShare(t *testing.T) {
+	e := fedSetup(t)
+	ctx := context.Background()
+	broker := e.caller(t, "broker")
+	latin1 := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:PutObject",` +
+		`"Resource":"arn:vws:s3:::café/*"}}`
+	// pad is doc padded with spaces to n characters together with s3ReadARN.
+	pad := func(doc string, n int) string {
+		return doc + strings.Repeat(" ", n-utf8.RuneCountInString(doc)-len(s3ReadARN))
+	}
+	for _, c := range []struct {
+		name  string
+		doc   string
+		total int
+		want  int // -1 means PackedPolicyTooLarge
+	}{
+		{"half", s3PutOnly, 1024, 50},
+		{"rounds up", s3PutOnly, 1025, 51},
+		{"at limit", s3PutOnly, sts.MaxPackedPolicyChars, 100},
+		{"one past limit", s3PutOnly, sts.MaxPackedPolicyChars + 1, -1},
+		{"latin-1 counts characters", latin1, sts.MaxPackedPolicyChars, 100},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tok, err := e.svc.GetFederationToken(ctx, broker, nil, sts.FederationRequest{
+				Name: "bob", Policy: pad(c.doc, c.total), PolicyARNs: []string{s3ReadARN},
+			})
+			if c.want < 0 {
+				if !errors.Is(err, sts.ErrPackedPolicyTooLarge) {
+					t.Fatalf("got %v, want PackedPolicyTooLarge", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tok.PackedPolicySize != c.want {
+				t.Fatalf("PackedPolicySize %d, want %d", tok.PackedPolicySize, c.want)
 			}
 		})
 	}
