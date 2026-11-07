@@ -49,9 +49,9 @@ func badCredentials() error {
 // temporary ones (ASIA) are opened from the session token.
 func (s *Server) Authenticate(ctx context.Context, req *iamv1.AuthenticateRequest) (resp *iamv1.AuthenticateResponse, err error) {
 	defer func() { s.m.add(ctx, s.m.authn, attribute.String("result", result(err))) }()
-	// TODO(#20): set the reference on resp.Principal once vws-proto's
-	// Principal carries a session reference (popododo0720/vws-proto#146), so the
-	// gateway can hand it back to Authorize.
+	// TODO(#20): a GetSessionToken user session has no session_context on
+	// the wire (it is empty for users), so Authorize cannot catch its
+	// revocation.
 	resp, _, err = s.authenticate(ctx, req, true)
 	return resp, err
 }
@@ -60,7 +60,9 @@ func (s *Server) Authenticate(ctx context.Context, req *iamv1.AuthenticateReques
 // Authenticate, whose Principal then goes to Authorize; it is false for an
 // STS call that vws-iam serves itself with the session it opened. For a
 // gateway request signed with STS credentials it also returns the session
-// reference Authorize checks for revocation (#20); it is "" otherwise.
+// reference Authorize checks for revocation and the SAML identity (#20,
+// #202); it is "" otherwise. An assumed-role Principal carries it as its
+// session_context.
 func (s *Server) authenticate(
 	ctx context.Context, req *iamv1.AuthenticateRequest, gateway bool,
 ) (*iamv1.AuthenticateResponse, string, error) {
@@ -128,15 +130,6 @@ func (s *Server) authTemporary(
 	if err := sigv4.Check([]byte(sess.Secret), sr, s.now()); err != nil {
 		return nil, "", toStatus(ctx, err)
 	}
-	if gateway && sess.SAML != nil {
-		// TODO(#202): describe a SAML session to the gateway once
-		// vws-proto lets Authorize carry its saml:sub, saml:sub_type and
-		// saml:namequalifier. Until then a policy conditioned on them
-		// could not see them (a Deny on saml:sub would fail open), so the
-		// session fails closed here; STS calls vws-iam serves itself
-		// restore them from the session token (sts callerContext).
-		return nil, "", badCredentials()
-	}
 	if strings.EqualFold(sr.Service, "iam") && sess.Principal.SessionToken && !sess.Principal.SessionMFA {
 		// TODO(#233): the Principal the gateway passes to Authorize cannot
 		// say it is a GetSessionToken session (popododo0720/vws-proto#140),
@@ -152,6 +145,9 @@ func (s *Server) authTemporary(
 		if ref, err = s.project(pid).sts.MintSessionRef(req.GetAccessKeyId(), req.GetSessionToken()); err != nil {
 			return nil, "", toStatus(ctx, err)
 		}
+	}
+	if pr.GetType() == iamv1.PrincipalType_PRINCIPAL_TYPE_ASSUMED_ROLE {
+		pr.SessionContext = ref
 	}
 	resp := &iamv1.AuthenticateResponse{
 		Account: sess.Project, Arn: pr.GetArn(), IsRoot: pr.GetType() == iamv1.PrincipalType_PRINCIPAL_TYPE_ROOT,
@@ -216,6 +212,9 @@ type checked struct {
 	userName string
 	mfa      bool
 	authTime time.Time
+	// session is the checked reference of an assumed-role principal; it
+	// holds the session's SAML identity (#202).
+	session sts.SessionRef
 }
 
 // recheck verifies a Principal sent by a caller (the gateway): the entity
@@ -223,7 +222,7 @@ type checked struct {
 // a recent auth_time and, for a user, an enabled device. ref, when not
 // empty, is the session reference of the STS session behind the principal:
 // the session must not have been revoked, and the reference must describe
-// this principal (#20).
+// this principal (#20). An assumed-role principal without one is refused.
 func (s *Server) recheck(ctx context.Context, pr *iamv1.Principal, ref string) (checked, error) {
 	deny := func(why string) (checked, error) { return checked{}, accessDenied("principal rejected: " + why) }
 	pid := pr.GetProject()
@@ -277,10 +276,15 @@ func (s *Server) recheck(ctx context.Context, pr *iamv1.Principal, ref string) (
 	default:
 		return deny("type")
 	}
+	if ref == "" && pr.GetType() == iamv1.PrincipalType_PRINCIPAL_TYPE_ASSUMED_ROLE {
+		return deny("session context required")
+	}
 	if ref != "" {
-		if err := checkSessionRef(ctx, p, pr, c, ref); err != nil {
+		sr, err := checkSessionRef(ctx, p, pr, c, ref)
+		if err != nil {
 			return checked{}, err
 		}
+		c.session = sr
 	}
 	if c.mfa {
 		now := s.now()
@@ -306,20 +310,22 @@ func (s *Server) recheck(ctx context.Context, pr *iamv1.Principal, ref string) (
 // session's reference cannot vouch for another principal or auth_time (and so
 // aws:MultiFactorAuthAge). A store failure is returned as is, which fails
 // closed.
-func checkSessionRef(ctx context.Context, p project, pr *iamv1.Principal, c checked, ref string) error {
+func checkSessionRef(
+	ctx context.Context, p project, pr *iamv1.Principal, c checked, ref string,
+) (sts.SessionRef, error) {
 	sr, err := p.sts.CheckSessionRef(ctx, ref)
 	switch {
 	case errors.Is(err, sts.ErrInvalidToken), errors.Is(err, sts.ErrExpired):
-		return accessDenied("principal rejected: session revoked or invalid")
+		return sts.SessionRef{}, accessDenied("principal rejected: session revoked or invalid")
 	case err != nil:
-		return err
+		return sts.SessionRef{}, err
 	case sr.Principal.Kind != c.az.Kind || sr.Principal.Name != c.az.Name || sr.UniqueID() != pr.GetUniqueId(),
 		!c.authTime.Equal(sr.AuthTime):
-		return accessDenied("principal rejected: session reference does not match the principal")
+		return sts.SessionRef{}, accessDenied("principal rejected: session reference does not match the principal")
 	case c.mfa && !sr.MFA:
-		return accessDenied("principal rejected: MFA claim but the session was issued without MFA")
+		return sts.SessionRef{}, accessDenied("principal rejected: MFA claim but the session was issued without MFA")
 	}
-	return nil
+	return sr, nil
 }
 
 // serverKeys are context keys only vws-iam may set, saml:* included.
@@ -336,11 +342,7 @@ var serverKeys = policy.NewKeySet(
 // DecodeAuthorizationMessage; an ALLOW, and a principal refused by the
 // recheck, carry none.
 func (s *Server) Authorize(ctx context.Context, req *iamv1.AuthorizeRequest) (*iamv1.AuthorizeResponse, error) {
-	// TODO(#20): pass req.GetPrincipal().GetSessionRef() once vws-proto's
-	// Principal carries it (popododo0720/vws-proto#146), and refuse an ASSUMED_ROLE
-	// principal without one: until then the gateway cannot send a reference
-	// and a revoked session is not caught here.
-	return s.authorize(ctx, req, "")
+	return s.authorize(ctx, req, req.GetPrincipal().GetSessionContext())
 }
 
 // authorize is Authorize with the session reference of the STS session
@@ -365,14 +367,15 @@ func (s *Server) authorize(
 		return nil, toStatus(ctx, err)
 	}
 	// saml:* keys come only from a verified assertion or a sealed SAML
-	// session, never from the request; Authenticate refuses SAML sessions
-	// (#202), so no principal here has them.
+	// session, never from the request: the session's come from its checked
+	// reference below.
 	rc := map[string][]string{}
 	for k, v := range req.GetContext() {
 		if !serverKeys.Has(k) {
 			rc[k] = v.GetValues()
 		}
 	}
+	c.session.AddSAMLContext(rc)
 	rc["aws:MultiFactorAuthPresent"] = []string{strconv.FormatBool(c.mfa)}
 	if c.mfa {
 		rc["aws:MultiFactorAuthAge"] = []string{strconv.FormatInt(int64(max(s.now().Sub(c.authTime), 0)/time.Second), 10)}
