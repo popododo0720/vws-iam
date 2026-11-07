@@ -34,7 +34,7 @@ func seedTaggedRole(t *testing.T, b store.Backend, pid, name string, tags map[st
 }
 
 // roleTagKeys returns the keys of tags in order.
-func roleTagKeys(tags []grpcapi.RoleTag) []string {
+func roleTagKeys(tags []grpcapi.AWSTag) []string {
 	keys := make([]string, 0, len(tags))
 	for _, tg := range tags {
 		keys = append(keys, tg.Key)
