@@ -2,6 +2,7 @@ package policy
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -289,19 +290,38 @@ func (c Condition) eval(r Request, vars bool) bool {
 		return (!present || len(got) == 0) == want
 	}
 	if !present || len(got) == 0 {
+		switch c.Set {
+		case ForAllValues:
+			// Every value of an empty set passes.
+			return true
+		case ForAnyValue:
+			// No value can pass, negated or not; IfExists passes.
+			return c.IfExists
+		}
 		// A missing key fails a positive operator and passes a negated
 		// one; IfExists passes either way.
 		return c.IfExists || o.negate
 	}
-	hit := false
-	for _, g := range got {
+	// matches reports whether one request value matches some policy value.
+	matches := func(g string) bool {
 		for _, v := range c.Values {
 			if v, ok := r.expand(v, vars); ok && o.match(g, v) {
-				hit = true
+				return true
 			}
 		}
+		return false
 	}
-	return hit != o.negate
+	// A request value passes a negated operator when it matches none of
+	// the policy values (a NOR).
+	switch c.Set {
+	case ForAnyValue:
+		return slices.ContainsFunc(got, func(g string) bool { return matches(g) != o.negate })
+	case ForAllValues:
+		return !slices.ContainsFunc(got, func(g string) bool { return matches(g) == o.negate })
+	}
+	// Without a set operator, a positive operator holds when any request
+	// value matches and a negated one when none does.
+	return slices.ContainsFunc(got, matches) != o.negate
 }
 
 // applies reports whether s matches r. vars enables policy variables.
