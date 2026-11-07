@@ -35,11 +35,11 @@ func (s *Server) getFederationToken(
 			sts.ErrAccessDenied)
 		return sts.FederationToken{}, toStatus(ctx, err)
 	}
-	p, c, ip, err := s.authenticatedCallerFrom(ctx, a, "GetFederationToken")
+	p, c, o, err := s.authenticatedCallerFrom(ctx, a, "GetFederationToken")
 	if err != nil {
 		return sts.FederationToken{}, toStatus(ctx, err)
 	}
-	tok, err = p.sts.GetFederationToken(ctx, c, sourceIPContext(ip), req)
+	tok, err = p.sts.GetFederationToken(ctx, c, o.requestContext(""), req)
 	if err != nil {
 		return sts.FederationToken{}, toStatus(ctx, err)
 	}
