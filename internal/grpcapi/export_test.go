@@ -286,7 +286,8 @@ func (s *Server) GetAccountSummary(ctx context.Context, project string) (map[str
 	return s.getAccountSummary(ctx, project)
 }
 
-// TagPage is one page of ListRoleTags or ListSAMLProviderTags.
+// TagPage is one page of ListRoleTags, ListSAMLProviderTags or
+// ListOpenIDConnectProviderTags.
 type TagPage = tagPage
 
 // AWSTag is one tag of a TagPage.
@@ -407,4 +408,24 @@ func (s *Server) AddClientIDToOpenIDConnectProvider(ctx context.Context, project
 // yet (#208).
 func (s *Server) RemoveClientIDFromOpenIDConnectProvider(ctx context.Context, project, arn, clientID string) error {
 	return s.removeClientIDFromOIDCProvider(ctx, project, arn, clientID)
+}
+
+// TagOpenIDConnectProvider is IAM TagOpenIDConnectProvider, which
+// vws-proto does not carry yet (#208).
+func (s *Server) TagOpenIDConnectProvider(ctx context.Context, project, arn string, tags []*iamv1.Tag) error {
+	return s.tagOIDCProvider(ctx, project, arn, tags)
+}
+
+// UntagOpenIDConnectProvider is IAM UntagOpenIDConnectProvider, which
+// vws-proto does not carry yet (#208).
+func (s *Server) UntagOpenIDConnectProvider(ctx context.Context, project, arn string, keys []string) error {
+	return s.untagOIDCProvider(ctx, project, arn, keys)
+}
+
+// ListOpenIDConnectProviderTags is IAM ListOpenIDConnectProviderTags,
+// which vws-proto does not carry yet (#208).
+func (s *Server) ListOpenIDConnectProviderTags(
+	ctx context.Context, project, arn, marker string, maxItems int,
+) (TagPage, error) {
+	return s.listOIDCProviderTags(ctx, project, arn, marker, maxItems)
 }
