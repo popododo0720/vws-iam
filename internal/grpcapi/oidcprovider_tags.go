@@ -135,7 +135,7 @@ func (s *Server) listOIDCProviderTags(
 		return tagPage{}, err
 	}
 	cur, err := store.Get[iam.OIDCProvider](ctx, p.b, iam.OIDCProviderKey(url))
-	if errors.Is(err, store.ErrNotFound) {
+	if errors.Is(err, store.ErrNotFound) || (err == nil && cur.Object.Pending) {
 		return tagPage{}, noOIDCProvider(arn)
 	}
 	if err != nil {

@@ -41,17 +41,20 @@ type oidcProviderView struct {
 //
 // A Url already registered (compared exactly, as OpenID Connect compares
 // issuers, so one differing only in case is another provider) is
-// EntityAlreadyExists and the
-// stored provider stays: the create is one store create, so of racing
-// requests on any replica exactly one makes the provider, and a retry
-// after a lost response is EntityAlreadyExists, as in AWS. A request that
+// EntityAlreadyExists and the stored provider stays: of racing requests on
+// any replica exactly one makes the provider, and a retry after a lost
+// response is EntityAlreadyExists, as in AWS. A project that already has
+// iam.MaxOIDCProvidersPerAccount providers is LimitExceeded and nothing is
+// stored; the count and the commit run under the project's quota lock
+// (storeOIDCProvider), so racing creates on any replica never pass it. A
+// request that
 // was canceled or whose deadline passed writes nothing. A store failure is
 // ServiceFailure (ServiceUnavailable when the store is unavailable), the
 // fault AWS documents. Authorization (iam:CreateOpenIDConnectProvider) is
 // console-api's.
 //
-// TODO(#208): the OpenIdConnectProvidersPerAccount quota, and serve this as
-// an RPC once vws-proto carries CreateOpenIDConnectProvider.
+// TODO(#208): serve this as an RPC once vws-proto carries
+// CreateOpenIDConnectProvider.
 func (s *Server) createOIDCProvider(
 	ctx context.Context, pid, url string, clientIDs, thumbprints []string, tags []*iamv1.Tag,
 ) (oidcProviderView, error) {
@@ -115,11 +118,7 @@ func (s *Server) createOIDCProvider(
 		return oidcProviderView{}, toStatus(ctx, err) // the caller is gone; write nothing
 	}
 	p := s.project(pid)
-	_, err := store.Create(ctx, p.b, op)
-	if errors.Is(err, store.ErrExists) {
-		return oidcProviderView{}, alreadyExists("Provider with url " + url + " already exists.")
-	}
-	if err != nil {
+	if err := p.storeOIDCProvider(ctx, op); err != nil {
 		return oidcProviderView{}, readFailure(ctx, err)
 	}
 	return oidcProviderView{Provider: op, ARN: iam.OIDCProviderARN(p.id, op)}, nil
@@ -204,8 +203,9 @@ func noOIDCProvider(arn string) error {
 // InvalidInput, both before any store access. An ARN of another account
 // and an unknown provider are NoSuchEntity; issuers compare exactly, so an
 // ARN differing from the stored one only in case names another, unknown
-// provider. A store failure is ServiceFailure (ServiceUnavailable when the
-// store is unavailable). The call only reads. Authorization
+// provider, as is a pending one (a create that has not committed). A store
+// failure is ServiceFailure (ServiceUnavailable when the store is
+// unavailable). The call only reads. Authorization
 // (iam:GetOpenIDConnectProvider) is console-api's.
 //
 // TODO(#208): serve this as an RPC once vws-proto carries
@@ -216,7 +216,7 @@ func (s *Server) getOIDCProvider(ctx context.Context, pid, arn string) (oidcProv
 		return oidcProviderView{}, err
 	}
 	cur, err := store.Get[iam.OIDCProvider](ctx, p.b, iam.OIDCProviderKey(url))
-	if errors.Is(err, store.ErrNotFound) {
+	if errors.Is(err, store.ErrNotFound) || (err == nil && cur.Object.Pending) {
 		return oidcProviderView{}, noOIDCProvider(arn)
 	}
 	if err != nil {
@@ -226,9 +226,9 @@ func (s *Server) getOIDCProvider(ctx context.Context, pid, arn string) (oidcProv
 }
 
 // listOIDCProviders is IAM ListOpenIDConnectProviders: the ARNs of every
-// OpenID Connect provider of project pid, in byte order. AWS pages nothing
-// here, so neither does this, and as in AWS the entries carry nothing but
-// the ARN.
+// OpenID Connect provider of project pid but a pending one, in byte
+// order. AWS pages nothing here, so neither does this, and as in AWS the
+// entries carry nothing but the ARN.
 //
 // A bad project id is ValidationError before any store access. No
 // provider is an empty list. A store failure is ServiceFailure
@@ -248,7 +248,9 @@ func (s *Server) listOIDCProviders(ctx context.Context, pid string) ([]string, e
 	}
 	out := make([]string, 0, len(all))
 	for _, cur := range all {
-		out = append(out, iam.OIDCProviderARN(p.id, cur.Object))
+		if !cur.Object.Pending {
+			out = append(out, iam.OIDCProviderARN(p.id, cur.Object))
+		}
 	}
 	slices.Sort(out)
 	return out, nil
@@ -260,8 +262,8 @@ func (s *Server) listOIDCProviders(ctx context.Context, pid string) ([]string, e
 //
 // The argument errors are those of getOIDCProvider, before any store
 // access. AWS documents the call as idempotent: a provider that does not
-// exist (unknown, already deleted, or named by an ARN of another account,
-// which is never touched) succeeds without a write, so a retry after a
+// exist (unknown, already deleted, pending, or named by an ARN of another
+// account, which is never touched) succeeds without a write, so a retry after a
 // lost response and every one of racing deletes on any replica succeed,
 // and the provider is deleted once. The delete is conditional on the
 // version read: a provider written in between is read again, up to
@@ -285,7 +287,7 @@ func (s *Server) deleteOIDCProvider(ctx context.Context, pid, arn string) error 
 	key := iam.OIDCProviderKey(url)
 	for attempt := 1; ; attempt++ {
 		cur, err := store.Get[iam.OIDCProvider](ctx, p.b, key)
-		if errors.Is(err, store.ErrNotFound) {
+		if errors.Is(err, store.ErrNotFound) || (err == nil && cur.Object.Pending) {
 			return nil
 		}
 		if err != nil {
@@ -338,9 +340,9 @@ func checkOIDCClientID(id string) error {
 }
 
 // changeOIDCProvider reads the OpenID Connect provider url of project p
-// (missing when there is none), applies change to it and writes it at the
-// version read with the generation moved. When change reports nothing to change, nothing is written. A
-// provider written in between is read again and changed anew, up to
+// (missing when there is none or it is pending), applies change to it and
+// writes it at the version read with the generation moved. When change
+// reports nothing to change, nothing is written. A provider written in between is read again and changed anew, up to
 // maxDeleteAttempts, then the store conflict. A changed provider that
 // does not validate is the caller's input (invalidSpec), unless the
 // stored one does not validate either, which is an internal error. A
@@ -352,7 +354,7 @@ func (s *Server) changeOIDCProvider(
 	key := iam.OIDCProviderKey(url)
 	for attempt := 1; ; attempt++ {
 		cur, err := store.Get[iam.OIDCProvider](ctx, p.b, key)
-		if errors.Is(err, store.ErrNotFound) {
+		if errors.Is(err, store.ErrNotFound) || (err == nil && cur.Object.Pending) {
 			return missing
 		}
 		if err != nil {
