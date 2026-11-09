@@ -386,3 +386,25 @@ func (s *Server) ListOpenIDConnectProviders(ctx context.Context, project string)
 func (s *Server) DeleteOpenIDConnectProvider(ctx context.Context, project, arn string) error {
 	return s.deleteOIDCProvider(ctx, project, arn)
 }
+
+// UpdateOpenIDConnectProviderThumbprint is IAM
+// UpdateOpenIDConnectProviderThumbprint, which vws-proto does not carry
+// yet (#208).
+func (s *Server) UpdateOpenIDConnectProviderThumbprint(
+	ctx context.Context, project, arn string, thumbprints []string,
+) error {
+	return s.updateOIDCProviderThumbprint(ctx, project, arn, thumbprints)
+}
+
+// AddClientIDToOpenIDConnectProvider is IAM AddClientIDToOpenIDConnectProvider,
+// which vws-proto does not carry yet (#208).
+func (s *Server) AddClientIDToOpenIDConnectProvider(ctx context.Context, project, arn, clientID string) error {
+	return s.addClientIDToOIDCProvider(ctx, project, arn, clientID)
+}
+
+// RemoveClientIDFromOpenIDConnectProvider is IAM
+// RemoveClientIDFromOpenIDConnectProvider, which vws-proto does not carry
+// yet (#208).
+func (s *Server) RemoveClientIDFromOpenIDConnectProvider(ctx context.Context, project, arn, clientID string) error {
+	return s.removeClientIDFromOIDCProvider(ctx, project, arn, clientID)
+}

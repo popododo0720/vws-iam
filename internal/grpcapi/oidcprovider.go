@@ -3,6 +3,7 @@ package grpcapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -69,11 +70,8 @@ func (s *Server) createOIDCProvider(
 				strconv.Itoa(iam.MaxOIDCClientIDLen) + " characters")
 		}
 	}
-	for _, tp := range thumbprints {
-		if utf8.RuneCountInString(tp) != iam.OIDCThumbprintLen {
-			return oidcProviderView{}, invalidSpec("each thumbprintList member must be " +
-				strconv.Itoa(iam.OIDCThumbprintLen) + " characters")
-		}
+	if err := checkOIDCThumbprintLengths(thumbprints); err != nil {
+		return oidcProviderView{}, err
 	}
 	if err := iam.CheckOIDCProviderURL(url); err != nil {
 		return oidcProviderView{}, invalidInput(err.Error())
@@ -83,10 +81,8 @@ func (s *Server) createOIDCProvider(
 			return oidcProviderView{}, invalidInput("a client id is not valid UTF-8")
 		}
 	}
-	for _, tp := range thumbprints {
-		if !iam.ValidOIDCThumbprint(tp) {
-			return oidcProviderView{}, invalidInput("a thumbprint is not " + strconv.Itoa(iam.OIDCThumbprintLen) + " hex digits")
-		}
+	if err := checkOIDCThumbprintHex(thumbprints); err != nil {
+		return oidcProviderView{}, err
 	}
 	var kept map[string]string
 	if len(tags) > 0 {
@@ -127,6 +123,27 @@ func (s *Server) createOIDCProvider(
 		return oidcProviderView{}, readFailure(ctx, err)
 	}
 	return oidcProviderView{Provider: op, ARN: iam.OIDCProviderARN(p.id, op)}, nil
+}
+
+// checkOIDCThumbprintLengths is ValidationError for a thumbprint that is
+// not 40 characters.
+func checkOIDCThumbprintLengths(thumbprints []string) error {
+	for _, tp := range thumbprints {
+		if utf8.RuneCountInString(tp) != iam.OIDCThumbprintLen {
+			return invalidSpec("each thumbprintList member must be " + strconv.Itoa(iam.OIDCThumbprintLen) + " characters")
+		}
+	}
+	return nil
+}
+
+// checkOIDCThumbprintHex is InvalidInput for a thumbprint that is not hex.
+func checkOIDCThumbprintHex(thumbprints []string) error {
+	for _, tp := range thumbprints {
+		if !iam.ValidOIDCThumbprint(tp) {
+			return invalidInput("a thumbprint is not " + strconv.Itoa(iam.OIDCThumbprintLen) + " hex digits")
+		}
+	}
+	return nil
 }
 
 // uniqueBy is in without the items whose key an earlier item has, in
@@ -194,17 +211,10 @@ func noOIDCProvider(arn string) error {
 // TODO(#208): serve this as an RPC once vws-proto carries
 // GetOpenIDConnectProvider.
 func (s *Server) getOIDCProvider(ctx context.Context, pid, arn string) (oidcProviderView, error) {
-	if !iam.ValidProject(pid) {
-		return oidcProviderView{}, invalidID("project " + quote(pid) + " is not a project id")
-	}
-	url, here, err := oidcProviderURL(pid, arn)
+	p, url, err := s.oidcProviderArg(pid, arn)
 	if err != nil {
 		return oidcProviderView{}, err
 	}
-	if !here {
-		return oidcProviderView{}, noOIDCProvider(arn)
-	}
-	p := s.project(pid)
 	cur, err := store.Get[iam.OIDCProvider](ctx, p.b, iam.OIDCProviderKey(url))
 	if errors.Is(err, store.ErrNotFound) {
 		return oidcProviderView{}, noOIDCProvider(arn)
@@ -294,4 +304,207 @@ func (s *Server) deleteOIDCProvider(ctx context.Context, pid, arn string) error 
 			return readFailure(ctx, err)
 		}
 	}
+}
+
+// oidcProviderArg checks the arguments every call on an existing OpenID
+// Connect provider takes: a bad project id is ValidationError, an ARN
+// fault is that of oidcProviderURL, and an ARN of another account is
+// NoSuchEntity. It returns the project and the issuer URL, touching no
+// store.
+func (s *Server) oidcProviderArg(pid, arn string) (project, string, error) {
+	if !iam.ValidProject(pid) {
+		return project{}, "", invalidID("project " + quote(pid) + " is not a project id")
+	}
+	url, here, err := oidcProviderURL(pid, arn)
+	if err != nil {
+		return project{}, "", err
+	}
+	if !here {
+		return project{}, "", noOIDCProvider(arn)
+	}
+	return s.project(pid), url, nil
+}
+
+// checkOIDCClientID is ValidationError for a ClientID outside 1 to 255
+// characters and InvalidInput for one that is not UTF-8.
+func checkOIDCClientID(id string) error {
+	if n := utf8.RuneCountInString(id); n < 1 || n > iam.MaxOIDCClientIDLen {
+		return invalidSpec("clientID must be 1 to " + strconv.Itoa(iam.MaxOIDCClientIDLen) + " characters")
+	}
+	if !iam.ValidOIDCClientID(id) {
+		return invalidInput("the client id is not valid UTF-8")
+	}
+	return nil
+}
+
+// changeOIDCProvider reads the OpenID Connect provider url of project p
+// (missing when there is none), applies change to it and writes it at the
+// version read with the generation moved. When change reports nothing to change, nothing is written. A
+// provider written in between is read again and changed anew, up to
+// maxDeleteAttempts, then the store conflict. A changed provider that
+// does not validate is the caller's input (invalidSpec), unless the
+// stored one does not validate either, which is an internal error. A
+// request that was canceled or whose deadline passed writes nothing. A
+// store failure is returned as is, for the caller to map.
+func (s *Server) changeOIDCProvider(
+	ctx context.Context, p project, url string, missing error, change func(*iam.OIDCProvider) (bool, error),
+) error {
+	key := iam.OIDCProviderKey(url)
+	for attempt := 1; ; attempt++ {
+		cur, err := store.Get[iam.OIDCProvider](ctx, p.b, key)
+		if errors.Is(err, store.ErrNotFound) {
+			return missing
+		}
+		if err != nil {
+			return err
+		}
+		op := cur.Object
+		changed, err := change(&op)
+		if err != nil || !changed {
+			return err
+		}
+		op.Generation++
+		if err := op.Validate(); err != nil {
+			if cur.Object.Validate() != nil {
+				// An operator edit: a service fault, never ValidationError.
+				return fmt.Errorf("stored OpenID Connect provider %q does not validate", key)
+			}
+			return invalidSpec(err.Error())
+		}
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("OpenID Connect provider: %w", err) // the caller is gone; write nothing
+		}
+		_, err = store.Update(ctx, p.b, op, cur.Version)
+		switch {
+		case err == nil:
+			return nil
+		case errors.Is(err, store.ErrConflict) && attempt < maxDeleteAttempts:
+			continue
+		case errors.Is(err, store.ErrNotFound):
+			return missing
+		default:
+			return err
+		}
+	}
+}
+
+// updateOIDCProviderThumbprint is IAM UpdateOpenIDConnectProviderThumbprint:
+// it replaces the whole server certificate thumbprint list of the OpenID
+// Connect provider arn names in project pid.
+//
+// The ARN errors are those of getOIDCProvider. A thumbprint that is not 40
+// characters is ValidationError and one that is not hex InvalidInput. A
+// thumbprint repeated in any case is kept once, in order, and more than 5
+// after that is InvalidInput, as AWS documents no LimitExceeded for this
+// call. All of these are answered before any store access. An empty list
+// is accepted and leaves the provider with no thumbprint, as
+// CreateOpenIDConnectProvider allows; the request cannot tell a missing
+// list from an empty one. An unknown provider is NoSuchEntity (unlike
+// delete, this call is not idempotent on a missing provider). A list equal
+// to the stored one writes nothing, so a retry after a lost response
+// succeeds unchanged. The write moves the generation and keeps the URL,
+// UID, client ids, tags and creation time, at the version read (a provider
+// written in between is read again, keeping that writer's change, up to
+// maxDeleteAttempts, then ConcurrentModification). A request that was
+// canceled or whose deadline passed writes nothing. A store failure is
+// ServiceFailure (ServiceUnavailable when the store is unavailable).
+// Authorization (iam:UpdateOpenIDConnectProviderThumbprint) is
+// console-api's.
+//
+// TODO(#208): serve this as an RPC once vws-proto carries
+// UpdateOpenIDConnectProviderThumbprint.
+func (s *Server) updateOIDCProviderThumbprint(ctx context.Context, pid, arn string, thumbprints []string) error {
+	p, url, err := s.oidcProviderArg(pid, arn)
+	if err != nil {
+		return err
+	}
+	if err := checkOIDCThumbprintLengths(thumbprints); err != nil {
+		return err
+	}
+	if err := checkOIDCThumbprintHex(thumbprints); err != nil {
+		return err
+	}
+	thumbprints = uniqueBy(thumbprints, strings.ToLower)
+	if len(thumbprints) > iam.MaxOIDCThumbprints {
+		return invalidInput("Cannot exceed quota for ThumbprintsPerOpenIdConnectProvider: " +
+			strconv.Itoa(iam.MaxOIDCThumbprints))
+	}
+	err = s.changeOIDCProvider(ctx, p, url, noOIDCProvider(arn), func(op *iam.OIDCProvider) (bool, error) {
+		if slices.Equal(op.Thumbprints, thumbprints) {
+			return false, nil
+		}
+		op.Thumbprints = thumbprints
+		return true, nil
+	})
+	return readFailure(ctx, err)
+}
+
+// addClientIDToOIDCProvider is IAM AddClientIDToOpenIDConnectProvider: it
+// adds a client id to the OpenID Connect provider arn names in project
+// pid, after the ones it has.
+//
+// The ARN errors are those of getOIDCProvider. A ClientID outside 1 to 255
+// characters is ValidationError and one that is not UTF-8 InvalidInput,
+// before any store access. An unknown provider is NoSuchEntity. As AWS
+// documents, adding a client id the provider already has succeeds, and
+// writes nothing. A provider that would hold more than 100 client ids is
+// LimitExceeded and is not written. The write, the retries, a canceled
+// request and a store failure are as in updateOIDCProviderThumbprint.
+// Authorization (iam:AddClientIDToOpenIDConnectProvider) is console-api's.
+//
+// TODO(#208): serve this as an RPC once vws-proto carries
+// AddClientIDToOpenIDConnectProvider.
+func (s *Server) addClientIDToOIDCProvider(ctx context.Context, pid, arn, clientID string) error {
+	p, url, err := s.oidcProviderArg(pid, arn)
+	if err != nil {
+		return err
+	}
+	if err := checkOIDCClientID(clientID); err != nil {
+		return err
+	}
+	err = s.changeOIDCProvider(ctx, p, url, noOIDCProvider(arn), func(op *iam.OIDCProvider) (bool, error) {
+		if slices.Contains(op.ClientIDs, clientID) {
+			return false, nil
+		}
+		if len(op.ClientIDs) >= iam.MaxOIDCClientIDs {
+			return false, quota("Cannot exceed quota for ClientIdsPerOpenIdConnectProvider: " +
+				strconv.Itoa(iam.MaxOIDCClientIDs))
+		}
+		op.ClientIDs = append(slices.Clone(op.ClientIDs), clientID)
+		return true, nil
+	})
+	return readFailure(ctx, err)
+}
+
+// removeClientIDFromOIDCProvider is IAM RemoveClientIDFromOpenIDConnectProvider:
+// it removes a client id from the OpenID Connect provider arn names in
+// project pid. Removing the last one leaves the provider with none.
+//
+// The argument errors, the write, the retries, a canceled request and a
+// store failure are those of addClientIDToOIDCProvider. As AWS documents,
+// removing a client id the provider does not have succeeds, and writes
+// nothing. Authorization (iam:RemoveClientIDFromOpenIDConnectProvider) is
+// console-api's.
+//
+// TODO(#208): serve this as an RPC once vws-proto carries
+// RemoveClientIDFromOpenIDConnectProvider.
+func (s *Server) removeClientIDFromOIDCProvider(ctx context.Context, pid, arn, clientID string) error {
+	p, url, err := s.oidcProviderArg(pid, arn)
+	if err != nil {
+		return err
+	}
+	if err := checkOIDCClientID(clientID); err != nil {
+		return err
+	}
+	err = s.changeOIDCProvider(ctx, p, url, noOIDCProvider(arn), func(op *iam.OIDCProvider) (bool, error) {
+		if !slices.Contains(op.ClientIDs, clientID) {
+			return false, nil
+		}
+		op.ClientIDs = slices.DeleteFunc(slices.Clone(op.ClientIDs), func(id string) bool { return id == clientID })
+		if len(op.ClientIDs) == 0 {
+			op.ClientIDs = nil
+		}
+		return true, nil
+	})
+	return readFailure(ctx, err)
 }
