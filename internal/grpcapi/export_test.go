@@ -368,3 +368,21 @@ func (s *Server) CreateOpenIDConnectProvider(
 ) (OIDCProviderView, error) {
 	return s.createOIDCProvider(ctx, project, url, clientIDs, thumbprints, tags)
 }
+
+// GetOpenIDConnectProvider is IAM GetOpenIDConnectProvider, which
+// vws-proto does not carry yet (#208).
+func (s *Server) GetOpenIDConnectProvider(ctx context.Context, project, arn string) (OIDCProviderView, error) {
+	return s.getOIDCProvider(ctx, project, arn)
+}
+
+// ListOpenIDConnectProviders is IAM ListOpenIDConnectProviders, which
+// vws-proto does not carry yet (#208).
+func (s *Server) ListOpenIDConnectProviders(ctx context.Context, project string) ([]string, error) {
+	return s.listOIDCProviders(ctx, project)
+}
+
+// DeleteOpenIDConnectProvider is IAM DeleteOpenIDConnectProvider, which
+// vws-proto does not carry yet (#208).
+func (s *Server) DeleteOpenIDConnectProvider(ctx context.Context, project, arn string) error {
+	return s.deleteOIDCProvider(ctx, project, arn)
+}
