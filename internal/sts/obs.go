@@ -79,6 +79,7 @@ var outcomes = []struct {
 	{ErrInvalidAuthorizationMessage, "invalid_authorization_message"},
 	{ErrInvalidIdentityToken, "invalid_identity_token"},
 	{ErrIDPRejectedClaim, "idp_rejected_claim"},
+	{ErrIDPCommunication, "idp_communication"},
 	{policy.ErrMalformed, "malformed_policy"},
 	{authz.ErrNoSuchEntity, "no_such_entity"},
 	{iam.ErrInvalid, "invalid"},
