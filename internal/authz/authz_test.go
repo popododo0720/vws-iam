@@ -196,6 +196,7 @@ func TestAuthorizeReportsEvaluatedContext(t *testing.T) {
 	rc := map[string][]string{
 		"s3:prefix": {"home/"}, "AWS:PRINCIPALARN": {"arn:vws:iam::" + acct + ":root"},
 		"aws:currenttime": {"1999-01-01T00:00:00Z"}, "Aws:UserName": {"mallory"},
+		"AWS:EPOCHTIME": {"915148800"},
 	}
 	d, err := a.Authorize(ctx, alice, "ec2:TerminateInstances", "*", rc)
 	if err != nil || !d.Explicit {
@@ -203,7 +204,8 @@ func TestAuthorizeReportsEvaluatedContext(t *testing.T) {
 	}
 	want := map[string][]string{
 		"s3:prefix": {"home/"}, "aws:PrincipalArn": {"arn:vws:iam::" + acct + ":user/alice"},
-		"aws:CurrentTime": {"2026-10-14T00:00:00Z"}, "aws:username": {"alice"},
+		"aws:CurrentTime": {"2026-10-14T00:00:00Z"}, "aws:EpochTime": {"1791936000"},
+		"aws:username": {"alice"},
 	}
 	if !maps.EqualFunc(d.Context, want, slices.Equal) {
 		t.Fatalf("context %v, want %v", d.Context, want)
@@ -215,7 +217,7 @@ func TestAuthorizeReportsEvaluatedContext(t *testing.T) {
 	if err != nil || !d.Allowed || d.Matched == nil || d.Matched.Holder != (policy.Holder{ID: "4"}) {
 		t.Fatalf("attached policy: %+v %v", d, err)
 	}
-	if len(rc) != 4 || rc["Aws:UserName"][0] != "mallory" {
+	if len(rc) != 5 || rc["Aws:UserName"][0] != "mallory" {
 		t.Fatalf("Authorize changed the request context: %v", rc)
 	}
 	// A session refused before its policies are read still reports the

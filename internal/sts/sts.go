@@ -311,7 +311,7 @@ func New(b store.Backend, keys *secret.Keyring, a *authz.Authorizer, account str
 // serverKeys are context keys only the server sets.
 var serverKeys = map[string]bool{
 	"aws:multifactorauthpresent": true, "aws:multifactorauthage": true, "aws:principalarn": true,
-	"aws:username": true, "aws:userid": true, "aws:currenttime": true, "aws:tokenissuetime": true,
+	"aws:username": true, "aws:userid": true, "aws:currenttime": true, "aws:epochtime": true, "aws:tokenissuetime": true,
 	"aws:principalaccount": true, "aws:principaltype": true,
 }
 

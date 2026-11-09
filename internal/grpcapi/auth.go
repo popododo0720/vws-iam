@@ -324,7 +324,7 @@ func checkSessionRef(ctx context.Context, p project, pr *iamv1.Principal, c chec
 // serverKeys are context keys only vws-iam may set.
 var serverKeys = map[string]bool{
 	"aws:multifactorauthpresent": true, "aws:multifactorauthage": true, "aws:principalarn": true,
-	"aws:username": true, "aws:userid": true, "aws:currenttime": true, "aws:principalaccount": true,
+	"aws:username": true, "aws:userid": true, "aws:currenttime": true, "aws:epochtime": true, "aws:principalaccount": true,
 	"aws:principaltype": true, "aws:tokenissuetime": true,
 }
 

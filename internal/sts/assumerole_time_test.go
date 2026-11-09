@@ -114,3 +114,38 @@ func TestAssumeRoleTrustTimeIgnoresClient(t *testing.T) {
 		checkAssume(t, e, "trigger EpochTime deny "+strconv.Itoa(i), reqCtx, nil)
 	}
 }
+
+// TestAssumeRolePermissionEpochTime: the caller's identity policy for
+// sts:AssumeRole sees aws:EpochTime from the service clock (#203), so a
+// Deny after a cutoff starts to match when the clock passes it, and a
+// client copy in any letter case can neither trigger it early nor escape it.
+func TestAssumeRolePermissionEpochTime(t *testing.T) {
+	e := setup(t)
+	setAdminTrust(t, e, timeTrustAllow)
+	cutoff := strconv.FormatInt(e.clk.now().Add(time.Hour).Unix(), 10)
+	if _, err := store.Mutate(context.Background(), e.b, "alice", func(u *iam.User) error {
+		u.InlinePolicies = map[string]string{"assume": `{"Version":"2012-10-17","Statement":[` +
+			`{"Effect":"Allow","Action":"sts:AssumeRole","Resource":"*"},` +
+			`{"Effect":"Deny","Action":"sts:AssumeRole","Resource":"*",` +
+			`"Condition":{"NumericGreaterThan":{"aws:EpochTime":"` + cutoff + `"}}}]}`}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	checkAssume(t, e, "before the cutoff", nil, nil)
+	for i, reqCtx := range []map[string][]string{
+		{"aws:EpochTime": {"4102444800"}},
+		{"AWS:EPOCHTIME": {"4102444800"}},
+	} {
+		checkAssume(t, e, "client copy before the cutoff "+strconv.Itoa(i), reqCtx, nil)
+	}
+	e.clk.t = e.clk.t.Add(2 * time.Hour)
+	checkAssume(t, e, "after the cutoff", nil, sts.ErrAccessDenied)
+	for i, reqCtx := range []map[string][]string{
+		{"aws:EpochTime": {"946684800"}},
+		{"aws:epochtime": {"946684800"}},
+		{"Aws:EpochTime": {"not a number"}},
+	} {
+		checkAssume(t, e, "client copy after the cutoff "+strconv.Itoa(i), reqCtx, sts.ErrAccessDenied)
+	}
+}

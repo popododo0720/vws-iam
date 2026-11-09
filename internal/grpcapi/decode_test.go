@@ -3,6 +3,7 @@ package grpcapi_test
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -164,7 +165,7 @@ func TestDecodeAuthorizationMessage(t *testing.T) {
 				"s3:prefix": "locked/", "aws:MultiFactorAuthPresent": "false",
 				"aws:userid": bob.user.GetStatus().GetUniqueId(), "aws:PrincipalAccount": proj,
 				"aws:PrincipalArn": "arn:vws:iam::acme:user/bob", "aws:username": "bob",
-				"aws:CurrentTime": now.Format(time.RFC3339),
+				"aws:CurrentTime": now.Format(time.RFC3339), "aws:EpochTime": strconv.FormatInt(now.Unix(), 10),
 			}
 			for k, v := range want {
 				if keys[k] != v {
