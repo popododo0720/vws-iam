@@ -151,8 +151,18 @@ type Assertion struct {
 	// ExtraSubjectConfirmations adds that many more bearer
 	// SubjectConfirmation elements to the Subject.
 	ExtraSubjectConfirmations int
+	// MoreSubjectConfirmationData are SubjectConfirmationData elements
+	// added, in order, after the first one in each SubjectConfirmation.
+	MoreSubjectConfirmationData []SubjectConfirmationData
 	// Attributes are more Attribute elements, by Name.
 	Attributes map[string][]string
+}
+
+// SubjectConfirmationData is one more SubjectConfirmationData element.
+// A zero NotOnOrAfter is left out.
+type SubjectConfirmationData struct {
+	Recipient    string
+	NotOnOrAfter time.Time
 }
 
 // Response returns the base64 SAML response for a, signed as sign asks.
@@ -272,6 +282,11 @@ func addSubjectConfirmation(subj *etree.Element, a Assertion) {
 	scd := sc.CreateElement("saml:SubjectConfirmationData")
 	scd.CreateAttr("Recipient", a.Recipient)
 	setTime(scd, "NotOnOrAfter", a.ConfirmNotOnOrAfter)
+	for _, m := range a.MoreSubjectConfirmationData {
+		scd := sc.CreateElement("saml:SubjectConfirmationData")
+		scd.CreateAttr("Recipient", m.Recipient)
+		setTime(scd, "NotOnOrAfter", m.NotOnOrAfter)
+	}
 }
 
 func setTime(el *etree.Element, name string, t time.Time) {

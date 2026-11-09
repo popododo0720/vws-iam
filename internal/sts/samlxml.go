@@ -216,9 +216,15 @@ func hasAudience(cond *etree.Element, audience string) bool {
 }
 
 // bearerRecipient returns the Recipient of the one bearer
-// SubjectConfirmation addressed to signInURL. AWS requires exactly one
-// SubjectConfirmation element (IAM User Guide, Configure SAML assertions
-// for the authentication response).
+// SubjectConfirmation addressed to signInURL. AWS requires "exactly one
+// SubjectConfirmation element with a SubjectConfirmationData element that
+// has both the NotOnOrAfter attribute and a Recipient attribute" (IAM User
+// Guide, Configure SAML assertions for the authentication response,
+// https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_create_saml_assertions.html),
+// and the SAML 2.0 assertion schema (saml-schema-assertion-2.0.xsd,
+// SubjectConfirmationType) allows at most one SubjectConfirmationData in a
+// SubjectConfirmation, so any other count is InvalidIdentityToken (#207):
+// a second one is never skipped to find the element naming this service.
 func bearerRecipient(subj *etree.Element, signInURL string, now time.Time) (string, error) {
 	scs := children(subj, nsSAMLAssertion, "SubjectConfirmation")
 	if len(scs) != 1 {
@@ -227,24 +233,26 @@ func bearerRecipient(subj *etree.Element, signInURL string, now time.Time) (stri
 	if scs[0].SelectAttrValue("Method", "") != samlBearer {
 		return "", invalidSAML("SubjectConfirmation is not bearer")
 	}
-	for _, d := range children(scs[0], nsSAMLAssertion, "SubjectConfirmationData") {
-		if d.SelectAttrValue("Recipient", "") != signInURL {
-			continue
-		}
-		v := d.SelectAttrValue("NotOnOrAfter", "")
-		if v == "" {
-			return "", invalidSAML("SubjectConfirmationData has no NotOnOrAfter")
-		}
-		t, err := time.Parse(time.RFC3339Nano, v)
-		if err != nil {
-			return "", invalidSAML("SubjectConfirmationData NotOnOrAfter is not a time")
-		}
-		if !now.Before(t) {
-			return "", fmt.Errorf("%w: the SAML assertion has expired", ErrExpired)
-		}
-		return signInURL, nil
+	ds := children(scs[0], nsSAMLAssertion, "SubjectConfirmationData")
+	if len(ds) != 1 {
+		return "", invalidSAML("want exactly one SubjectConfirmationData element, got %d", len(ds))
 	}
-	return "", invalidSAML("no bearer SubjectConfirmation with this service as Recipient")
+	d := ds[0]
+	if d.SelectAttrValue("Recipient", "") != signInURL {
+		return "", invalidSAML("no bearer SubjectConfirmation with this service as Recipient")
+	}
+	v := d.SelectAttrValue("NotOnOrAfter", "")
+	if v == "" {
+		return "", invalidSAML("SubjectConfirmationData has no NotOnOrAfter")
+	}
+	t, err := time.Parse(time.RFC3339Nano, v)
+	if err != nil {
+		return "", invalidSAML("SubjectConfirmationData NotOnOrAfter is not a time")
+	}
+	if !now.Before(t) {
+		return "", fmt.Errorf("%w: the SAML assertion has expired", ErrExpired)
+	}
+	return signInURL, nil
 }
 
 // readAttributes reads the Role, RoleSessionName, SessionDuration and
