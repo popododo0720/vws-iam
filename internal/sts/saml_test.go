@@ -233,6 +233,27 @@ func TestAssumeRoleWithSAMLClaims(t *testing.T) {
 		{"long SourceIdentity", func(a *samltest.Assertion) { a.SourceIdentity = strings.Repeat("a", 257) }, invalid},
 		{"no SubjectConfirmation", func(a *samltest.Assertion) { a.NoSubjectConfirmation = true }, invalid},
 		{"two SubjectConfirmations", func(a *samltest.Assertion) { a.ExtraSubjectConfirmations = 1 }, invalid},
+		// #207: the one SubjectConfirmation holds exactly one
+		// SubjectConfirmationData; a second is refused, never skipped.
+		{"second SubjectConfirmationData for another recipient", func(a *samltest.Assertion) {
+			a.MoreSubjectConfirmationData = []samltest.SubjectConfirmationData{
+				{Recipient: evil, NotOnOrAfter: a.ConfirmNotOnOrAfter},
+			}
+		}, invalid},
+		{"second SubjectConfirmationData without NotOnOrAfter", func(a *samltest.Assertion) {
+			a.MoreSubjectConfirmationData = []samltest.SubjectConfirmationData{{Recipient: a.Recipient}}
+		}, invalid},
+		{"second SubjectConfirmationData identical", func(a *samltest.Assertion) {
+			a.MoreSubjectConfirmationData = []samltest.SubjectConfirmationData{
+				{Recipient: a.Recipient, NotOnOrAfter: a.ConfirmNotOnOrAfter},
+			}
+		}, invalid},
+		{"other recipient before this service", func(a *samltest.Assertion) {
+			a.MoreSubjectConfirmationData = []samltest.SubjectConfirmationData{
+				{Recipient: a.Recipient, NotOnOrAfter: a.ConfirmNotOnOrAfter},
+			}
+			a.Recipient = evil
+		}, invalid},
 		{"IdP failure", func(a *samltest.Assertion) {
 			a.Status = "urn:oasis:names:tc:SAML:2.0:status:Responder"
 		}, sts.ErrIDPRejectedClaim},
