@@ -23,13 +23,12 @@ const (
 )
 
 // OIDCProvider is an IAM OpenID Connect identity provider (#208). URL is
-// the issuer as given (https, host and optional path); its key is the URL
-// without the scheme, which is also the ARN resource, so one issuer is
-// registered once per project. The store folds keys, so two URLs that
-// differ only in case are the same provider. ClientIDs are the audiences
-// a web identity token may carry. Thumbprints are the hex SHA-1 of the
-// server certificates the IdP serves its keys with; none is allowed, as in
-// AWS. Nothing here is secret.
+// the issuer as given (https, host and optional path), registered once per
+// project. OpenID Connect compares issuers as exact strings, so URLs that
+// differ only in case are different providers (OIDCProviderKey).
+// ClientIDs are the audiences a web identity token may carry. Thumbprints
+// are the hex SHA-1 of the server certificates the IdP serves its keys
+// with; none is allowed, as in AWS. Nothing here is secret.
 type OIDCProvider struct {
 	Meta
 	URL         string            `json:"url"`
@@ -40,12 +39,33 @@ type OIDCProvider struct {
 }
 
 func (OIDCProvider) Kind() Kind    { return KindOIDCProvider }
-func (p OIDCProvider) Key() string { return OIDCProviderResource(p.URL) }
+func (p OIDCProvider) Key() string { return OIDCProviderKey(p.URL) }
 
-// OIDCProviderResource is the ARN resource and store key of an OIDC
-// provider URL: the URL without its https:// scheme.
+// OIDCProviderResource is the ARN resource of an OIDC provider URL: the
+// URL without its https:// scheme.
 func OIDCProviderResource(url string) string {
 	return strings.TrimPrefix(url, oidcScheme)
+}
+
+// OIDCProviderKey is the store key of an OIDC provider URL: its
+// OIDCProviderResource with '!' written "!!" and an upper-case letter
+// written '!' and the letter in lower case. The key has no upper-case
+// letter, so the store's case folding leaves it as it is, and two URLs
+// that differ in any way, case included, have different keys.
+func OIDCProviderKey(url string) string {
+	var b strings.Builder
+	for _, c := range OIDCProviderResource(url) {
+		switch {
+		case c == '!':
+			b.WriteString("!!")
+		case c >= 'A' && c <= 'Z':
+			b.WriteByte('!')
+			b.WriteRune(c + ('a' - 'A'))
+		default:
+			b.WriteRune(c)
+		}
+	}
+	return b.String()
 }
 
 const oidcScheme = "https://"
@@ -70,6 +90,14 @@ func CheckOIDCProviderURL(url string) error {
 	}
 	if strings.ContainsAny(rest, "?#") {
 		return fmt.Errorf("%w: it must not have a query or fragment", ErrOIDCProviderURL)
+	}
+	for i := range len(rest) {
+		if rest[i] != '%' {
+			continue
+		}
+		if i+3 > len(rest) || !isHex(rest[i+1]) || !isHex(rest[i+2]) {
+			return fmt.Errorf("%w: a %% must start an escape of two hex digits", ErrOIDCProviderURL)
+		}
 	}
 	host, _, _ := strings.Cut(rest, "/")
 	switch {
@@ -116,6 +144,10 @@ func ValidOIDCThumbprint(tp string) bool {
 	return len(tp) == OIDCThumbprintLen && err == nil
 }
 
+func isHex(c byte) bool { return strings.IndexByte(hexDigits, c) >= 0 }
+
+const hexDigits = "0123456789abcdefABCDEF"
+
 // Validate checks the URL (length and CheckOIDCProviderURL), the client
 // ids and thumbprints (form, count, no repeat; thumbprints compare case
 // folded) and the tags.
@@ -126,7 +158,7 @@ func (p OIDCProvider) Validate() error {
 	if err := CheckOIDCProviderURL(p.URL); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	key := p.Key()
+	key := OIDCProviderResource(p.URL)
 	if len(p.ClientIDs) > MaxOIDCClientIDs {
 		return invalid("OIDC provider %q has %d client ids, at most %d", key, len(p.ClientIDs), MaxOIDCClientIDs)
 	}

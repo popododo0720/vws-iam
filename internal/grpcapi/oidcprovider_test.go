@@ -2,6 +2,7 @@ package grpcapi_test
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strconv"
 	"strings"
@@ -60,8 +61,9 @@ func clientIDs(n int) []string {
 // client ids, thumbprints and tags (the last value of a repeated key), the
 // request time, a UID and generation 1; it is returned with its ARN,
 // stored as returned and read by a replica started later on the same
-// store. A URL already registered, in any case, is EntityAlreadyExists on
-// every replica and the stored provider stays; another project has its own
+// store. A URL already registered is EntityAlreadyExists on every replica
+// and the stored provider stays; one differing only in case is another
+// issuer, as is the host without the path; another project has its own
 // providers. On both store backends.
 func TestCreateOpenIDConnectProvider(t *testing.T) {
 	for _, bk := range renameBackends {
@@ -86,29 +88,37 @@ func TestCreateOpenIDConnectProvider(t *testing.T) {
 				t.Fatalf("Arn = %q, want %q", got.ARN, want)
 			}
 			replica := newEnvOn(t, b, &now)
-			stored := storedOIDC(t, b, "token.example.test/team")
+			stored := storedOIDC(t, b, iam.OIDCProviderKey(url))
 			s := stored.Object
 			if s.UID != p.UID || s.URL != url || !slices.Equal(s.ClientIDs, p.ClientIDs) ||
 				!slices.Equal(s.Thumbprints, p.Thumbprints) || !s.Created.Equal(now) || s.Tags["team"] != "b" {
 				t.Fatalf("stored %+v, want it as returned %+v", s, p)
 			}
-			for _, again := range []string{url, "https://token.example.test/team", "https://TOKEN.EXAMPLE.TEST/TEAM"} {
-				_, err := replica.api.CreateOpenIDConnectProvider(t.Context(), proj, again, nil, nil, nil)
-				wantAWS(t, err, codes.AlreadyExists, "EntityAlreadyExists")
-			}
-			if again := storedOIDC(t, b, url[len("https://"):]); again.Version != stored.Version || again.Object.UID != p.UID {
+			_, err = replica.api.CreateOpenIDConnectProvider(t.Context(), proj, url, []string{"other"}, nil, nil)
+			wantAWS(t, err, codes.AlreadyExists, "EntityAlreadyExists")
+			again := storedOIDC(t, b, iam.OIDCProviderKey(url))
+			if again.Version != stored.Version || again.Object.UID != p.UID {
 				t.Fatalf("a refused create changed the provider: %+v", again.Object)
 			}
 			if _, err := e.api.CreateOpenIDConnectProvider(t.Context(), "other", url, nil, nil, nil); err != nil {
 				t.Fatalf("same URL in another project: %v", err)
 			}
-			// Another path of the same host is another issuer.
-			_, err = e.api.CreateOpenIDConnectProvider(t.Context(), proj, "https://token.example.test", nil, nil, nil)
-			if err != nil {
-				t.Fatalf("the host without the path: %v", err)
+			for _, other := range []string{
+				"https://token.example.test/team", "https://Token.Example.test/Team", "https://Token.Example.test",
+			} {
+				got, err := replica.api.CreateOpenIDConnectProvider(t.Context(), proj, other, nil, nil, nil)
+				if err != nil {
+					t.Fatalf("%s: %v, want another provider", other, err)
+				}
+				if want := "arn:vws:iam::" + proj + ":oidc-provider/" + other[len("https://"):]; got.ARN != want {
+					t.Fatalf("Arn = %q, want %q", got.ARN, want)
+				}
+				if s := storedOIDC(t, b, iam.OIDCProviderKey(other)).Object; s.URL != other {
+					t.Fatalf("stored %q under the key of %q", s.URL, other)
+				}
 			}
-			if n := oidcCount(t, b); n != 2 {
-				t.Fatalf("%d providers in %s, want 2", n, proj)
+			if n := oidcCount(t, b); n != 4 {
+				t.Fatalf("%d providers in %s, want 4", n, proj)
 			}
 		})
 	}
@@ -149,7 +159,7 @@ func TestCreateOpenIDConnectProviderLists(t *testing.T) {
 	if _, err := e.api.CreateOpenIDConnectProvider(ctx, proj, "https://c.test", nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	c := storedOIDC(t, b, "c.test").Object
+	c := storedOIDC(t, b, iam.OIDCProviderKey("https://c.test")).Object
 	if c.ClientIDs != nil || c.Thumbprints != nil || c.Tags != nil {
 		t.Fatalf("a bare provider stored %+v", c)
 	}
@@ -159,7 +169,7 @@ func TestCreateOpenIDConnectProviderLists(t *testing.T) {
 }
 
 // TestCreateOpenIDConnectProviderConcurrent: of racing creates of one URL
-// in different cases on two replicas exactly one succeeds and the rest are
+// on two replicas exactly one succeeds and the rest are
 // EntityAlreadyExists; a retry of the winner is EntityAlreadyExists too.
 // On both store backends.
 func TestCreateOpenIDConnectProviderConcurrent(t *testing.T) {
@@ -168,12 +178,12 @@ func TestCreateOpenIDConnectProviderConcurrent(t *testing.T) {
 			b := bk.open()
 			now := time.Now().UTC()
 			replicas := []*env{newEnvOn(t, b, &now), newEnvOn(t, b, &now)}
-			urls := []string{"https://idp.test/x", "https://IDP.test/x", "https://idp.TEST/X"}
+			const url = "https://IdP.test/X"
 			errs := make([]error, 16)
 			var wg sync.WaitGroup
 			for i := range errs {
 				wg.Go(func() {
-					_, errs[i] = replicas[i%2].api.CreateOpenIDConnectProvider(t.Context(), proj, urls[i%len(urls)],
+					_, errs[i] = replicas[i%2].api.CreateOpenIDConnectProvider(t.Context(), proj, url,
 						[]string{"racer-" + strconv.Itoa(i)}, nil, nil)
 				})
 			}
@@ -192,11 +202,11 @@ func TestCreateOpenIDConnectProviderConcurrent(t *testing.T) {
 			if won < 0 {
 				t.Fatal("no create succeeded")
 			}
-			got := storedOIDC(t, b, "idp.test/x").Object
-			if got.URL != urls[won%len(urls)] || !slices.Equal(got.ClientIDs, []string{"racer-" + strconv.Itoa(won)}) {
+			got := storedOIDC(t, b, iam.OIDCProviderKey(url)).Object
+			if got.URL != url || !slices.Equal(got.ClientIDs, []string{"racer-" + strconv.Itoa(won)}) {
 				t.Fatalf("stored %q %v, want the winner's (%d)", got.URL, got.ClientIDs, won)
 			}
-			_, err := replicas[0].api.CreateOpenIDConnectProvider(t.Context(), proj, urls[won%len(urls)],
+			_, err := replicas[0].api.CreateOpenIDConnectProvider(t.Context(), proj, url,
 				[]string{"racer-" + strconv.Itoa(won)}, nil, nil)
 			wantAWS(t, err, codes.AlreadyExists, "EntityAlreadyExists")
 			if n := oidcCount(t, b); n != 1 {
@@ -251,6 +261,8 @@ func TestCreateOpenIDConnectProviderErrors(t *testing.T) {
 		{"url with a space", input, create(proj, "https://idp.test/"+canary+" x", nil, nil)},
 		{"url with a bad host", input, create(proj, "https://"+canary+"_x.test", nil, nil)},
 		{"url without a host", input, create(proj, "https:///"+canary, nil, nil)},
+		{"url with a bad escape", input, create(proj, "https://idp.test/%zz"+canary, nil, nil)},
+		{"url ending in %", input, create(proj, "https://idp.test/"+canary+"%", nil, nil)},
 		{"client id not UTF-8", input, create(proj, good, []string{"\xff"}, nil)},
 		{"thumbprint not hex", input, create(proj, good, nil, []string{"z" + oidcThumbprint[1:]})},
 		{"reserved tag key", input, create(proj, good, nil, nil, samlTag("aws:team", "a"))},
@@ -309,5 +321,28 @@ func TestCreateOpenIDConnectProviderCanceled(t *testing.T) {
 	}
 	if _, err := e.api.CreateOpenIDConnectProvider(t.Context(), proj, "https://gone.test", nil, nil, nil); err != nil {
 		t.Fatalf("the same request afterwards: %v", err)
+	}
+}
+
+// TestCreateOpenIDConnectProviderStoreFailure: a store that fails the
+// create is ServiceFailure, the fault AWS documents, and an unavailable
+// one ServiceUnavailable; neither stores a provider.
+func TestCreateOpenIDConnectProviderStoreFailure(t *testing.T) {
+	inner := memstore.New()
+	now := time.Now().UTC()
+	for _, c := range []struct {
+		err  error
+		code codes.Code
+		aws  string
+	}{
+		{errors.New("boom"), codes.Internal, "ServiceFailure"},
+		{store.ErrUnavailable, codes.Unavailable, "ServiceUnavailable"},
+	} {
+		e := newEnvOn(t, failingCreate{Backend: inner, k: iam.KindOIDCProvider, err: c.err}, &now)
+		_, err := e.api.CreateOpenIDConnectProvider(t.Context(), proj, "https://idp.test", nil, nil, nil)
+		wantAWS(t, err, c.code, c.aws)
+	}
+	if n := oidcCount(t, inner); n != 0 {
+		t.Fatalf("%d providers stored", n)
 	}
 }

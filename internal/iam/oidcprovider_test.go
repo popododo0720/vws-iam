@@ -18,7 +18,7 @@ func TestCheckOIDCProviderURL(t *testing.T) {
 		"https://Token.Example.TEST/team/a",
 		"https://a",
 		"https://10.0.0.1",
-		"https://x-1.example/p%20q/~r",
+		"https://x-1.example/p%20q/~r%aF",
 		"https://example.test/",
 		"https://" + strings.Repeat("a", 63) + ".test",
 	} {
@@ -32,6 +32,7 @@ func TestCheckOIDCProviderURL(t *testing.T) {
 		"https://a.test#f", "https://a .test", "https://a.test/p q", "https://a.test/\x00", "https://é.test",
 		"https://a.test/é", "https://-a.test", "https://a-.test", "https://a..test", "https://.a.test",
 		"https://a.test.", "https://a_b.test", "https://[::1]", "https://" + strings.Repeat("a", 64) + ".test",
+		"https://a.test/%zz", "https://a.test/%", "https://a.test/%2", "https://a.test/%%41", "https://a.test/%g0",
 	} {
 		err := iam.CheckOIDCProviderURL(u)
 		if !errors.Is(err, iam.ErrOIDCProviderURL) {
@@ -77,7 +78,7 @@ func TestOIDCProviderValidate(t *testing.T) {
 	if err := p.Validate(); err != nil {
 		t.Fatalf("a valid provider: %v", err)
 	}
-	if p.Kind() != iam.KindOIDCProvider || p.Key() != "Token.Example.test/team" {
+	if p.Kind() != iam.KindOIDCProvider || p.Key() != "!token.!example.test/team" {
 		t.Fatalf("kind %v key %q", p.Kind(), p.Key())
 	}
 	if err := (iam.OIDCProvider{URL: "https://a.test"}).Validate(); err != nil {
@@ -139,5 +140,33 @@ func TestOIDCProviderValidate(t *testing.T) {
 		if err := p.Validate(); !errors.Is(err, iam.ErrInvalid) {
 			t.Errorf("%s: %v, want ErrInvalid", name, err)
 		}
+	}
+}
+
+// TestOIDCProviderKey: the key has no upper-case letter, so store case
+// folding keeps it, and URLs that differ in any way, case or a literal !
+// included, have different keys.
+func TestOIDCProviderKey(t *testing.T) {
+	urls := []string{
+		"https://idp.test/team", "https://idp.test/Team", "https://IDP.test/team", "https://idp.test/!team",
+		"https://idp.test/!!team", "https://idp.test/!Team", "https://idp.test/!t!eam", "https://idp.test/T!eam",
+		"https://idp.test/team!", "https://idp.test/teaM",
+	}
+	seen := map[string]string{}
+	for _, u := range urls {
+		k := iam.OIDCProviderKey(u)
+		if strings.ToLower(k) != k {
+			t.Errorf("%q: key %q has an upper-case letter", u, k)
+		}
+		if other, dup := seen[k]; dup {
+			t.Errorf("%q and %q share key %q", u, other, k)
+		}
+		seen[k] = u
+	}
+	if got := iam.OIDCProviderKey("https://Idp.test/A!b"); got != "!idp.test/!a!!b" {
+		t.Errorf("key %q", got)
+	}
+	if got := iam.OIDCProviderResource("https://Idp.test/A!b"); got != "Idp.test/A!b" {
+		t.Errorf("resource %q", got)
 	}
 }

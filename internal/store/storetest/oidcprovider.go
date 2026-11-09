@@ -2,6 +2,7 @@ package storetest
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +15,7 @@ import (
 // 255-character URL with a path (its key has slashes and needs the kube
 // name hash fallback), 100 client ids of 255 characters and 5
 // thumbprints. It is found by its key in another case, and a URL that
-// differs only in case is the same provider.
+// differs only in case is another provider.
 func oidcProviderLongestRoundTrip(t *testing.T, b store.Backend) {
 	t.Helper()
 	ctx := context.Background()
@@ -41,9 +42,15 @@ func oidcProviderLongestRoundTrip(t *testing.T, b store.Backend) {
 	if a, b := mustJSON(t, got.Object), mustJSON(t, p); a != b {
 		t.Fatalf("longest OIDC provider round trip:\n got %s\nwant %s", a, b)
 	}
+	if _, err := store.Create(ctx, b, p); !errors.Is(err, store.ErrExists) {
+		t.Fatalf("second create of the longest OIDC provider: %v, want ErrExists", err)
+	}
 	other := p
 	other.URL = strings.ToLower(p.URL)
-	if _, err := store.Create(ctx, b, other); err == nil {
-		t.Fatal("a URL differing only in case was stored as a second provider")
+	if _, err := store.Create(ctx, b, other); err != nil {
+		t.Fatalf("a URL differing only in case: %v, want another provider", err)
+	}
+	if got, err := store.Get[iam.OIDCProvider](ctx, b, other.Key()); err != nil || got.Object.URL != other.URL {
+		t.Fatalf("get the lower-case URL: %v %q", err, got.Object.URL)
 	}
 }

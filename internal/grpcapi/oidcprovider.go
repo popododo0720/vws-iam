@@ -28,7 +28,7 @@ type oidcProviderView struct {
 // outside 1 to 255 characters, a thumbprint that is not 40 characters or
 // more than 50 tags is ValidationError. A Url that is not an https issuer
 // (iam.CheckOIDCProviderURL: a DNS host, no port, user info, query or
-// fragment), a thumbprint that is not hex, a client id that is not UTF-8
+// fragment, every % an escape of two hex digits), a thumbprint that is not hex, a client id that is not UTF-8
 // and a tag outside the AWS tag rules are InvalidInput. A repeated client
 // id or thumbprint (thumbprints compared in any case) is kept once, and of
 // a repeated tag key the last value; more than 100 client ids or 5
@@ -37,12 +37,15 @@ type oidcProviderView struct {
 // fetches the IdP's top intermediate CA thumbprint, which needs the key
 // retrieval of a later part of #208.
 //
-// A Url already registered, in any case, is EntityAlreadyExists and the
+// A Url already registered (compared exactly, as OpenID Connect compares
+// issuers, so one differing only in case is another provider) is
+// EntityAlreadyExists and the
 // stored provider stays: the create is one store create, so of racing
 // requests on any replica exactly one makes the provider, and a retry
 // after a lost response is EntityAlreadyExists, as in AWS. A request that
 // was canceled or whose deadline passed writes nothing. A store failure is
-// InternalFailure. Authorization (iam:CreateOpenIDConnectProvider) is
+// ServiceFailure (ServiceUnavailable when the store is unavailable), the
+// fault AWS documents. Authorization (iam:CreateOpenIDConnectProvider) is
 // console-api's.
 //
 // TODO(#208): the OpenIdConnectProvidersPerAccount quota, and serve this as
@@ -120,7 +123,7 @@ func (s *Server) createOIDCProvider(
 		return oidcProviderView{}, alreadyExists("Provider with url " + url + " already exists.")
 	}
 	if err != nil {
-		return oidcProviderView{}, toStatus(ctx, err)
+		return oidcProviderView{}, readFailure(ctx, err)
 	}
 	return oidcProviderView{Provider: op, ARN: iam.OIDCProviderARN(p.id, op)}, nil
 }
