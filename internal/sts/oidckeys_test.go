@@ -222,6 +222,97 @@ func TestOIDCKeysSelfSignedLeaf(t *testing.T) {
 	}
 }
 
+// TestOIDCKeysOtherHosts: the JWKS may live on another host than the
+// issuer when the certificate names it; a pinned last certificate does not
+// vouch for a leaf it did not sign or for a host the leaf does not name; an
+// IP-literal issuer is refused before any connection.
+func TestOIDCKeysOtherHosts(t *testing.T) {
+	ctx := context.Background()
+	keysHost := func(p *idp) {
+		p.handle(func(w http.ResponseWriter, r *http.Request) bool {
+			if r.URL.Path != "/.well-known/openid-configuration" {
+				return false
+			}
+			write(w, `{"issuer":"`+idpIssuer+`","jwks_uri":"https://keys.test/keys"}`)
+			return true
+		})
+	}
+
+	both := newIdP(t, func(ca, _ *pki) []*pki { return []*pki{issue(t, ca, false, "idp.test", "keys.test"), ca} })
+	keysHost(both)
+	if _, err := both.fetcher(nil, nil, time.Second).JWKS(ctx, idpIssuer, []string{thumbprint(both.ca.cert)}); err != nil {
+		t.Fatalf("jwks_uri on a host the certificate names: %v", err)
+	}
+
+	issuerOnly := newIdP(t, nil)
+	keysHost(issuerOnly)
+	_, err := issuerOnly.fetcher(nil, nil, time.Second).JWKS(ctx, idpIssuer, []string{thumbprint(issuerOnly.ca.cert)})
+	wantIDPCommunication(t, "jwks_uri on a host the certificate does not name", err)
+	if n := issuerOnly.keys.Load(); n != 0 {
+		t.Fatalf("%d JWKS requests to a host the certificate does not name", n)
+	}
+
+	unrelated := newIdP(t, func(ca, _ *pki) []*pki {
+		other := issue(t, nil, true)
+		return []*pki{issue(t, other, false, "idp.test"), ca}
+	})
+	_, err = unrelated.fetcher(nil, nil, time.Second).JWKS(ctx, idpIssuer, []string{thumbprint(unrelated.ca.cert)})
+	wantIDPCommunication(t, "leaf of another CA followed by the pinned certificate", err)
+
+	p := newIdP(t, nil)
+	for _, issuer := range []string{"https://127.0.0.1", "https://[::1]", "http://idp.test"} {
+		_, err := p.fetcher(nil, nil, time.Second).JWKS(ctx, issuer, []string{thumbprint(p.ca.cert)})
+		wantIDPCommunication(t, issuer, err)
+	}
+	if n := p.conns.Load(); n != 0 {
+		t.Fatalf("%d connections for refused issuers", n)
+	}
+}
+
+// TestOIDCKeysReturnsACopy: a caller that changes the document it got does
+// not change what the next caller gets from the cache.
+func TestOIDCKeysReturnsACopy(t *testing.T) {
+	p := newIdP(t, nil)
+	f := p.fetcher(nil, nil, time.Second)
+	pin := []string{thumbprint(p.ca.cert)}
+	for range 2 {
+		doc, err := f.JWKS(context.Background(), idpIssuer, pin)
+		if err != nil || string(doc) != idpJWKS {
+			t.Fatalf("%q, %v", doc, err)
+		}
+		clear(doc)
+	}
+	if n := p.keys.Load(); n != 1 {
+		t.Fatalf("%d JWKS requests, want 1", n)
+	}
+}
+
+// TestOIDCKeysTimeoutCoversTheWholeFetch: the timeout is one budget for
+// discovery and the JWKS together, not one per request.
+func TestOIDCKeysTimeoutCoversTheWholeFetch(t *testing.T) {
+	if sts.OIDCFetchTimeout != 5*time.Second {
+		t.Fatalf("OIDCFetchTimeout %v, want 5s", sts.OIDCFetchTimeout)
+	}
+	p := newIdP(t, nil)
+	p.handle(func(_ http.ResponseWriter, r *http.Request) bool {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(250 * time.Millisecond):
+		}
+		return false
+	})
+	begin := time.Now()
+	f := p.fetcher(nil, nil, 400*time.Millisecond)
+	_, err := f.JWKS(context.Background(), idpIssuer, []string{thumbprint(p.ca.cert)})
+	wantIDPCommunication(t, "discovery and JWKS each under, together over the timeout", err)
+	if d := time.Since(begin); d > time.Second {
+		t.Fatalf("gave up after %v, want about 400ms", d)
+	}
+	if n := p.keys.Load(); n != 1 {
+		t.Fatalf("%d JWKS requests, want 1 (the budget ran out during it)", n)
+	}
+}
+
 // TestOIDCKeysTimeout: an IdP that does not answer is ErrIDPCommunication
 // within the fetch timeout.
 func TestOIDCKeysTimeout(t *testing.T) {
@@ -410,6 +501,8 @@ func TestOIDCKeysHostileIdP(t *testing.T) {
 		{name: "another issuer", path: disc, body: meta("https://evil.test", idpIssuer+"/keys")},
 		{name: "issuer with a trailing slash", path: disc, body: meta(idpIssuer+"/", idpIssuer+"/keys")},
 		{name: "plain http jwks_uri", path: disc, body: meta(idpIssuer, "http://idp.test/keys")},
+		{name: "IPv4 jwks_uri", path: disc, body: meta(idpIssuer, "https://127.0.0.1/keys")},
+		{name: "IPv6 jwks_uri", path: disc, body: meta(idpIssuer, "https://[::1]/keys")},
 		{name: "jwks_uri with user info", path: disc, body: meta(idpIssuer, "https://u:p@idp.test/keys")},
 		{name: "no jwks_uri", path: disc, body: `{"issuer":"https://idp.test"}`},
 		{name: "discovery not JSON", path: disc, body: `<html>`},

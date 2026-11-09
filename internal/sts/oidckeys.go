@@ -108,7 +108,7 @@ func (f *OIDCKeyFetcher) JWKS(ctx context.Context, issuer string, thumbprints []
 	if c, ok := f.cache[key]; ok && f.now().Before(c.expires) {
 		f.mu.Unlock()
 		trace.SpanFromContext(ctx).SetAttributes(attribute.Bool("cache_hit", true))
-		return c.doc, nil
+		return slices.Clone(c.doc), nil
 	}
 	fl, running := f.inflight[key]
 	if !running {
@@ -123,7 +123,7 @@ func (f *OIDCKeyFetcher) JWKS(ctx context.Context, issuer string, thumbprints []
 
 	select {
 	case <-fl.done:
-		return fl.doc, fl.err
+		return slices.Clone(fl.doc), fl.err
 	case <-ctx.Done():
 		return nil, fmt.Errorf("fetch OIDC keys: %w", context.Cause(ctx))
 	}
@@ -178,6 +178,9 @@ func (f *OIDCKeyFetcher) fetch(ctx context.Context, issuer string, pins []string
 	}
 	defer client.CloseIdleConnections()
 
+	if !dnsHost(issuer) {
+		return nil, fmt.Errorf("%w: issuer is not an https URL with a DNS host", ErrIDPCommunication)
+	}
 	disc, err := f.get(ctx, client, strings.TrimSuffix(issuer, "/")+"/.well-known/openid-configuration")
 	if err != nil {
 		return nil, fmt.Errorf("%w: openid-configuration: %w", ErrIDPCommunication, err)
@@ -192,8 +195,8 @@ func (f *OIDCKeyFetcher) fetch(ctx context.Context, issuer string, pins []string
 	if meta.Issuer != issuer {
 		return nil, fmt.Errorf("%w: openid-configuration names another issuer", ErrIDPCommunication)
 	}
-	if u, err := url.Parse(meta.JWKSURI); err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
-		return nil, fmt.Errorf("%w: jwks_uri is not an https URL", ErrIDPCommunication)
+	if !dnsHost(meta.JWKSURI) {
+		return nil, fmt.Errorf("%w: jwks_uri is not an https URL with a DNS host", ErrIDPCommunication)
 	}
 	doc, err := f.get(ctx, client, meta.JWKSURI)
 	if err != nil {
@@ -206,6 +209,18 @@ func (f *OIDCKeyFetcher) fetch(ctx context.Context, issuer string, pins []string
 		return nil, fmt.Errorf("%w: jwks is not a JSON Web Key Set", ErrIDPCommunication)
 	}
 	return doc, nil
+}
+
+// dnsHost reports whether raw is an https URL without user info whose host
+// is a name, not an IP literal: TLS sends no server name for an IP, and
+// the certificate check matches the leaf against that name.
+func dnsHost(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.User != nil {
+		return false
+	}
+	h := u.Hostname()
+	return h != "" && net.ParseIP(h) == nil
 }
 
 // get reads target, retrying a failed connection, a 429 and a 5xx up to
@@ -268,6 +283,10 @@ func (f *OIDCKeyFetcher) tlsConfig(pins []string) *tls.Config {
 }
 
 func verifyIdPCertificate(cs tls.ConnectionState, roots *x509.CertPool, pins []string) error {
+	if cs.ServerName == "" {
+		// An empty DNSName would make x509 skip the host check.
+		return fmt.Errorf("%w: no server name to check", errUntrustedIdP)
+	}
 	certs := cs.PeerCertificates
 	if len(certs) == 0 {
 		return fmt.Errorf("%w: none presented", errUntrustedIdP)
