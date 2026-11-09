@@ -149,3 +149,28 @@ func TestAssumeRolePermissionEpochTime(t *testing.T) {
 		checkAssume(t, e, "client copy after the cutoff "+strconv.Itoa(i), reqCtx, sts.ErrAccessDenied)
 	}
 }
+
+// TestServerKeysFoldLikePolicyLookup: a client key that a policy lookup
+// matches to a server key only under Unicode case folding ("awſ:", U+017F)
+// is dropped too, so it can never take the server value's place. A policy
+// lookup picks one of two matching keys at random, so each case runs many
+// times.
+func TestServerKeysFoldLikePolicyLookup(t *testing.T) {
+	e := setup(t)
+	before := strconv.FormatInt(e.clk.now().Add(-time.Hour).Unix(), 10)
+	setAdminTrust(t, e, timeTrustAllow+timeTrustDeny("NumericGreaterThan", "aws:EpochTime", before))
+	for _, reqCtx := range []map[string][]string{
+		{"awſ:EpochTime": {"946684800"}},
+		{"AWſ:epochtime": {"946684800"}},
+		{"awſ:CurrentTime": {"2000-01-01T00:00:00Z"}, "awſ:EpochTime": {"946684800"}},
+	} {
+		for range 32 {
+			checkAssume(t, e, "long-s EpochTime", reqCtx, sts.ErrAccessDenied)
+		}
+	}
+	setAdminTrust(t, e, timeTrustAllow+`,{"Effect":"Deny","Principal":"*","Action":"sts:AssumeRole",`+
+		`"Condition":{"Bool":{"aws:MultiFactorAuthPresent":"false"}}}`)
+	for range 32 {
+		checkAssume(t, e, "long-s MFA", map[string][]string{"awſ:MultiFactorAuthPresent": {"true"}}, sts.ErrAccessDenied)
+	}
+}

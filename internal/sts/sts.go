@@ -308,12 +308,12 @@ func New(b store.Backend, keys *secret.Keyring, a *authz.Authorizer, account str
 	return s
 }
 
-// serverKeys are context keys only the server sets.
-var serverKeys = map[string]bool{
-	"aws:multifactorauthpresent": true, "aws:multifactorauthage": true, "aws:principalarn": true,
-	"aws:username": true, "aws:userid": true, "aws:currenttime": true, "aws:epochtime": true, "aws:tokenissuetime": true,
-	"aws:principalaccount": true, "aws:principaltype": true,
-}
+// serverKeys are context keys only the server sets, saml:* included.
+var serverKeys = policy.NewKeySet(
+	"aws:MultiFactorAuthPresent", "aws:MultiFactorAuthAge", "aws:PrincipalArn",
+	"aws:username", "aws:userid", "aws:CurrentTime", "aws:EpochTime", "aws:TokenIssueTime",
+	"aws:PrincipalAccount", "aws:PrincipalType", samlKeyPrefix+"*",
+)
 
 // callerContext copies request keys (aws:SourceIp, sts:ExternalId, ...),
 // drops any server key or saml:* key a client tried to set, and adds the
@@ -323,7 +323,7 @@ var serverKeys = map[string]bool{
 func (s *Service) callerContext(c Caller, reqCtx map[string][]string) map[string][]string {
 	m := map[string][]string{}
 	for k, v := range reqCtx {
-		if lk := strings.ToLower(k); !serverKeys[lk] && !strings.HasPrefix(lk, samlKeyPrefix) {
+		if !serverKeys.Has(k) {
 			m[k] = v
 		}
 	}

@@ -22,6 +22,7 @@ import (
 	"github.com/popododo0720/vws-iam/internal/authz"
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/password"
+	"github.com/popododo0720/vws-iam/internal/policy"
 	"github.com/popododo0720/vws-iam/internal/sigv4"
 	"github.com/popododo0720/vws-iam/internal/store"
 	"github.com/popododo0720/vws-iam/internal/sts"
@@ -321,12 +322,12 @@ func checkSessionRef(ctx context.Context, p project, pr *iamv1.Principal, c chec
 	return nil
 }
 
-// serverKeys are context keys only vws-iam may set.
-var serverKeys = map[string]bool{
-	"aws:multifactorauthpresent": true, "aws:multifactorauthage": true, "aws:principalarn": true,
-	"aws:username": true, "aws:userid": true, "aws:currenttime": true, "aws:epochtime": true, "aws:principalaccount": true,
-	"aws:principaltype": true, "aws:tokenissuetime": true,
-}
+// serverKeys are context keys only vws-iam may set, saml:* included.
+var serverKeys = policy.NewKeySet(
+	"aws:MultiFactorAuthPresent", "aws:MultiFactorAuthAge", "aws:PrincipalArn",
+	"aws:username", "aws:userid", "aws:CurrentTime", "aws:EpochTime", "aws:PrincipalAccount",
+	"aws:PrincipalType", "aws:TokenIssueTime", "saml:*",
+)
 
 // Authorize evaluates identity policies after rechecking the principal.
 // No resources means "*". The decision is ALLOW only if every resource is
@@ -368,7 +369,7 @@ func (s *Server) authorize(
 	// (#202), so no principal here has them.
 	rc := map[string][]string{}
 	for k, v := range req.GetContext() {
-		if lk := strings.ToLower(k); !serverKeys[lk] && !strings.HasPrefix(lk, "saml:") {
+		if !serverKeys.Has(k) {
 			rc[k] = v.GetValues()
 		}
 	}

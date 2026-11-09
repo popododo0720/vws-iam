@@ -68,3 +68,36 @@ func TestAuthorizeTimeKeysAreServerOnly(t *testing.T) {
 		})
 	}
 }
+
+// TestAuthorizeServerKeysFoldLikePolicyLookup: a request key that a
+// policy lookup matches to a server key only under Unicode case folding
+// ("awſ:", U+017F; "ſaml:") is dropped, so it never takes the server
+// value's place. A policy lookup picks one of two matching keys at random,
+// so each case runs many times.
+func TestAuthorizeServerKeysFoldLikePolicyLookup(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	u := e.keyedUser(t, "dave", `{"Version":"2012-10-17","Statement":[
+		{"Effect":"Allow","Action":"s3:GetObject","Resource":"*","Condition":{"Bool":{"aws:MultiFactorAuthPresent":"true"}}},
+		{"Effect":"Allow","Action":"s3:PutObject","Resource":"*","Condition":{"StringEquals":{"saml:sub":"dave"}}},
+		{"Effect":"Allow","Action":"s3:ListBucket","Resource":"*",
+		 "Condition":{"NumericLessThan":{"aws:EpochTime":"946684801"}}}]}`)
+	a, err := e.auth.Authenticate(ctx, e.sign(u.id, u.secretKey, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for action, key := range map[string]string{
+		"s3:GetObject":  "awſ:MultiFactorAuthPresent",
+		"s3:PutObject":  "ſaml:sub",
+		"s3:ListBucket": "awſ:EpochTime",
+	} {
+		value := map[string]string{"s3:GetObject": "true", "s3:PutObject": "dave", "s3:ListBucket": "946684800"}[action]
+		c := map[string]*iamv1.ContextValues{key: {Values: []string{value}}}
+		for range 32 {
+			r, err := e.auth.Authorize(ctx, &iamv1.AuthorizeRequest{Principal: a.GetPrincipal(), Action: action, Context: c})
+			if err != nil || r.GetDecision() != iamv1.Decision_DECISION_DENY_IMPLICIT {
+				t.Fatalf("%s with %q: %v %v, want DENY_IMPLICIT", action, key, r, err)
+			}
+		}
+	}
+}
