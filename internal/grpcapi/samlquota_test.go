@@ -209,17 +209,18 @@ func TestPendingSAMLProviderOverQuota(t *testing.T) {
 }
 
 // stealBeforeActivate runs steal once, just before the first commit of a
-// SAML provider (its UpdateIf), as a writer whose lease ran out would see
-// another writer take the lock.
+// provider of kind (its UpdateIf), as a writer whose lease ran out would
+// see another writer take the lock.
 type stealBeforeActivate struct {
 	store.Backend
+	kind  iam.Kind
 	steal func()
 }
 
 func (s *stealBeforeActivate) UpdateIf(
 	ctx context.Context, k iam.Kind, key string, spec []byte, version string, pre store.Pre,
 ) (string, error) {
-	if steal := s.steal; k == iam.KindSAMLProvider && steal != nil {
+	if steal := s.steal; k == s.kind && steal != nil {
 		s.steal = nil // the stealing create commits through here too
 		steal()
 	}
@@ -236,7 +237,7 @@ func TestSAMLProviderCreateLosesHold(t *testing.T) {
 		t.Run(bk.name, func(t *testing.T) {
 			inner := bk.open()
 			now := time.Now().UTC()
-			b := &stealBeforeActivate{Backend: inner}
+			b := &stealBeforeActivate{Backend: inner, kind: iam.KindSAMLProvider}
 			slow := newEnvOn(t, b, &now)
 			fast := newEnvOn(t, b, &now)
 			fillSAMLProviders(t, newEnvOn(t, inner, &now), proj, iam.MaxSAMLProvidersPerAccount-1)

@@ -12,8 +12,11 @@ import (
 // OpenID Connect provider limits of AWS CreateOpenIDConnectProvider: the
 // URL is 1 to 255 characters, a client id 1 to 255, a provider holds at
 // most 100 client ids and 5 thumbprints, and a thumbprint is the
-// 40-character hex SHA-1 of a certificate.
+// 40-character hex SHA-1 of a certificate. A project holds at most 100
+// providers (the AWS OpenIdConnectProvidersPerAccount quota).
 const (
+	MaxOIDCProvidersPerAccount = 100
+
 	MaxOIDCProviderURLLen = 255
 	MaxOIDCClientIDLen    = 255
 	MaxOIDCClientIDs      = 100
@@ -29,6 +32,11 @@ const (
 // ClientIDs are the audiences a web identity token may carry. Thumbprints
 // are the hex SHA-1 of the server certificates the IdP serves its keys
 // with; none is allowed, as in AWS. Nothing here is secret.
+//
+// A Pending provider is a create that has not committed under the
+// OpenIdConnectProvidersPerAccount count: it holds its URL and nothing
+// else. No read sees it, it is not counted, and the next create of its URL
+// replaces it.
 type OIDCProvider struct {
 	Meta
 	URL         string            `json:"url"`
@@ -36,6 +44,7 @@ type OIDCProvider struct {
 	Thumbprints []string          `json:"thumbprints,omitempty"`
 	Tags        map[string]string `json:"tags,omitempty"`
 	Created     time.Time         `json:"created"`
+	Pending     bool              `json:"pending,omitempty"`
 }
 
 func (OIDCProvider) Kind() Kind    { return KindOIDCProvider }
