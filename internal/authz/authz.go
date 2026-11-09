@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -250,9 +251,10 @@ func (a *Authorizer) ManagedPolicy(ctx context.Context, arn string) (policy.Name
 
 // Authorize decides whether p may perform action on resource. reqCtx
 // carries request keys such as aws:SourceIp and aws:MultiFactorAuthPresent;
-// aws:username, aws:PrincipalArn and aws:CurrentTime are set here, replacing
-// any key of reqCtx that differs from one of them only in case. The
-// decision carries the context it evaluated.
+// aws:username, aws:PrincipalArn, aws:CurrentTime (RFC 3339, UTC) and
+// aws:EpochTime (Unix seconds) are set here, replacing any key of reqCtx
+// that differs from one of them only in case. The decision carries the
+// context it evaluated.
 func (a *Authorizer) Authorize(
 	ctx context.Context, p Principal, action, resource string, reqCtx map[string][]string,
 ) (d policy.Decision, err error) {
@@ -293,7 +295,7 @@ func (a *Authorizer) authorize(
 }
 
 // authzKeys are the context keys Authorize sets itself.
-var authzKeys = []string{"aws:PrincipalArn", "aws:CurrentTime", "aws:username"}
+var authzKeys = []string{"aws:PrincipalArn", "aws:CurrentTime", "aws:EpochTime", "aws:username"}
 
 // context is reqCtx with the keys Authorize sets for p, whose ARN is
 // arn ("" when not resolved, as for a session refused before its
@@ -309,7 +311,9 @@ func (a *Authorizer) context(p Principal, arn string, reqCtx map[string][]string
 	if arn != "" {
 		c["aws:PrincipalArn"] = []string{arn}
 	}
-	c["aws:CurrentTime"] = []string{a.now().UTC().Format(time.RFC3339)}
+	now := a.now().UTC()
+	c["aws:CurrentTime"] = []string{now.Format(time.RFC3339)}
+	c["aws:EpochTime"] = []string{strconv.FormatInt(now.Unix(), 10)}
 	if p.Kind == User && !p.Federated {
 		c["aws:username"] = []string{p.Name}
 	}

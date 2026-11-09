@@ -266,12 +266,14 @@ func (s *Service) AssumeRoleWithSAML(
 	}, nil
 }
 
+var timeKeys = policy.NewKeySet("aws:CurrentTime", "aws:EpochTime")
+
 // setTimeKeys sets aws:CurrentTime (RFC 3339, UTC) and aws:EpochTime
-// (Unix seconds) from now, as authz.Authorize sets aws:CurrentTime, after
-// removing any copy of either key in another letter case.
+// (Unix seconds) from now, as authz.Authorize does, after removing any
+// copy of either key a policy lookup would also find.
 func setTimeKeys(m map[string][]string, now time.Time) {
 	for k := range m {
-		if lk := strings.ToLower(k); lk == "aws:currenttime" || lk == "aws:epochtime" {
+		if timeKeys.Has(k) {
 			delete(m, k)
 		}
 	}
