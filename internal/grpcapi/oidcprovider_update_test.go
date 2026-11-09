@@ -350,29 +350,18 @@ func TestOIDCProviderUpdateCanceled(t *testing.T) {
 	key, arn := iam.OIDCProviderKey(updateURL), oidcARN(proj, updateURL)
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
-	calls := []func(ctx context.Context) error{
-		func(ctx context.Context) error {
-			return e.api.UpdateOpenIDConnectProviderThumbprint(ctx, proj, arn, thumbprints(3)[2:])
-		},
-		func(ctx context.Context) error {
-			return e.api.AddClientIDToOpenIDConnectProvider(ctx, proj, arn, "added")
-		},
-		func(ctx context.Context) error {
-			return e.api.RemoveClientIDFromOpenIDConnectProvider(ctx, proj, arn, "app")
-		},
-	}
 	before := storedOIDC(t, b, key)
-	for i, call := range calls {
-		if err := call(canceled); err == nil {
-			t.Fatalf("call %d: a canceled request succeeded", i)
+	for _, c := range updateCalls {
+		if err := c.call(canceled, e, arn); err == nil {
+			t.Fatalf("%s: a canceled request succeeded", c.name)
 		}
 		if v := storedOIDC(t, b, key).Version; v != before.Version {
-			t.Fatalf("call %d: a canceled request wrote the provider", i)
+			t.Fatalf("%s: a canceled request wrote the provider", c.name)
 		}
 	}
-	for i, call := range calls {
-		if err := call(t.Context()); err != nil {
-			t.Fatalf("call %d: the same request afterwards: %v", i, err)
+	for _, c := range updateCalls {
+		if err := c.call(t.Context(), e, arn); err != nil {
+			t.Fatalf("%s: the same request afterwards: %v", c.name, err)
 		}
 	}
 	p := storedOIDC(t, b, key).Object
