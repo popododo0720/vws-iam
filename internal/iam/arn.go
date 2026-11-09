@@ -47,6 +47,12 @@ func SAMLProviderARN(account string, p SAMLProvider) string {
 	return ARN("iam", "", account, "saml-provider/"+p.Name)
 }
 
+// OIDCProviderARN is the ARN of an OpenID Connect provider in account:
+// oidc-provider/ and its URL without the scheme, as in AWS.
+func OIDCProviderARN(account string, p OIDCProvider) string {
+	return ARN("iam", "", account, "oidc-provider/"+OIDCProviderResource(p.URL))
+}
+
 // MfaDeviceARN is the ARN of a virtual MFA device in account. Its path is
 // part of the serial number, as in AWS.
 func MfaDeviceARN(account string, d MfaDevice) string {

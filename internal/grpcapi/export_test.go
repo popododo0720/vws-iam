@@ -357,3 +357,14 @@ func (s *Server) ListSAMLProviderTags(
 func (s *Server) DeleteSAMLProvider(ctx context.Context, project, arn string) error {
 	return s.deleteSAMLProvider(ctx, project, arn)
 }
+
+// OIDCProviderView is an OpenID Connect provider with its ARN.
+type OIDCProviderView = oidcProviderView
+
+// CreateOpenIDConnectProvider is IAM CreateOpenIDConnectProvider, which
+// vws-proto does not carry yet (#208).
+func (s *Server) CreateOpenIDConnectProvider(
+	ctx context.Context, project, url string, clientIDs, thumbprints []string, tags []*iamv1.Tag,
+) (OIDCProviderView, error) {
+	return s.createOIDCProvider(ctx, project, url, clientIDs, thumbprints, tags)
+}

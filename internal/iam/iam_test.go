@@ -117,6 +117,10 @@ func TestARNs(t *testing.T) {
 	if want := "arn:vws:iam::000000000000:saml-provider/corp.idp"; got != want {
 		t.Fatal(got)
 	}
+	got = iam.OIDCProviderARN("000000000000", iam.OIDCProvider{URL: "https://token.example.test/team"})
+	if want := "arn:vws:iam::000000000000:oidc-provider/token.example.test/team"; got != want {
+		t.Fatal(got)
+	}
 	got = iam.MfaDeviceARN("000000000000", iam.MfaDevice{Name: "d", Path: "/team/"})
 	if want := "arn:vws:iam::000000000000:mfa/team/d"; got != want {
 		t.Fatal(got)
