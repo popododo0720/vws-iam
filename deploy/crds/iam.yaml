@@ -491,3 +491,29 @@ spec:
               type: object
               x-kubernetes-preserve-unknown-fields: true
           required: [spec]
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: iamoidcproviders.iam.vws.popododo0720.io
+spec:
+  group: iam.vws.popododo0720.io
+  scope: Namespaced
+  names:
+    kind: IamOIDCProvider
+    listKind: IamOIDCProviderList
+    plural: iamoidcproviders
+    singular: iamoidcprovider
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              description: An OpenID Connect identity provider (issuer URL, client ids, certificate thumbprints; no secret). Written only by vws-iam.
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+          required: [spec]

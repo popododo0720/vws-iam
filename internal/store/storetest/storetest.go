@@ -52,6 +52,11 @@ func Samples() []iam.Object {
 		iam.PasswordPolicy{MinimumPasswordLength: 8, RequireSymbols: true, Meta: iam.Meta{UID: "pp-1", Generation: 1}},
 		iam.RootLogin{PasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA", Changed: now, Meta: iam.Meta{UID: "r-1"}},
 		samlSampleProvider(now),
+		iam.OIDCProvider{
+			URL: "https://Token.Example.test/team", ClientIDs: []string{"sts.amazonaws.com", "app"},
+			Thumbprints: []string{"9e99a48a9960b14926bb7f3b02e22da2b0ab7280"}, Tags: map[string]string{"team": "a"},
+			Created: now, Meta: iam.Meta{UID: "o-1", Generation: 1},
+		},
 	}
 }
 
@@ -175,8 +180,16 @@ func Run(t *testing.T, open func(t *testing.T) store.Backend) {
 				c := o
 				c.Created, c.Tags = later, map[string]string{"team": "b", "env": "prod"}
 				roundTrip(t, b, o, c)
+			case iam.OIDCProvider:
+				c := o
+				c.ClientIDs, c.Thumbprints = []string{"app"}, nil
+				c.Tags = map[string]string{"team": "b", "env": "prod"}
+				roundTrip(t, b, o, c)
 			}
 		}
+	})
+	t.Run("OIDCProviderLongestRoundTrip", func(t *testing.T) {
+		oidcProviderLongestRoundTrip(t, open(t))
 	})
 	t.Run("SAMLProviderLargestRoundTrip", func(t *testing.T) {
 		samlProviderLargestRoundTrip(t, open(t))
