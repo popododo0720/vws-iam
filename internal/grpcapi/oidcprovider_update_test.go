@@ -2,6 +2,7 @@ package grpcapi_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strconv"
@@ -387,6 +388,18 @@ func TestOIDCProviderUpdateCanceled(t *testing.T) {
 // boundary values are accepted; a store failure on a valid request is
 // ServiceFailure (ServiceUnavailable when unavailable). None changes the
 // stored provider.
+// corruptOIDCGet returns an OIDC provider that does not validate (its URL
+// has a port), as an operator edit of the custom resource could leave it.
+type corruptOIDCGet struct{ store.Backend }
+
+func (c corruptOIDCGet) Get(ctx context.Context, k iam.Kind, key string) (store.Entry, error) {
+	if k != iam.KindOIDCProvider {
+		return c.Backend.Get(ctx, k, key)
+	}
+	spec, err := json.Marshal(iam.OIDCProvider{URL: "https://idp.test:443", ClientIDs: []string{"app"}})
+	return store.Entry{Key: key, Spec: spec, Version: "1"}, err
+}
+
 func TestOIDCProviderUpdateErrors(t *testing.T) {
 	inner := memstore.New()
 	now := time.Now().UTC()
@@ -494,6 +507,7 @@ func TestOIDCProviderUpdateErrors(t *testing.T) {
 			codes.Unavailable, "ServiceUnavailable",
 		},
 		{"write fails", failingUpdate{Backend: inner, k: iam.KindOIDCProvider, err: boom}, codes.Internal, "ServiceFailure"},
+		{"stored provider does not validate", corruptOIDCGet{Backend: inner}, codes.Internal, "ServiceFailure"},
 		{
 			"write unavailable",
 			failingUpdate{Backend: inner, k: iam.KindOIDCProvider, err: store.ErrUnavailable},

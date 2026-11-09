@@ -211,17 +211,10 @@ func noOIDCProvider(arn string) error {
 // TODO(#208): serve this as an RPC once vws-proto carries
 // GetOpenIDConnectProvider.
 func (s *Server) getOIDCProvider(ctx context.Context, pid, arn string) (oidcProviderView, error) {
-	if !iam.ValidProject(pid) {
-		return oidcProviderView{}, invalidID("project " + quote(pid) + " is not a project id")
-	}
-	url, here, err := oidcProviderURL(pid, arn)
+	p, url, err := s.oidcProviderArg(pid, arn)
 	if err != nil {
 		return oidcProviderView{}, err
 	}
-	if !here {
-		return oidcProviderView{}, noOIDCProvider(arn)
-	}
-	p := s.project(pid)
 	cur, err := store.Get[iam.OIDCProvider](ctx, p.b, iam.OIDCProviderKey(url))
 	if errors.Is(err, store.ErrNotFound) {
 		return oidcProviderView{}, noOIDCProvider(arn)
@@ -346,8 +339,7 @@ func checkOIDCClientID(id string) error {
 
 // changeOIDCProvider reads the OpenID Connect provider url of project p
 // (missing when there is none), applies change to it and writes it at the
-// version read with the generation moved, and returns the provider as
-// stored. When change reports nothing to change, nothing is written. A
+// version read with the generation moved. When change reports nothing to change, nothing is written. A
 // provider written in between is read again and changed anew, up to
 // maxDeleteAttempts, then the store conflict. A changed provider that
 // does not validate is the caller's input (invalidSpec), unless the
@@ -356,41 +348,42 @@ func checkOIDCClientID(id string) error {
 // store failure is returned as is, for the caller to map.
 func (s *Server) changeOIDCProvider(
 	ctx context.Context, p project, url string, missing error, change func(*iam.OIDCProvider) (bool, error),
-) (iam.OIDCProvider, error) {
+) error {
 	key := iam.OIDCProviderKey(url)
 	for attempt := 1; ; attempt++ {
 		cur, err := store.Get[iam.OIDCProvider](ctx, p.b, key)
 		if errors.Is(err, store.ErrNotFound) {
-			return iam.OIDCProvider{}, missing
+			return missing
 		}
 		if err != nil {
-			return iam.OIDCProvider{}, err
+			return err
 		}
 		op := cur.Object
 		changed, err := change(&op)
 		if err != nil || !changed {
-			return cur.Object, err
+			return err
 		}
 		op.Generation++
 		if err := op.Validate(); err != nil {
 			if cur.Object.Validate() != nil {
-				return iam.OIDCProvider{}, fmt.Errorf("stored OpenID Connect provider does not validate: %w", err)
+				// An operator edit: a service fault, never ValidationError.
+				return fmt.Errorf("stored OpenID Connect provider %q does not validate", key)
 			}
-			return iam.OIDCProvider{}, invalidSpec(err.Error())
+			return invalidSpec(err.Error())
 		}
 		if err := ctx.Err(); err != nil {
-			return iam.OIDCProvider{}, fmt.Errorf("OpenID Connect provider: %w", err) // the caller is gone; write nothing
+			return fmt.Errorf("OpenID Connect provider: %w", err) // the caller is gone; write nothing
 		}
 		_, err = store.Update(ctx, p.b, op, cur.Version)
 		switch {
 		case err == nil:
-			return op, nil
+			return nil
 		case errors.Is(err, store.ErrConflict) && attempt < maxDeleteAttempts:
 			continue
 		case errors.Is(err, store.ErrNotFound):
-			return iam.OIDCProvider{}, missing
+			return missing
 		default:
-			return iam.OIDCProvider{}, err
+			return err
 		}
 	}
 }
@@ -436,7 +429,7 @@ func (s *Server) updateOIDCProviderThumbprint(ctx context.Context, pid, arn stri
 		return invalidInput("Cannot exceed quota for ThumbprintsPerOpenIdConnectProvider: " +
 			strconv.Itoa(iam.MaxOIDCThumbprints))
 	}
-	_, err = s.changeOIDCProvider(ctx, p, url, noOIDCProvider(arn), func(op *iam.OIDCProvider) (bool, error) {
+	err = s.changeOIDCProvider(ctx, p, url, noOIDCProvider(arn), func(op *iam.OIDCProvider) (bool, error) {
 		if slices.Equal(op.Thumbprints, thumbprints) {
 			return false, nil
 		}
@@ -469,7 +462,7 @@ func (s *Server) addClientIDToOIDCProvider(ctx context.Context, pid, arn, client
 	if err := checkOIDCClientID(clientID); err != nil {
 		return err
 	}
-	_, err = s.changeOIDCProvider(ctx, p, url, noOIDCProvider(arn), func(op *iam.OIDCProvider) (bool, error) {
+	err = s.changeOIDCProvider(ctx, p, url, noOIDCProvider(arn), func(op *iam.OIDCProvider) (bool, error) {
 		if slices.Contains(op.ClientIDs, clientID) {
 			return false, nil
 		}
@@ -503,7 +496,7 @@ func (s *Server) removeClientIDFromOIDCProvider(ctx context.Context, pid, arn, c
 	if err := checkOIDCClientID(clientID); err != nil {
 		return err
 	}
-	_, err = s.changeOIDCProvider(ctx, p, url, noOIDCProvider(arn), func(op *iam.OIDCProvider) (bool, error) {
+	err = s.changeOIDCProvider(ctx, p, url, noOIDCProvider(arn), func(op *iam.OIDCProvider) (bool, error) {
 		if !slices.Contains(op.ClientIDs, clientID) {
 			return false, nil
 		}
