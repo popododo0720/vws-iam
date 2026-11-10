@@ -180,13 +180,13 @@ func TestCreateAccountAliasReplaces(t *testing.T) {
 // TestCreateAccountAliasConcurrent: of creates of one alias racing on
 // two replicas, from one project or from several, exactly one succeeds
 // and the rest are EntityAlreadyExists, so a lost response retried is
-// never a second alias, and only the winner holds it. On both store
-// backends.
+// never a second alias, and only the winner holds it. On memstore and
+// etcdstore (#272).
 func TestCreateAccountAliasConcurrent(t *testing.T) {
-	for _, bk := range renameBackends {
+	for _, bk := range etcdBackends {
 		for _, projects := range []int{1, 4} {
 			t.Run(fmt.Sprintf("%s/%dprojects", bk.name, projects), func(t *testing.T) {
-				b := bk.open()
+				b := bk.open(t)
 				now := time.Now().UTC()
 				replicas := []*env{newEnvOn(t, b, &now), newEnvOn(t, b, &now)}
 				pid := func(i int) string { return fmt.Sprintf("proj-%d", i%projects) }
@@ -548,5 +548,49 @@ func TestCreateAccountAliasContention(t *testing.T) {
 	wantAWS(t, err, codes.Aborted, "ConcurrentModification")
 	if got := listedAliases(t, newEnvOn(t, b, &now), proj); len(got) != 0 {
 		t.Fatalf("project lists %q, want none", got)
+	}
+}
+
+// disappearingAlias is a backend on which the next remaining creates of
+// alias in proj each find it stored and then deleted again, as when
+// losers of the same project stage and drop it between this create's
+// reads (#272).
+type disappearingAlias struct {
+	store.Backend
+	remaining int
+}
+
+func (b *disappearingAlias) Create(ctx context.Context, kind iam.Kind, key string, spec []byte) (string, error) {
+	if kind == iam.KindAccountAlias && key == proj+"/"+alias && b.remaining > 0 {
+		b.remaining--
+		v, err := b.Backend.Create(ctx, kind, key, spec)
+		if err != nil {
+			return "", err
+		}
+		if err := b.Delete(ctx, kind, key, v); err != nil {
+			return "", err
+		}
+		return "", store.ErrExists
+	}
+	return b.Backend.Create(ctx, kind, key, spec)
+}
+
+// TestCreateAccountAliasConcurrentStagedAliasDropped: a create whose staged
+// alias keeps vanishing under it while another project holds the claim
+// is EntityAlreadyExists, never ConcurrentModification. On memstore and
+// etcdstore (#272).
+func TestCreateAccountAliasConcurrentStagedAliasDropped(t *testing.T) {
+	for _, bk := range etcdBackends {
+		t.Run(bk.name, func(t *testing.T) {
+			b := &disappearingAlias{Backend: bk.open(t)}
+			now := time.Now().UTC()
+			e := newEnvOn(t, b, &now)
+			if err := e.api.CreateAccountAlias(t.Context(), "winner", alias); err != nil {
+				t.Fatal(err)
+			}
+			b.remaining = 2
+			wantAWS(t, e.api.CreateAccountAlias(t.Context(), proj, alias), codes.AlreadyExists, "EntityAlreadyExists")
+			wantHolder(t, e, b, alias, "winner", "winner", proj)
+		})
 	}
 }
