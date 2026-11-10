@@ -114,91 +114,110 @@ func TestListAccountAliasesEmpty(t *testing.T) {
 	}
 }
 
-// TestListAccountAliasesPages: MaxItems bounds each page, IsTruncated and
-// Marker continue it, and every alias is listed once in order for any
-// page size, also when more aliases are stored than AWS allows (the
-// quota is CreateAccountAlias's, #88). The default page holds 100. On
-// both store backends.
+// TestListAccountAliasesPages: even legacy duplicate records produce one
+// complete page for every valid page size, including the default.
 func TestListAccountAliasesPages(t *testing.T) {
 	for _, bk := range renameBackends {
 		t.Run(bk.name, func(t *testing.T) {
 			b := bk.open()
 			now := time.Now().UTC()
 			e := newEnvOn(t, b, &now)
-			var want []string
 			for i := range 5 {
-				n := fmt.Sprintf("alias-%d", i)
-				seedAlias(t, b, proj, n)
-				want = append(want, n)
+				seedAlias(t, b, proj, fmt.Sprintf("alias-%d", i))
 			}
-			for _, tc := range []struct{ maxItems, pages int }{{1, 5}, {2, 3}, {4, 2}, {5, 1}, {1000, 1}} {
-				got, pages := listAllAliases(t, e, tc.maxItems)
-				if !slices.Equal(got, want) || pages != tc.pages {
-					t.Fatalf("MaxItems %d: %q in %d pages, want %q in %d", tc.maxItems, got, pages, want, tc.pages)
+			for _, size := range []int{1, 2, 4, 5, 1000} {
+				got, pages := listAllAliases(t, e, size)
+				if !slices.Equal(got, []string{"alias-4"}) || pages != 1 {
+					t.Fatalf("MaxItems %d: %v in %d pages", size, got, pages)
 				}
+			}
+			pg, err := e.api.ListAccountAliases(t.Context(), proj, "", 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(pg.Aliases, []string{"alias-4"}) || pg.IsTruncated || pg.Marker != "" {
+				t.Fatalf("default page %+v", pg)
 			}
 		})
 	}
-	b := memstore.New()
-	now := time.Now().UTC()
-	e := newEnvOn(t, b, &now)
-	for i := range grpcapi.DefaultListPageSize + 1 {
-		seedAlias(t, b, proj, fmt.Sprintf("a%03d", i))
-	}
-	pg, err := e.api.ListAccountAliases(t.Context(), proj, "", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pg.Aliases) != 100 || !pg.IsTruncated || pg.Marker == "" {
-		t.Fatalf("default page: %d aliases, IsTruncated %v, Marker %q; want 100, true, set",
-			len(pg.Aliases), pg.IsTruncated, pg.Marker)
-	}
-	next, err := e.api.ListAccountAliases(t.Context(), proj, pg.Marker, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Equal(next.Aliases, []string{"a100"}) || next.IsTruncated {
-		t.Fatalf("second page = %q (IsTruncated %v), want [a100] complete", next.Aliases, next.IsTruncated)
-	}
 }
 
-// TestListAccountAliasesChangesBetweenPages: a marker continues after the
-// last listed alias, so an alias deleted before it does not shift the
-// listing and one replaced after it is seen.
+// TestListAccountAliasesChangesBetweenPages keeps markers issued before the
+// singleton listing compatible, without resurrecting a replaced alias.
 func TestListAccountAliasesChangesBetweenPages(t *testing.T) {
 	b := memstore.New()
 	now := time.Now().UTC()
 	e := newEnvOn(t, b, &now)
-	for _, n := range []string{"aaa", "bbb", "ccc"} {
-		seedAlias(t, b, proj, n)
+	for _, name := range []string{"aaa", "bbb", "ccc"} {
+		seedAlias(t, b, proj, name)
 	}
-	pg, err := e.api.ListAccountAliases(t.Context(), proj, "", 1)
+	pg, err := e.api.ListAccountAliases(t.Context(), proj, "Y2Nj", 1) // ccc
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(pg.Aliases, []string{"aaa"}) {
-		t.Fatalf("first page = %q, want [aaa]", pg.Aliases)
-	}
-	sb := store.Scoped(b, proj)
-	a, err := store.Get[iam.AccountAlias](t.Context(), sb, "aaa")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Delete[iam.AccountAlias](t.Context(), sb, "aaa", a.Version); err != nil {
-		t.Fatal(err)
+	if len(pg.Aliases) != 0 || pg.IsTruncated {
+		t.Fatalf("replaced aliases leaked: %+v", pg)
 	}
 	seedAlias(t, b, proj, "ddd")
-	var got []string
-	for marker := pg.Marker; marker != ""; {
-		next, err := e.api.ListAccountAliases(t.Context(), proj, marker, 1)
-		if err != nil {
-			t.Fatal(err)
-		}
-		got = append(got, next.Aliases...)
-		marker = next.Marker
+	pg, err = e.api.ListAccountAliases(t.Context(), proj, "Y2Nj", 1)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if want := []string{"bbb", "ccc", "ddd"}; !slices.Equal(got, want) {
-		t.Fatalf("rest = %q, want %q", got, want)
+	if !slices.Equal(pg.Aliases, []string{"ddd"}) || pg.IsTruncated || pg.Marker != "" {
+		t.Fatalf("new alias page %+v", pg)
+	}
+}
+
+func TestListAccountAliasesHidesStoppedReplacement(t *testing.T) {
+	for _, bk := range renameBackends {
+		t.Run(bk.name, func(t *testing.T) {
+			b := bk.open()
+			now := time.Now().UTC()
+			sb := store.Scoped(b, proj)
+			seedAlias(t, b, proj, "zzz-old")
+			seedAlias(t, b, proj, "aaa-latest")
+			seedAlias(t, b, "other", "other-corp")
+			if _, err := store.Mutate(t.Context(), sb, "aaa-latest", func(a *iam.AccountAlias) error {
+				a.Seq = 2
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			pending := iam.AccountAlias{
+				Meta:    iam.Meta{UID: iam.NewUID(), Generation: 1},
+				Name:    "pending-create",
+				Created: now,
+				Seq:     3,
+			}
+			if _, err := store.Create(t.Context(), sb, pending); err != nil {
+				t.Fatal(err)
+			}
+			before, err := store.List[iam.AccountAlias](t.Context(), sb)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				e := newEnvOn(t, b, &now)
+				if got := listedAliases(t, e, proj); !slices.Equal(got, []string{"aaa-latest"}) {
+					t.Fatalf("listed %v", got)
+				}
+				if got := listedAliases(t, e, "other"); !slices.Equal(got, []string{"other-corp"}) {
+					t.Fatalf("other listed %v", got)
+				}
+			}
+			after, err := store.List[iam.AccountAlias](t.Context(), sb)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(after) != len(before) {
+				t.Fatal("listing deleted a record")
+			}
+			for i, v := range before {
+				if after[i].Version != v.Version {
+					t.Fatal("listing modified a stored or live-create record")
+				}
+			}
+		})
 	}
 }
 
