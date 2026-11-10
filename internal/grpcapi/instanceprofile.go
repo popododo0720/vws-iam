@@ -184,18 +184,6 @@ const (
 	MaxInstanceProfilePageSize     = MaxListPageSize
 )
 
-// instanceProfilePage is one page of ListInstanceProfilesForRole: the
-// profiles that hold Role, ordered by case-folded name. Role is the role
-// as stored, which every listed profile holds (an instance profile holds
-// at most one role), so a caller can render each profile's Roles. When
-// IsTruncated is set, Marker continues the listing.
-type instanceProfilePage struct {
-	Profiles    []iam.InstanceProfile
-	Role        iam.Role
-	IsTruncated bool
-	Marker      string
-}
-
 // listInstanceProfilesForRole is IAM ListInstanceProfilesForRole: the
 // instance profiles of project pid that hold role roleName, in pages.
 //
@@ -210,60 +198,66 @@ type instanceProfilePage struct {
 // Profiles are ordered by case-folded name, so pages are deterministic
 // and a marker (the last name of the previous page) continues after that
 // name even when profiles are created or deleted in between: every
-// profile that exists for the whole listing is returned once. The call
-// only reads; PathPrefix does not apply, as AWS has none here.
-// Authorization (iam:ListInstanceProfilesForRole) is console-api's, as
-// for the other IAM reads.
-//
-// TODO(#95): serve this as an RPC once vws-proto carries it
-// (popododo0720/vws-proto#120).
+// profile that exists for the whole listing is returned once. Each
+// profile is returned as GetInstanceProfile returns it, with the role
+// as read. The call only reads: one role read and one profile listing;
+// PathPrefix does not apply, as AWS has none here. Authorization
+// (iam:ListInstanceProfilesForRole) is console-api's, as for the other
+// IAM reads.
 func (s *Server) listInstanceProfilesForRole(
 	ctx context.Context, pid, roleName, marker string, maxItems int,
-) (instanceProfilePage, error) {
+) (instanceProfileListing, error) {
 	if !iam.ValidProject(pid) {
-		return instanceProfilePage{}, invalidID("project " + quote(pid) + " is not a project id")
+		return instanceProfileListing{}, invalidID("project " + quote(pid) + " is not a project id")
 	}
 	if !iam.ValidName(roleName) {
-		return instanceProfilePage{}, invalidSpec("roleName must be 1 to 64 characters of [\\w+=,.@-]")
+		return instanceProfileListing{}, invalidSpec("roleName must be 1 to 64 characters of [\\w+=,.@-]")
 	}
 	maxItems, err := instanceProfilePageSize(maxItems)
 	if err != nil {
-		return instanceProfilePage{}, err
+		return instanceProfileListing{}, err
 	}
 	after, err := decodeMarker(marker)
 	if err != nil {
-		return instanceProfilePage{}, err
+		return instanceProfileListing{}, err
 	}
 	p := s.project(pid)
 	r, err := store.Get[iam.Role](ctx, p.b, roleName)
 	if errors.Is(err, store.ErrNotFound) {
-		return instanceProfilePage{}, notFound("The role with name " + roleName + " cannot be found.")
+		return instanceProfileListing{}, notFound("The role with name " + roleName + " cannot be found.")
 	}
 	if err != nil {
-		return instanceProfilePage{}, toStatus(ctx, err)
+		return instanceProfileListing{}, toStatus(ctx, err)
 	}
 	all, err := store.List[iam.InstanceProfile](ctx, p.b)
 	if err != nil {
-		return instanceProfilePage{}, toStatus(ctx, err)
+		return instanceProfileListing{}, toStatus(ctx, err)
 	}
 	role := store.Fold(r.Object.Name)
-	var held []iam.InstanceProfile
+	var held []store.Versioned[iam.InstanceProfile]
 	for _, v := range all {
 		if after != "" && store.Fold(v.Object.Name) <= after {
 			continue
 		}
 		if slices.ContainsFunc(v.Object.Roles, func(n string) bool { return store.Fold(n) == role }) {
-			held = append(held, v.Object)
+			held = append(held, v)
 		}
 	}
-	out := instanceProfilePage{Role: r.Object}
-	out.Profiles, out.IsTruncated, out.Marker = pageInstanceProfiles(held, maxItems)
+	page, truncated, next := pageByFoldedName(held,
+		func(v store.Versioned[iam.InstanceProfile]) string { return v.Object.Name }, maxItems)
+	out := instanceProfileListing{IsTruncated: truncated, Marker: next}
+	for _, v := range page {
+		out.Profiles = append(out.Profiles, instanceProfileView{
+			Profile: v.Object, Version: v.Version, ARN: iam.InstanceProfileARN(p.id, v.Object),
+			Roles: []store.Versioned[iam.Role]{r},
+		})
+	}
 	return out, nil
 }
 
-// instanceProfileListing is one page of ListInstanceProfiles: the
-// profiles whose path starts with the PathPrefix, ordered by case-folded
-// name, each as GetInstanceProfile returns it (the version read, its ARN
+// instanceProfileListing is one page of ListInstanceProfiles or
+// ListInstanceProfilesForRole: the profiles that match, ordered by
+// case-folded name, each as GetInstanceProfile returns it (the version read, its ARN
 // and the stored roles it names; a name with no stored role, a role
 // deleted while in the profile, #234, is left out). When IsTruncated is
 // set, Marker continues the listing.
@@ -379,14 +373,6 @@ func profileRoles(
 // instanceProfilePageSize returns the page size of an instance profile
 // listing for maxItems (see listPageSize).
 func instanceProfilePageSize(maxItems int) (int, error) { return listPageSize(maxItems) }
-
-// pageInstanceProfiles orders ps by case-folded name, whatever order the
-// backend listed them in, and returns the first n of them. When more
-// remain, truncated is set and marker continues after the last one
-// returned (see pageByFoldedName).
-func pageInstanceProfiles(ps []iam.InstanceProfile, n int) (page []iam.InstanceProfile, truncated bool, marker string) {
-	return pageByFoldedName(ps, func(p iam.InstanceProfile) string { return p.Name }, n)
-}
 
 // decodeMarker returns the case-folded profile name an instance profile
 // listing marker continues after; "" for no marker (see
@@ -598,6 +584,30 @@ func (s *Server) ListInstanceProfiles(
 	}
 	p := s.project(pid)
 	out := &iamv1.ListInstanceProfilesResponse{NextPageToken: pg.Marker}
+	for _, v := range pg.Profiles {
+		out.InstanceProfiles = append(out.InstanceProfiles, p.instanceProfileProto(v))
+	}
+	return out, nil
+}
+
+// ListInstanceProfilesForRole is IAM ListInstanceProfilesForRole over
+// gRPC (#95): the instance profiles of parent that hold role_name,
+// through listInstanceProfilesForRole. page_size is MaxItems and
+// page_token the Marker; next_page_token is set exactly when the page is
+// truncated.
+func (s *Server) ListInstanceProfilesForRole(
+	ctx context.Context, req *iamv1.ListInstanceProfilesForRoleRequest,
+) (*iamv1.ListInstanceProfilesForRoleResponse, error) {
+	pid, err := parent(req.GetParent())
+	if err != nil {
+		return nil, err
+	}
+	pg, err := s.listInstanceProfilesForRole(ctx, pid, req.GetRoleName(), req.GetPageToken(), int(req.GetPageSize()))
+	if err != nil {
+		return nil, err
+	}
+	p := s.project(pid)
+	out := &iamv1.ListInstanceProfilesForRoleResponse{NextPageToken: pg.Marker}
 	for _, v := range pg.Profiles {
 		out.InstanceProfiles = append(out.InstanceProfiles, p.instanceProfileProto(v))
 	}

@@ -14,6 +14,7 @@ import (
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
+	"github.com/popododo0720/vws-iam/internal/store"
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
 )
 
@@ -273,6 +274,172 @@ func TestListInstanceProfilesRPCErrors(t *testing.T) {
 		got, err := listProfilesRPC(t, fe, &iamv1.ListInstanceProfilesRequest{Parent: parentName})
 		if status.Code(err) != codes.Internal || strings.Contains(err.Error(), "backend down") || got != nil {
 			t.Fatalf("store failure on %s: %v, %v; want a bare INTERNAL and no page", k, got, err)
+		}
+	}
+}
+
+func profilesForRoleRPC(
+	t *testing.T, e *env, req *iamv1.ListInstanceProfilesForRoleRequest,
+) (*iamv1.ListInstanceProfilesForRoleResponse, error) {
+	t.Helper()
+	return e.profiles.ListInstanceProfilesForRole(t.Context(), req)
+}
+
+// TestListInstanceProfilesForRoleRPC:
+// InstanceProfileService.ListInstanceProfilesForRole lists the profiles
+// that hold role_name, in any case, ordered by case-folded name, each
+// exactly as GetInstanceProfile returns it (envelope, etag, path, ARN and
+// the role as GetRole returns it); page_size bounds a page and
+// next_page_token, set only on a truncated page, continues it until every
+// profile is listed once. A second server on the same store (another
+// replica, or this one restarted) gives the same answer, and listing
+// writes nothing. On both store backends.
+func TestListInstanceProfilesForRoleRPC(t *testing.T) {
+	for _, bk := range renameBackends {
+		t.Run(bk.name, func(t *testing.T) {
+			b := bk.open()
+			now := time.Now().UTC()
+			e := newEnvOn(t, b, &now)
+			seedRole(t, e, "S3Access")
+			seedRole(t, e, "Other")
+			seedProfileAt(t, b, "web", "/app/", "S3Access")
+			seedProfileAt(t, b, "Batch", "/app/batch/", "s3access")
+			seedProfileAt(t, b, "api", "/", "S3ACCESS")
+			seedProfileAt(t, b, "db", "/", "Other")
+			seedProfileAt(t, b, "empty", "/")
+			before := storedProfile(t, b, "web")
+			wantNames := []string{
+				parentName + "/instanceProfiles/api", parentName + "/instanceProfiles/Batch",
+				parentName + "/instanceProfiles/web",
+			}
+
+			for _, replica := range []*env{e, newEnvOn(t, b, &now)} {
+				role, err := replica.roles.GetRole(t.Context(), &iamv1.GetRoleRequest{Name: parentName + "/roles/S3Access"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				got, err := profilesForRoleRPC(t, replica, &iamv1.ListInstanceProfilesForRoleRequest{
+					Parent: parentName, RoleName: "s3ACCESS",
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got.GetNextPageToken() != "" {
+					t.Fatalf("next_page_token = %q, want a complete page", got.GetNextPageToken())
+				}
+				var names []string
+				for _, ip := range got.GetInstanceProfiles() {
+					names = append(names, ip.GetName())
+					want, err := getProfileRPC(t, replica, ip.GetName())
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !proto.Equal(ip, want) {
+						t.Fatalf("listed %v, want it as GetInstanceProfile returns it: %v", ip, want)
+					}
+					if rs := ip.GetStatus().GetRoles(); len(rs) != 1 || !proto.Equal(rs[0], role) {
+						t.Fatalf("%s roles = %v, want S3Access as GetRole returns it: %v", ip.GetName(), rs, role)
+					}
+				}
+				if !slices.Equal(names, wantNames) {
+					t.Fatalf("listed %q, want %q", names, wantNames)
+				}
+				if web := got.GetInstanceProfiles()[2]; web.GetEtag() != before.Version {
+					t.Fatalf("web etag = %q, want the version read %q", web.GetEtag(), before.Version)
+				}
+
+				var paged []string
+				token := ""
+				for pages := 1; ; pages++ {
+					pg, err := profilesForRoleRPC(t, replica, &iamv1.ListInstanceProfilesForRoleRequest{
+						Parent: parentName, RoleName: "S3Access", PageSize: 1, PageToken: token,
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if len(pg.GetInstanceProfiles()) != 1 {
+						t.Fatalf("page %d holds %d profiles, want 1", pages, len(pg.GetInstanceProfiles()))
+					}
+					paged = append(paged, pg.GetInstanceProfiles()[0].GetName())
+					if token = pg.GetNextPageToken(); token == "" {
+						break
+					}
+					if pages > 3 {
+						t.Fatalf("still truncated after %d pages: %q", pages, paged)
+					}
+				}
+				if !slices.Equal(paged, wantNames) {
+					t.Fatalf("paged %q, want %q", paged, wantNames)
+				}
+			}
+			if again := storedProfile(t, b, "web"); again.Version != before.Version {
+				t.Fatalf("listing wrote the profile: version %q, want %q", again.Version, before.Version)
+			}
+		})
+	}
+}
+
+// TestListInstanceProfilesForRoleRPCErrors: a parent that is not
+// projects/{project}, a bad role_name, a page_size outside 1 to 1000 or a
+// page_token character outside [ -ÿ] is INVALID_ARGUMENT
+// (ValidationError); a page_token this server did not return is
+// INVALID_ARGUMENT (InvalidInput); an unknown role is NOT_FOUND
+// (NoSuchEntity), also when a profile still names it; a role in no
+// profile is an empty, complete page; a store failure on the role or the
+// profiles is INTERNAL without backend detail, never a page.
+func TestListInstanceProfilesForRoleRPCErrors(t *testing.T) {
+	b := memstore.New()
+	now := time.Now().UTC()
+	e := newEnvOn(t, b, &now)
+	seedRole(t, e, "Known")
+	seedRole(t, e, "Lonely")
+	seedProfileAt(t, b, "web", "/", "Known")
+	seedProfileAt(t, b, "stale", "/", "Gone")
+
+	for _, p := range []string{"", proj, "projects/", "projects/Bad_Project", parentName + "/roles"} {
+		_, err := profilesForRoleRPC(t, e, &iamv1.ListInstanceProfilesForRoleRequest{Parent: p, RoleName: "Known"})
+		wantAWS(t, err, codes.InvalidArgument, "ValidationError")
+	}
+	for _, req := range []*iamv1.ListInstanceProfilesForRoleRequest{
+		{RoleName: ""},
+		{RoleName: strings.Repeat("r", 65)},
+		{RoleName: "a/b"},
+		{RoleName: "rôle"},
+		{RoleName: "Known", PageSize: -1},
+		{RoleName: "Known", PageSize: 1001},
+		{RoleName: "Known", PageToken: "Ā"},
+		{RoleName: "Known", PageToken: "a\tb"},
+	} {
+		req.Parent = parentName
+		_, err := profilesForRoleRPC(t, e, req)
+		wantAWS(t, err, codes.InvalidArgument, "ValidationError")
+	}
+	for _, tok := range []string{"!!!", "V2Vi"} {
+		_, err := profilesForRoleRPC(t, e, &iamv1.ListInstanceProfilesForRoleRequest{
+			Parent: parentName, RoleName: "Known", PageToken: tok,
+		})
+		wantAWS(t, err, codes.InvalidArgument, "InvalidInput")
+	}
+	for _, r := range []string{"missing", "Gone"} {
+		_, err := profilesForRoleRPC(t, e, &iamv1.ListInstanceProfilesForRoleRequest{Parent: parentName, RoleName: r})
+		wantAWS(t, err, codes.NotFound, "NoSuchEntity")
+	}
+	got, err := profilesForRoleRPC(t, e, &iamv1.ListInstanceProfilesForRoleRequest{Parent: parentName, RoleName: "Lonely"})
+	if err != nil || len(got.GetInstanceProfiles()) != 0 || got.GetNextPageToken() != "" {
+		t.Fatalf("role in no profile: %v, %v; want an empty, complete page", got, err)
+	}
+
+	down := errors.New("backend down")
+	for name, fb := range map[string]store.Backend{
+		"role get":     failingGet{memstore.New(), iam.KindRole, down},
+		"profile list": failingList{memstore.New(), iam.KindInstanceProfile, down},
+	} {
+		fe := newEnvOn(t, fb, &now)
+		seedRole(t, fe, "r")
+		seedInstanceProfile(t, fb, "web", "r")
+		got, err := profilesForRoleRPC(t, fe, &iamv1.ListInstanceProfilesForRoleRequest{Parent: parentName, RoleName: "r"})
+		if status.Code(err) != codes.Internal || strings.Contains(err.Error(), "backend down") || got != nil {
+			t.Fatalf("store failure on %s: %v, %v; want a bare INTERNAL and no page", name, got, err)
 		}
 	}
 }

@@ -137,14 +137,11 @@ func (s *Server) AddProfileRole(ctx context.Context, project, profileName, roleN
 	return s.addRoleToInstanceProfile(ctx, project, profileName, roleName)
 }
 
-// InstanceProfilePage is one page of ListInstanceProfilesForRole.
-type InstanceProfilePage = instanceProfilePage
-
-// ProfilesForRole is IAM ListInstanceProfilesForRole, which this server
-// does not serve over gRPC yet (#95).
+// ProfilesForRole is the service layer of IAM ListInstanceProfilesForRole
+// (#95), which InstanceProfileService.ListInstanceProfilesForRole serves.
 func (s *Server) ProfilesForRole(
 	ctx context.Context, project, roleName, marker string, maxItems int,
-) (InstanceProfilePage, error) {
+) (InstanceProfileListing, error) {
 	return s.listInstanceProfilesForRole(ctx, project, roleName, marker, maxItems)
 }
 
