@@ -85,15 +85,15 @@ func TestSimulate(t *testing.T) {
 		{"deny lists only denies", put, ns(all, deny), nil, explicit, strs("deny#1"), nil, false, false},
 		{
 			"condition key missing", get, ns(all, deny), nil,
-			allowed, strs("all#0"), strs("aws:securetransport"), false, false,
+			allowed, strs("all#0"), strs("aws:SecureTransport"), false, false,
 		},
 		{
 			"every missing key once", req("s3:PutObject", "*", ipCtx), ns(mfa, mfa), nil,
-			implicit, nil, strs("aws:multifactorauthpresent"), false, false,
+			implicit, nil, strs("aws:MultiFactorAuthPresent"), false, false,
 		},
 		{
 			"missing keys sorted", req("s3:PutObject", "*", nil), ns(mfa), nil,
-			implicit, nil, strs("aws:multifactorauthpresent", "aws:sourceip"), false, false,
+			implicit, nil, strs("aws:MultiFactorAuthPresent", "aws:SourceIp"), false, false,
 		},
 		{
 			"unrelated action reports no key", req("ec2:RunInstances", "*", nil), ns(deny), nil,
@@ -101,7 +101,7 @@ func TestSimulate(t *testing.T) {
 		},
 		{
 			"condition variables missing", req("s3:ListBucket", "*", prefixCtx), ns(prefix), nil,
-			implicit, nil, strs("aws:principaltag/team", "aws:username"), false, false,
+			implicit, nil, strs("aws:PrincipalTag/team", "aws:username"), false, false,
 		},
 		{
 			"resource variables missing", req("s3:GetObject", "arn:vws:s3:::home/bob/AIDA1/k", nil), ns(home), nil,

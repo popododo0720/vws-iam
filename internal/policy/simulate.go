@@ -2,7 +2,6 @@ package policy
 
 import (
 	"slices"
-	"strings"
 )
 
 // Simulator decisions, the AWS EvalDecision values.
@@ -34,7 +33,7 @@ type Simulation struct {
 	// and policy variables in condition values of statements that match
 	// the resource, and policy variables in a Resource pattern that could
 	// match it once given. Each once, sorted (order in a document is not
-	// kept); keys are case-insensitive, so they are reported lowercase.
+	// kept); keys keep their original spelling.
 	Missing []string
 	// Boundary reports whether a permissions boundary was given and,
 	// if so, AllowedByBoundary whether it allows the request.
@@ -78,7 +77,7 @@ func Simulate(r Request, identity []Named, boundary []Named) Simulation {
 func matches(set []Named, r Request, missing *[]string) (deny, allow []MatchedStatement) {
 	add := func(keys ...string) {
 		for _, k := range keys {
-			if !slices.Contains(*missing, k) {
+			if !slices.ContainsFunc(*missing, func(existing string) bool { return FoldKey(existing) == FoldKey(k) }) {
 				*missing = append(*missing, k)
 			}
 		}
@@ -99,7 +98,7 @@ func matches(set []Named, r Request, missing *[]string) (deny, allow []MatchedSt
 			}
 			for _, c := range s.Conditions {
 				if _, ok := r.value(c.Key); !ok {
-					add(strings.ToLower(c.Key))
+					add(c.Key)
 				}
 				for _, v := range c.Values {
 					if _, keys := r.unresolved(v); vars {
