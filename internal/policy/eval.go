@@ -248,7 +248,7 @@ func (s Statement) matchResource(r Request, vars bool) bool {
 	}
 	m := false
 	for _, p := range s.Resources {
-		if p, ok := r.expand(p, vars); ok && Match(p, r.Resource, false) {
+		if p, ok := r.expand(p, vars); ok && resourceMatch(p, r.Resource) {
 			m = true
 			break
 		}
@@ -269,8 +269,9 @@ func (s Statement) matchPrincipal(r Request) bool {
 			case typ == "Service":
 				m = m || (r.Service != "" && v == r.Service)
 			case typ == "Federated":
-				m = m || (r.Federated != "" && v == r.Federated)
+				m = m || (r.Federated != "" && vwsARN(v) == r.Federated)
 			case typ == "AWS":
+				v := vwsARN(v)
 				root := "arn:" + Partition + ":iam::" + r.Account + ":root"
 				m = m || (r.Principal != "" && v == r.Principal) || (r.Account != "" && (v == r.Account || v == root))
 			}
@@ -281,6 +282,22 @@ func (s Statement) matchPrincipal(r Request) bool {
 
 // Partition is the ARN partition used for account roots.
 const Partition = "vws"
+
+// vwsARN reads a document ARN in the aws partition as the same ARN in the
+// vws partition, so a document copied from AWS applies (and its Deny does
+// not fail open). Other partitions stay as written and match nothing.
+func vwsARN(s string) string {
+	if rest, ok := strings.CutPrefix(s, "arn:aws:"); ok {
+		return "arn:" + Partition + ":" + rest
+	}
+	return s
+}
+
+// resourceMatch reports whether a Resource or NotResource pattern from a
+// document matches the request's resource ARN.
+func resourceMatch(pattern, resource string) bool {
+	return Match(vwsARN(pattern), resource, false)
+}
 
 func (c Condition) eval(r Request, vars bool) bool {
 	o := operators[c.Op]
