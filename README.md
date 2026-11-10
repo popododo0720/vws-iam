@@ -81,3 +81,24 @@ golangci-lint run
 ```
 
 See AGENTS.md for the layout and rules, and #1 for the design.
+
+## Policy simulation compatibility gaps
+
+`SimulateCustomPolicy` currently simulates only the supplied identity policies
+and optional permissions boundary. VWS does not model AWS Organizations,
+organizational units, service control policies (SCPs), or resource control
+policies (RCPs). Consequently, `OrderedOrganizationPolicyInputList` is not
+accepted, and results do not claim an `OrganizationsDecisionDetail`. An allow
+in this simulator does not establish that an AWS organization would allow the
+same request. Do not discard an organization's policy inputs and present the
+result as an equivalent evaluation.
+
+The AWS API accepts up to seven ordered SCP levels. Supporting that input in
+VWS requires evaluation at each level, explicit-deny precedence, and an allow
+at every level, including the resource scoping and conditions of each policy.
+That work remains part of #257, alongside resource-policy evaluation,
+resource ownership, EC2 scenario validation, and matched resource statements.
+The current service layer refuses a supplied `ResourcePolicy` or
+`ResourceHandlingOption` with `InvalidInput` rather than ignoring it.
+
+Reference: [AWS SimulateCustomPolicy](https://docs.aws.amazon.com/IAM/latest/APIReference/API_SimulateCustomPolicy.html).
