@@ -38,10 +38,6 @@ func TestUnservedRPCsAreUnimplemented(t *testing.T) {
 	}
 	ctx := t.Context()
 	for name, call := range map[string]func() error{
-		"ListRoleTags": func() error {
-			_, err := e.roles.ListRoleTags(ctx, &iamv1.ListRoleTagsRequest{})
-			return err
-		},
 		"TagRole": func() error {
 			_, err := e.roles.TagRole(ctx, &iamv1.TagRoleRequest{})
 			return err
