@@ -40,34 +40,43 @@ func do[T any](ctx context.Context, r retrying, f func() (T, error)) (T, error) 
 	}
 }
 
-func (r retrying) Create(ctx context.Context, kind iam.Kind, key string, spec []byte) (string, error) {
+func (r retrying) Create(ctx context.Context, kind iam.Kind, key string, spec []byte) (_ string, err error) {
+	defer addErrorContext("retry create", kind, &err)
 	return do(ctx, r, func() (string, error) { return r.b.Create(ctx, kind, key, spec) })
 }
 
-func (r retrying) Update(ctx context.Context, kind iam.Kind, key string, spec []byte, version string) (string, error) {
+func (r retrying) Update(
+	ctx context.Context, kind iam.Kind, key string, spec []byte, version string,
+) (_ string, err error) {
+	defer addErrorContext("retry update", kind, &err)
 	return do(ctx, r, func() (string, error) { return r.b.Update(ctx, kind, key, spec, version) })
 }
 
-func (r retrying) Get(ctx context.Context, kind iam.Kind, key string) (Entry, error) {
+func (r retrying) Get(ctx context.Context, kind iam.Kind, key string) (_ Entry, err error) {
+	defer addErrorContext("retry get", kind, &err)
 	return do(ctx, r, func() (Entry, error) { return r.b.Get(ctx, kind, key) })
 }
 
-func (r retrying) List(ctx context.Context, kind iam.Kind) ([]Entry, error) {
+func (r retrying) List(ctx context.Context, kind iam.Kind) (_ []Entry, err error) {
+	defer addErrorContext("retry list", kind, &err)
 	return do(ctx, r, func() ([]Entry, error) { return r.b.List(ctx, kind) })
 }
 
-func (r retrying) Delete(ctx context.Context, kind iam.Kind, key, version string) error {
-	_, err := do(ctx, r, func() (struct{}, error) { return struct{}{}, r.b.Delete(ctx, kind, key, version) })
+func (r retrying) Delete(ctx context.Context, kind iam.Kind, key, version string) (err error) {
+	defer addErrorContext("retry delete", kind, &err)
+	_, err = do(ctx, r, func() (struct{}, error) { return struct{}{}, r.b.Delete(ctx, kind, key, version) })
 	return err
 }
 
 func (r retrying) UpdateIf(
 	ctx context.Context, kind iam.Kind, key string, spec []byte, version string, pre Pre,
-) (string, error) {
+) (_ string, err error) {
+	defer addErrorContext("retry update if", kind, &err)
 	return do(ctx, r, func() (string, error) { return r.b.UpdateIf(ctx, kind, key, spec, version, pre) })
 }
 
-func (r retrying) DeleteIf(ctx context.Context, kind iam.Kind, key, version string, pre Pre) error {
-	_, err := do(ctx, r, func() (struct{}, error) { return struct{}{}, r.b.DeleteIf(ctx, kind, key, version, pre) })
+func (r retrying) DeleteIf(ctx context.Context, kind iam.Kind, key, version string, pre Pre) (err error) {
+	defer addErrorContext("retry delete if", kind, &err)
+	_, err = do(ctx, r, func() (struct{}, error) { return struct{}{}, r.b.DeleteIf(ctx, kind, key, version, pre) })
 	return err
 }

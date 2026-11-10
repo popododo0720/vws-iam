@@ -125,7 +125,8 @@ func frozen(obj iam.Object) error {
 
 // Create validates and stores a new object. An object with a rename in
 // flight is refused with ErrRenaming (CreateMarked writes one).
-func Create[T iam.Object](ctx context.Context, b Backend, obj T) (string, error) {
+func Create[T iam.Object](ctx context.Context, b Backend, obj T) (_ string, err error) {
+	defer addErrorContext("create", obj.Kind(), &err)
 	if err := frozen(obj); err != nil {
 		return "", err
 	}
@@ -139,7 +140,8 @@ func Create[T iam.Object](ctx context.Context, b Backend, obj T) (string, error)
 // Update validates and replaces an object read at version. An object
 // read with a rename in flight is refused with ErrRenaming: a write that
 // read it before the rename began fails its version check instead.
-func Update[T iam.Object](ctx context.Context, b Backend, obj T, version string) (string, error) {
+func Update[T iam.Object](ctx context.Context, b Backend, obj T, version string) (_ string, err error) {
+	defer addErrorContext("update", obj.Kind(), &err)
 	if err := frozen(obj); err != nil {
 		return "", err
 	}
@@ -152,7 +154,8 @@ func Update[T iam.Object](ctx context.Context, b Backend, obj T, version string)
 
 // UpdateIf validates and replaces an object read at version, only while
 // pre holds (Backend.UpdateIf).
-func UpdateIf[T iam.Object](ctx context.Context, b Backend, obj T, version string, pre Pre) (string, error) {
+func UpdateIf[T iam.Object](ctx context.Context, b Backend, obj T, version string, pre Pre) (_ string, err error) {
+	defer addErrorContext("update if", obj.Kind(), &err)
 	if err := frozen(obj); err != nil {
 		return "", err
 	}
@@ -165,7 +168,8 @@ func UpdateIf[T iam.Object](ctx context.Context, b Backend, obj T, version strin
 
 // CreateMarked is Create without the rename guard. Only the rename
 // coordinator calls it, to write an object that carries rename markers.
-func CreateMarked[T iam.Renamable](ctx context.Context, b Backend, obj T) (string, error) {
+func CreateMarked[T iam.Renamable](ctx context.Context, b Backend, obj T) (_ string, err error) {
+	defer addErrorContext("create marked", obj.Kind(), &err)
 	spec, err := encode(obj)
 	if err != nil {
 		return "", err
@@ -175,7 +179,8 @@ func CreateMarked[T iam.Renamable](ctx context.Context, b Backend, obj T) (strin
 
 // UpdateMarked is Update without the rename guard. Only the rename
 // coordinator calls it.
-func UpdateMarked[T iam.Renamable](ctx context.Context, b Backend, obj T, version string) (string, error) {
+func UpdateMarked[T iam.Renamable](ctx context.Context, b Backend, obj T, version string) (_ string, err error) {
+	defer addErrorContext("update marked", obj.Kind(), &err)
 	spec, err := encode(obj)
 	if err != nil {
 		return "", err
@@ -185,7 +190,10 @@ func UpdateMarked[T iam.Renamable](ctx context.Context, b Backend, obj T, versio
 
 // UpdateMarkedIf is UpdateIf without the rename guard. Only the rename
 // coordinator calls it.
-func UpdateMarkedIf[T iam.Renamable](ctx context.Context, b Backend, obj T, version string, pre Pre) (string, error) {
+func UpdateMarkedIf[T iam.Renamable](
+	ctx context.Context, b Backend, obj T, version string, pre Pre,
+) (_ string, err error) {
+	defer addErrorContext("update marked if", obj.Kind(), &err)
 	spec, err := encode(obj)
 	if err != nil {
 		return "", err
@@ -224,8 +232,9 @@ func Visible[T iam.Renamable](vs []Versioned[T]) []Versioned[T] {
 }
 
 // Get reads one object.
-func Get[T iam.Object](ctx context.Context, b Backend, key string) (Versioned[T], error) {
+func Get[T iam.Object](ctx context.Context, b Backend, key string) (_ Versioned[T], err error) {
 	var zero T
+	defer addErrorContext("get", zero.Kind(), &err)
 	e, err := b.Get(ctx, zero.Kind(), key)
 	if err != nil {
 		return Versioned[T]{}, err
@@ -234,8 +243,9 @@ func Get[T iam.Object](ctx context.Context, b Backend, key string) (Versioned[T]
 }
 
 // List reads every object of T's kind.
-func List[T iam.Object](ctx context.Context, b Backend) ([]Versioned[T], error) {
+func List[T iam.Object](ctx context.Context, b Backend) (_ []Versioned[T], err error) {
 	var zero T
+	defer addErrorContext("list", zero.Kind(), &err)
 	es, err := b.List(ctx, zero.Kind())
 	if err != nil {
 		return nil, err
@@ -253,8 +263,11 @@ func List[T iam.Object](ctx context.Context, b Backend) ([]Versioned[T], error) 
 
 // ListPage reads one page of T's kind. A Backend without Pager returns
 // everything as one page.
-func ListPage[T iam.Object](ctx context.Context, b Backend, limit int64, cont string) ([]Versioned[T], string, error) {
+func ListPage[T iam.Object](
+	ctx context.Context, b Backend, limit int64, cont string,
+) (_ []Versioned[T], _ string, err error) {
 	var zero T
+	defer addErrorContext("list page", zero.Kind(), &err)
 	p, ok := b.(Pager)
 	if !ok {
 		if cont != "" {
@@ -279,15 +292,17 @@ func ListPage[T iam.Object](ctx context.Context, b Backend, limit int64, cont st
 }
 
 // Delete removes an object; version may be empty to skip the check.
-func Delete[T iam.Object](ctx context.Context, b Backend, key, version string) error {
+func Delete[T iam.Object](ctx context.Context, b Backend, key, version string) (err error) {
 	var zero T
+	defer addErrorContext("delete", zero.Kind(), &err)
 	return b.Delete(ctx, zero.Kind(), key, version)
 }
 
 // DeleteIf removes an object read at version, only while pre holds
 // (Backend.DeleteIf).
-func DeleteIf[T iam.Object](ctx context.Context, b Backend, key, version string, pre Pre) error {
+func DeleteIf[T iam.Object](ctx context.Context, b Backend, key, version string, pre Pre) (err error) {
 	var zero T
+	defer addErrorContext("delete if", zero.Kind(), &err)
 	return b.DeleteIf(ctx, zero.Kind(), key, version, pre)
 }
 
@@ -326,23 +341,25 @@ func conflictDelay(n int) time.Duration {
 // reads. A context that ends during a write keeps only its own error:
 // the write may have been applied.
 func Mutate[T iam.Object](ctx context.Context, b Backend, key string, fn func(*T) error) (T, error) {
-	return mutate(ctx, b, key, fn, mutateRetries)
+	return mutate(ctx, b, key, fn, mutateRetries, "mutate")
 }
 
 // MutateWhileAlive is Mutate without the retry limit: it retries version
 // conflicts until it succeeds or ctx ends, for a write that must not be
 // refused under a burst (#48, #51).
 func MutateWhileAlive[T iam.Object](ctx context.Context, b Backend, key string, fn func(*T) error) (T, error) {
-	return mutate(ctx, b, key, fn, -1)
+	return mutate(ctx, b, key, fn, -1, "mutate while alive")
 }
 
 // mutate is Mutate with retries retries; a negative retries has no limit.
-func mutate[T iam.Object](ctx context.Context, b Backend, key string, fn func(*T) error, retries int) (T, error) {
+func mutate[T iam.Object](
+	ctx context.Context, b Backend, key string, fn func(*T) error, retries int, operation string,
+) (T, error) {
 	for attempt := 0; ; attempt++ {
 		cur, err := Get[T](ctx, b, key)
 		if err != nil {
 			var zero T
-			return zero, lostRace(ctx, attempt, err)
+			return zero, contextualError(operation, zero.Kind(), lostRace(ctx, attempt, err))
 		}
 		if err := fn(&cur.Object); err != nil {
 			var zero T
@@ -350,10 +367,11 @@ func mutate[T iam.Object](ctx context.Context, b Backend, key string, fn func(*T
 		}
 		_, err = Update(ctx, b, cur.Object, cur.Version)
 		if !errors.Is(err, ErrConflict) || attempt == retries {
-			return cur.Object, err
+			return cur.Object, contextualError(operation, cur.Object.Kind(), err)
 		}
 		if werr := sleep(ctx, conflictDelay(attempt)); werr != nil {
-			return cur.Object, fmt.Errorf("%w (stopped retrying: %w)", err, werr)
+			return cur.Object, contextualError(operation, cur.Object.Kind(),
+				fmt.Errorf("%w (stopped retrying: %w)", err, werr))
 		}
 	}
 }

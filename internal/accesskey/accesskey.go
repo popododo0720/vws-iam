@@ -350,6 +350,10 @@ func (s *Service) List(ctx context.Context, user string) ([]iam.AccessKey, error
 func (s *Service) owned(ctx context.Context, user, id string) (store.Versioned[iam.AccessKey], error) {
 	k, err := store.Get[iam.AccessKey](ctx, s.b, id)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			// Match the ownership refusal below, regardless of backend context.
+			err = store.ErrNotFound
+		}
 		return k, fmt.Errorf("access key %s: %w", id, err)
 	}
 	if k.Object.Root || k.Object.Status == iam.KeyPending || store.Fold(k.Object.UserName) != store.Fold(user) {
