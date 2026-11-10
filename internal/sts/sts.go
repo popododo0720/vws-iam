@@ -453,6 +453,9 @@ func (s *Service) RevokeSessions(ctx context.Context, kind authz.PrincipalKind, 
 		})
 	case authz.Role:
 		_, err = store.Mutate(ctx, s.b, name, func(r *iam.Role) error {
+			if err := r.CheckMutable(); err != nil {
+				return err
+			}
 			r.SessionsRevokedBefore = later(r.SessionsRevokedBefore, now)
 			r.SessionsRevokeGeneration++
 			return nil

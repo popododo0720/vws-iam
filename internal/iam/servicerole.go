@@ -1,6 +1,10 @@
 package iam
 
-import "regexp"
+import (
+	"errors"
+	"fmt"
+	"regexp"
+)
 
 // ServiceRolePathPrefix is the path prefix of every service-linked role:
 // a role linked to service S has the path /aws-service-role/S/, as in AWS.
@@ -101,4 +105,16 @@ func (l LinkedService) ServiceLinkedRoleName(suffix string) string {
 func ServiceTrustPolicy(service string) string {
 	return `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"` +
 		service + `"},"Action":"sts:AssumeRole"}]}`
+}
+
+// ErrProtectedRole marks a mutation only the linked service can perform.
+var ErrProtectedRole = errors.New("service-linked role is protected")
+
+// CheckMutable protects a service-linked role's permissions and session controls.
+// Description-only updates deliberately do not call it.
+func (r Role) CheckMutable() error {
+	if r.ServiceLinked() {
+		return fmt.Errorf("role %q owned by %s: %w", r.Name, r.LinkedService, ErrProtectedRole)
+	}
+	return nil
 }
