@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 	"time"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
@@ -175,7 +176,7 @@ func (s *Server) createAccountAlias(ctx context.Context, pid, alias string) erro
 			"without a hyphen at either end or two in a row")
 	}
 	p := s.project(pid)
-	a, err := p.storeAccountAlias(ctx, alias)
+	a, err := s.storeAccountAlias(ctx, p, alias)
 	if err != nil {
 		return err
 	}
@@ -195,12 +196,22 @@ func (s *Server) createAccountAlias(ctx context.Context, pid, alias string) erro
 }
 
 // storeAccountAlias returns the stored alias of p named alias, creating
-// it one past the greatest Seq of p unless it exists.
-func (p project) storeAccountAlias(ctx context.Context, alias string) (store.Versioned[iam.AccountAlias], error) {
-	for range 2 {
+// it one past the greatest Seq of p. Reclaiming an unheld record advances
+// its sequence by CAS; a held alias is unchanged.
+func (s *Server) storeAccountAlias(
+	ctx context.Context, p project, alias string,
+) (store.Versioned[iam.AccountAlias], error) {
+	for range maxAliasClaimAttempts {
 		cur, err := store.Get[iam.AccountAlias](ctx, p.b, alias)
-		if !errors.Is(err, store.ErrNotFound) {
+		exists := err == nil
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			return cur, toStatus(ctx, err)
+		}
+		if exists {
+			held, err := s.holdsAccountAlias(ctx, p.id, cur.Object)
+			if err != nil || held {
+				return cur, toStatus(ctx, err)
+			}
 		}
 		if err := ctx.Err(); err != nil {
 			return cur, toStatus(ctx, err) // the caller is gone; write nothing
@@ -213,12 +224,23 @@ func (p project) storeAccountAlias(ctx context.Context, alias string) (store.Ver
 		for _, v := range all {
 			seq = max(seq, v.Object.Seq)
 		}
+		if seq == math.MaxInt64 {
+			return cur, toStatus(ctx, store.ErrConflict)
+		}
 		a := iam.AccountAlias{
 			Meta: iam.Meta{UID: iam.NewUID(), Generation: 1},
 			Name: alias, Created: p.now().UTC(), Seq: seq + 1,
 		}
-		v, err := store.Create(ctx, p.b, a)
-		if !errors.Is(err, store.ErrExists) { // else stored meanwhile: read it
+		var v string
+		if exists {
+			a = cur.Object
+			a.Seq = seq + 1
+			a.Generation++
+			v, err = store.Update(ctx, p.b, a, cur.Version)
+		} else {
+			v, err = store.Create(ctx, p.b, a)
+		}
+		if !errors.Is(err, store.ErrExists) && !errors.Is(err, store.ErrConflict) && !errors.Is(err, store.ErrNotFound) {
 			return store.Versioned[iam.AccountAlias]{Object: a, Version: v}, toStatus(ctx, err)
 		}
 	}
