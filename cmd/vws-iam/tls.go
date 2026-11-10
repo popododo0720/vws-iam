@@ -54,7 +54,7 @@ func loopback(addr string) bool {
 // by the client CA is refused before any RPC.
 func (f tlsFiles) serverConfig() (*tls.Config, error) {
 	if _, err := f.load(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("tls config: %w", err)
 	}
 	return &tls.Config{
 		MinVersion:         tls.VersionTLS12,

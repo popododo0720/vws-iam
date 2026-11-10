@@ -67,7 +67,7 @@ func (c *config) checkStore(endpoints string) error {
 func openEtcd(cfg config) (*etcdstore.Store, error) {
 	tc, err := etcdTLS(cfg.credDir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open store: %w", err)
 	}
 	s, err := etcdstore.Open(cfg.etcdEndpoints, tc, cfg.etcdPrefix)
 	if err != nil {
