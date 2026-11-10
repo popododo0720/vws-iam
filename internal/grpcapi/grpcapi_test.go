@@ -669,6 +669,42 @@ func TestGroupsAndPolicyVersions(t *testing.T) {
 	wantErr(t, err, codes.ResourceExhausted, "QUOTA_EXCEEDED", "LimitExceeded")
 }
 
+// TestDeletePolicyWithVersions checks that DeletePolicy refuses a policy
+// that still has non-default versions (#435).
+func TestDeletePolicyWithVersions(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*"}]}`
+	pol := e.createPolicy(t, ctx, "p", doc)
+	vReq := &iamv1.CreatePolicyVersionRequest{
+		Parent: pol.GetName(), PolicyVersion: &iamv1.PolicyVersion{Spec: &iamv1.PolicyVersionSpec{Document: doc}},
+	}
+	op, err := e.policies.CreatePolicyVersion(ctx, vReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unpack(t, op, &iamv1.PolicyVersion{})
+
+	_, err = e.policies.DeletePolicy(ctx, &iamv1.DeletePolicyRequest{Name: pol.GetName()})
+	wantErr(t, err, codes.FailedPrecondition, "DEPENDENCY_MISSING", "DeleteConflict")
+
+	if _, err := e.policies.GetPolicy(ctx, &iamv1.GetPolicyRequest{Name: pol.GetName()}); err != nil {
+		t.Fatalf("policy must still exist after the refused delete: %v", err)
+	}
+	vs, err := e.policies.ListPolicyVersions(ctx, &iamv1.ListPolicyVersionsRequest{Parent: pol.GetName()})
+	if err != nil || len(vs.GetPolicyVersions()) != 2 {
+		t.Fatalf("versions must still exist after the refused delete: %v %v", vs, err)
+	}
+
+	delReq := &iamv1.DeletePolicyVersionRequest{Name: pol.GetName() + "/versions/v2"}
+	if _, err := e.policies.DeletePolicyVersion(ctx, delReq); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.policies.DeletePolicy(ctx, &iamv1.DeletePolicyRequest{Name: pol.GetName()}); err != nil {
+		t.Fatalf("delete must succeed once only the default version remains: %v", err)
+	}
+}
+
 type flaky struct {
 	longrunningpb.UnimplementedOperationsServer
 	calls int
