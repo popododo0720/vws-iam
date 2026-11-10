@@ -80,7 +80,8 @@ var packageRules = []struct {
 	{"internal/sts", transport, "domain services import no transport"},
 	{"internal/sigv4", func(imp string) bool { return isModule(imp) || transport(imp) }, "SigV4 verification is pure"},
 	{
-		"internal/grpcapi", hasPrefix(module+"/internal/store/kubestore", module+"/internal/store/memstore"),
+		"internal/grpcapi",
+		hasPrefix(module+"/internal/store/kubestore", module+"/internal/store/memstore", module+"/internal/store/etcdstore"),
 		"the server uses the store.Backend contract, not a backend's internals",
 	},
 }
@@ -105,6 +106,7 @@ var ownerRules = []struct {
 	},
 	{hasPrefix("google.golang.org/grpc"), []string{"internal/grpcapi", "cmd/vws-iam"}, "gRPC stays at the edge"},
 	{hasPrefix("k8s.io", "sigs.k8s.io"), []string{"internal/store/kubestore"}, "Kubernetes client types stay in the custom resource store"},
+	{hasPrefix("go.etcd.io"), []string{"internal/store/etcdstore"}, "etcd client types stay in the etcd store"},
 	{hasPrefix("github.com/popododo0720/vws-lib"), []string{"internal/grpcapi", "cmd/vws-iam"}, "observability is wired at the edge"},
 	{func(imp string) bool { return imp == "testing" }, testSupport, "production code does not import testing"},
 }
@@ -212,12 +214,14 @@ func TestArchitectureRules(t *testing.T) {
 		"internal/sts/s.go":                 `package sts; import _ "google.golang.org/grpc"`,
 		"internal/grpcapi/g.go":             `package grpcapi; import _ "` + module + `/internal/store/kubestore"; func f(s S) { s.GetSigningCredential() }`,
 		"internal/widget/k.go":              `package widget; import _ "k8s.io/apimachinery/pkg/types"`,
+		"internal/widget/e.go":              `package widget; import _ "go.etcd.io/etcd/client/v3"`,
 		"internal/widget/l.go":              `package widget; import "log"; var _ = log.Println`,
 		"internal/widget/w.go":              `package widget; import "testing"; var _ testing.TB`,
 		"internal/widget/c.go":              `package widget; func f(s S) { c := s.GetSigningCredential; _ = c }`,
 		"internal/store/storetest/s.go":     `package storetest; import "testing"; var _ testing.TB`,
 		"internal/store/kubestore/k.go":     `package kubestore; import _ "sigs.k8s.io/controller-runtime/pkg/client"`,
 		"internal/store/memstore/m_test.go": `package memstore; import "log"`,
+		"internal/store/etcdstore/e.go":     `package etcdstore; import _ "go.etcd.io/etcd/client/v3"`,
 	} {
 		writeFile(t, filepath.Join(probe, rel), src)
 	}
@@ -238,6 +242,7 @@ func TestArchitectureRules(t *testing.T) {
 		"internal/policy imports google.golang.org/protobuf/proto: wire types stay in grpcapi",
 		"internal/secret imports " + module + "/internal/store: sealing sees only the domain types",
 		"internal/store imports database/sql: no SQL: state lives in custom resources",
+		"internal/widget imports go.etcd.io/etcd/client/v3: etcd client types stay in the etcd store",
 		"internal/widget imports k8s.io/apimachinery/pkg/types: Kubernetes client types stay in the custom resource store",
 		"internal/widget imports log: logs are slog through vws-lib obs",
 		"internal/widget imports testing: production code does not import testing",
