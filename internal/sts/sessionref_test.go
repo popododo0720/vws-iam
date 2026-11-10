@@ -226,7 +226,7 @@ func TestSessionRefHostileInput(t *testing.T) {
 		"dot in body":      ref[:i] + "." + ref[i+1:i+5] + "." + ref[i+5:],
 		"not base64":       ref[:i+1] + "!!!!",
 		"padded":           ref + "=",
-		"over length":      ref[:i+1] + strings.Repeat("A", 5000),
+		"over length":      ref[:i+1] + strings.Repeat("A", 1<<20),
 		"other kek id":     "kek-2." + ref[i+1:],
 		"session token":    role.SessionToken,
 		"secret":           role.Secret,

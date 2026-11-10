@@ -207,9 +207,14 @@ func (s *Server) assumeRole(ctx context.Context, req *iamv1.AssumeRoleRequest, a
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
+	ref, err := p.sts.MintSessionRef(creds.AccessKeyID, creds.SessionToken)
+	if err != nil {
+		return nil, toStatus(ctx, err)
+	}
 	return &iamv1.AssumeRoleResponse{Credentials: credsProto(creds), AssumedRoleUser: &iamv1.Principal{
 		Type: iamv1.PrincipalType_PRINCIPAL_TYPE_ASSUMED_ROLE, Arn: creds.AssumedRoleARN, Project: pid, UniqueId: role.ID + ":" + req.GetRoleSessionName(),
 		Resource: name(pid, "roles", role.Name), SessionName: req.GetRoleSessionName(), MfaAuthenticated: sess.MFA, AuthTime: ts(sess.AuthTime),
+		SessionContext: ref,
 	}}, nil
 }
 

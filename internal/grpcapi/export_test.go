@@ -43,8 +43,9 @@ func (s *Server) UpdateGroupRename(
 }
 
 // AuthenticateRef is Authenticate that also returns the session reference
-// of an STS session, which vws-proto's Principal does not carry yet (#20).
-// It is "" for a long-term key.
+// of an STS session, which an assumed-role Principal carries as its
+// session_context but a user session's does not (#20). It is "" for a
+// long-term key.
 func (s *Server) AuthenticateRef(
 	ctx context.Context, req *iamv1.AuthenticateRequest,
 ) (*iamv1.AuthenticateResponse, string, error) {
@@ -52,7 +53,8 @@ func (s *Server) AuthenticateRef(
 }
 
 // AuthorizeRef is Authorize with the session reference of the STS session
-// behind the principal, which vws-proto does not carry yet (#20).
+// behind the principal, which a user session's Principal does not carry
+// (#20).
 func (s *Server) AuthorizeRef(
 	ctx context.Context, req *iamv1.AuthorizeRequest, ref string,
 ) (*iamv1.AuthorizeResponse, error) {

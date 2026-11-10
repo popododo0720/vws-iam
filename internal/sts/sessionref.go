@@ -15,13 +15,16 @@ import (
 // A session reference lets Authorize ask whether the STS session behind a
 // gateway Principal is still valid (#20). It is what the gateway can carry
 // without the session's secret: the session's identity and the revocation
-// generation it was issued at, sealed under the KEK keyring. The wire field
-// that carries it waits for vws-proto (TODO(#20) in grpcapi).
+// generation it was issued at, and the SAML identity of a SAML session
+// (#202), sealed under the KEK keyring. grpcapi carries it as the
+// Principal's session_context.
 const (
 	refAAD = "sts/session-ref"
 	// maxRefLen bounds a reference before it is decoded. A real one is a
-	// few hundred characters.
-	maxRefLen = 4096
+	// few hundred characters, but a SAML subject is bounded only by the
+	// assertion (MaxSAMLAssertionChars): at most 75,000 decoded bytes, which
+	// JSON escapes to at most 6 each and base64 grows by a third, under 1 MiB.
+	maxRefLen = 1 << 20
 )
 
 // refPayload is the sealed plaintext of a reference: the identity and
@@ -43,6 +46,9 @@ type refPayload struct {
 	// revocation between issue and mint still refuses the reference.
 	RevokeGen *uint64 `json:"rg,omitempty"`
 	Project   string  `json:"project"`
+	// SAML is the session's SAML identity (#202), so Authorize can restore
+	// saml:sub, saml:sub_type and saml:namequalifier.
+	SAML *SAMLIdentity `json:"saml,omitempty"`
 }
 
 // SessionRef is a session as a checked reference describes it. It holds no
@@ -60,7 +66,12 @@ type SessionRef struct {
 	AuthTime    time.Time
 	Expires     time.Time
 	federated   bool
+	saml        *SAMLIdentity
 }
+
+// AddSAMLContext adds the session's saml:sub, saml:sub_type and
+// saml:namequalifier to m; a session without a SAML identity adds none.
+func (r SessionRef) AddSAMLContext(m map[string][]string) { r.saml.addTo(m) }
 
 // UniqueID is the unique id the gateway reports for the session's
 // principal: the project for root, the user's id, or "<role id>:<session
@@ -82,7 +93,7 @@ func (p refPayload) session() session {
 	return session{
 		Kind: p.Kind, Name: p.Name, ARN: p.ARN, MFA: p.MFA, Expires: p.Expires, PrincipalID: p.PrincipalID,
 		IssuedAt: p.IssuedAt, RevokeGen: p.RevokeGen, Project: p.Project, AuthTime: p.AuthTime,
-		RoleID: p.RoleID, SessionName: p.SessionName, Federated: p.Federated,
+		RoleID: p.RoleID, SessionName: p.SessionName, Federated: p.Federated, SAML: p.SAML.clone(),
 	}
 }
 
@@ -103,6 +114,7 @@ func (s *Service) MintSessionRef(accessKeyID, token string) (string, error) {
 		Kind: sess.Kind, Name: sess.Name, ARN: sess.ARN, PrincipalID: sess.PrincipalID, RoleID: sess.RoleID,
 		SessionName: sess.SessionName, MFA: sess.MFA, Federated: sess.Federated, AuthTime: sess.AuthTime,
 		IssuedAt: sess.IssuedAt, Expires: sess.Expires, RevokeGen: sess.RevokeGen, Project: sess.Project,
+		SAML: sess.SAML.clone(),
 	})
 	if err != nil {
 		return "", fmt.Errorf("session reference: %w", err)
@@ -139,6 +151,7 @@ func (s *Service) CheckSessionRef(ctx context.Context, ref string) (_ SessionRef
 	return SessionRef{
 		Project: p.Project, Principal: sess.principal(), PrincipalID: p.PrincipalID, RoleID: p.RoleID,
 		SessionName: p.SessionName, MFA: p.MFA, AuthTime: p.AuthTime, Expires: p.Expires, federated: p.Federated,
+		saml: sess.SAML,
 	}, nil
 }
 
