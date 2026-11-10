@@ -307,6 +307,9 @@ func statement(r rawStatement) (Statement, error) {
 		if a != "*" && (strings.Count(a, ":") != 1 || strings.HasPrefix(a, ":") || strings.HasSuffix(a, ":")) {
 			return s, malformed("Action %q is not service:action", a)
 		}
+		if unknownAdminAction(a) {
+			return s, malformed("Action %q is not a vws:Admin action", a)
+		}
 	}
 	res, notRes, err := exactlyOne(r.Resource, r.NotResource, "Resource")
 	if err != nil {
