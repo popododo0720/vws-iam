@@ -124,7 +124,7 @@ func TestConditionSetOperatorsParse(t *testing.T) {
 			continue
 		}
 		c := d.Statements[0].Conditions[0]
-		if c.Op != want.Op || c.Set != want.Set || c.IfExists != want.IfExists || c.Key != "aws:tagkeys" {
+		if c.Op != want.Op || c.Set != want.Set || c.IfExists != want.IfExists || c.Key != "Aws:TagKeys" {
 			t.Errorf("%s: parsed %+v, want %+v", op, c, want)
 		}
 	}

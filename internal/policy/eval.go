@@ -198,7 +198,7 @@ func (r Request) expand(s string, vars bool) (string, bool) {
 }
 
 // unresolved returns the policy variables of s (Version 2012-10-17) that
-// the request does not carry, lowercase, and s with each of them replaced
+// the request does not carry, as written, and s with each of them replaced
 // by "*" and the others substituted, so a caller can tell whether s could
 // match once they are given.
 func (r Request) unresolved(s string) (string, []string) {
@@ -224,7 +224,7 @@ func (r Request) unresolved(s string) (string, []string) {
 		default:
 			b.WriteByte('*')
 			if !ok {
-				missing = append(missing, strings.ToLower(name))
+				missing = append(missing, name)
 			}
 		}
 		s = s[i+j+1:]

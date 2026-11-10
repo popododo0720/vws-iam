@@ -44,9 +44,10 @@ type contextEntry struct {
 	Values []string
 }
 
-// matchedStatement is an AWS Statement of a simulation result; the
-// position in the document is not tracked yet (#254).
+// matchedStatement is an AWS Statement of a simulation result.
 type matchedStatement struct {
+	StartPosition    policy.Position
+	EndPosition      policy.Position
 	SourcePolicyID   string
 	SourcePolicyType string
 }
@@ -457,7 +458,11 @@ func aggregate(per []resourceResult) resourceResult {
 func toResult(resource string, sim policy.Simulation) resourceResult {
 	r := resourceResult{ResourceName: resource, Decision: sim.Decision, MissingContextValues: sim.Missing}
 	for _, m := range sim.Matched {
-		ms := matchedStatement{SourcePolicyID: m.Policy.ID, SourcePolicyType: m.Policy.Type}
+		statement := m.Policy.Doc.Statements[m.Index]
+		ms := matchedStatement{
+			SourcePolicyID: m.Policy.ID, SourcePolicyType: m.Policy.Type,
+			StartPosition: statement.StartPosition, EndPosition: statement.EndPosition,
+		}
 		r.MatchedStatements = append(r.MatchedStatements, ms)
 	}
 	if sim.Boundary {

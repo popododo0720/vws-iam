@@ -55,14 +55,22 @@ type Document struct {
 	Statements []Statement
 }
 
+// Position identifies a character in the original policy, starting at line and column 1.
+type Position struct {
+	Line   int
+	Column int
+}
+
 // Statement is one parsed statement.
 type Statement struct {
-	Sid       string
-	Effect    Effect
-	Actions   []string
-	NotAction bool
-	Resources []string
-	NotRes    bool
+	StartPosition Position
+	EndPosition   Position
+	Sid           string
+	Effect        Effect
+	Actions       []string
+	NotAction     bool
+	Resources     []string
+	NotRes        bool
 	// Principals maps a principal type (AWS, Service, *) to patterns.
 	Principals   map[string][]string
 	NotPrincipal bool
@@ -231,40 +239,41 @@ func parse(doc string) (*Document, error) {
 	if err != nil {
 		return nil, err
 	}
-	var raws []rawStatement
+	var raws []json.RawMessage
 	st := bytes.TrimSpace(rd.Statement)
 	switch {
 	case len(st) == 0:
 		return nil, malformed("no Statement")
 	case st[0] == '[':
-		var list []json.RawMessage
-		if err := json.Unmarshal(st, &list); err != nil {
+		if err := json.Unmarshal(st, &raws); err != nil {
 			return nil, malformed("%v", err)
 		}
-		for _, r := range list {
-			var s rawStatement
-			if err := strictDecode(r, &s); err != nil {
-				return nil, err
-			}
-			raws = append(raws, s)
-		}
 	default:
-		var s rawStatement
-		if err := strictDecode(st, &s); err != nil {
-			return nil, err
-		}
-		raws = append(raws, s)
+		raws = append(raws, st)
 	}
 	if len(raws) == 0 {
 		return nil, malformed("no Statement")
 	}
 	d := &Document{Version: version, ID: rd.ID}
 	sids := map[string]bool{}
-	for i, r := range raws {
+	offset, err := statementOffset(doc)
+	if err != nil {
+		return nil, err
+	}
+	pos := sourcePosition{line: 1, column: 1}
+	for i, raw := range raws {
+		var r rawStatement
+		if err := strictDecode(raw, &r); err != nil {
+			return nil, err
+		}
+		start := offset + strings.Index(doc[offset:], string(raw))
+		offset = start + len(raw)
 		s, err := statement(r)
 		if err != nil {
 			return nil, fmt.Errorf("statement %d: %w", i, err)
 		}
+		s.StartPosition = pos.at(doc, start)
+		s.EndPosition = pos.at(doc, offset-1)
 		if s.Sid != "" {
 			if sids[s.Sid] {
 				return nil, malformed("duplicate Sid %q", s.Sid)
@@ -354,7 +363,7 @@ func statement(r rawStatement) (Statement, error) {
 				return s, fmt.Errorf("condition %s key %q: %w", op, k, err)
 			}
 			s.Conditions = append(s.Conditions, Condition{
-				Op: base, IfExists: ifExists, Set: set, Key: strings.ToLower(k), Values: vals,
+				Op: base, IfExists: ifExists, Set: set, Key: k, Values: vals,
 			})
 		}
 	}

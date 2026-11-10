@@ -91,8 +91,8 @@ func TestSimulateCustomPolicyBoundaryAndResources(t *testing.T) {
 	if a := p.Results[0].ResourceSpecific[0].AllowedByPermissionsBoundary; a == nil || !*a {
 		t.Fatalf("resource a AllowedByPermissionsBoundary %v, want true", a)
 	}
-	if got := p.Results[1].MissingContextValues; !slices.Equal(got, []string{"aws:multifactorauthpresent"}) {
-		t.Fatalf("missing context %q, want aws:multifactorauthpresent", got)
+	if got := p.Results[1].MissingContextValues; !slices.Equal(got, []string{"aws:MultiFactorAuthPresent"}) {
+		t.Fatalf("missing context %q, want aws:MultiFactorAuthPresent", got)
 	}
 	in.ContextEntries = []grpcapi.ContextEntry{
 		{Key: "aws:MultiFactorAuthPresent", Type: "boolean", Values: []string{"true"}},

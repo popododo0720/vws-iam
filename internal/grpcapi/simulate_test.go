@@ -187,7 +187,7 @@ func TestSimulatePrincipalPolicyContext(t *testing.T) {
 	in := grpcapi.SimulateInput{PolicySourceARN: simARN + "user/alice", ActionNames: []string{"sqs:SendMessage"}}
 	p := simulate(t, e, in)
 	r := p.Results[0]
-	missing := []string{"aws:securetransport", "aws:sourceip"}
+	missing := []string{"aws:SecureTransport", "aws:SourceIp"}
 	if r.Decision != "implicitDeny" || !slices.Equal(r.MissingContextValues, missing) || r.ResourceSpecific != nil {
 		t.Fatalf("no context: %+v", r)
 	}
@@ -203,8 +203,8 @@ func TestSimulatePrincipalPolicyContext(t *testing.T) {
 	}
 	in.ContextEntries = in.ContextEntries[:1]
 	r = simulate(t, e, in).Results[0]
-	if !slices.Equal(r.MissingContextValues, []string{"aws:securetransport"}) ||
-		!slices.Equal(r.ResourceSpecific[0].MissingContextValues, []string{"aws:securetransport"}) {
+	if !slices.Equal(r.MissingContextValues, []string{"aws:SecureTransport"}) ||
+		!slices.Equal(r.ResourceSpecific[0].MissingContextValues, []string{"aws:SecureTransport"}) {
 		t.Fatalf("missing key of a listed resource: %+v, want it in the resource-specific result and the aggregate", r)
 	}
 }
