@@ -11,8 +11,54 @@ import (
 	"testing"
 	"time"
 
+	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/secret"
+	"github.com/popododo0720/vws-iam/internal/store"
+	"github.com/popododo0720/vws-iam/internal/store/memstore"
 )
+
+// pageOnly is a paging store on which a full List fails the test.
+type pageOnly struct {
+	*memstore.Store
+	t      *testing.T
+	limits []int64
+	err    error
+}
+
+func (p *pageOnly) List(context.Context, iam.Kind) ([]store.Entry, error) {
+	p.t.Error("readiness listed the whole kind")
+	return nil, nil
+}
+
+func (p *pageOnly) ListPage(
+	ctx context.Context, kind iam.Kind, limit int64, cont string,
+) ([]store.Entry, string, error) {
+	p.limits = append(p.limits, limit)
+	if p.err != nil {
+		return nil, "", p.err
+	}
+	return p.Store.ListPage(ctx, kind, limit, cont)
+}
+
+// TestStoreReadyReadsOnePage: the readiness check, run on every probe,
+// reads one key index entry, also through store.WithRetry, not the whole
+// kind, which grows with every live STS session (#352).
+func TestStoreReadyReadsOnePage(t *testing.T) {
+	p := &pageOnly{Store: memstore.New(), t: t}
+	ready := storeReady(store.WithRetry(p, 2, 0))
+	for range 2 {
+		if err := ready(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !slices.Equal(p.limits, []int64{1, 1}) {
+		t.Fatalf("ListPage limits = %v, want one page of 1 per probe", p.limits)
+	}
+	p.err = store.ErrUnavailable
+	if err := ready(t.Context()); !errors.Is(err, store.ErrUnavailable) {
+		t.Fatalf("unavailable store: %v, want ErrUnavailable", err)
+	}
+}
 
 func TestStoreFlags(t *testing.T) {
 	const credDir = "/run/credentials/vws-iam.service"
