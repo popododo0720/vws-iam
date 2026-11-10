@@ -17,10 +17,10 @@ import (
 )
 
 // profileNames returns the names of a page's profiles, in order.
-func profileNames(pg grpcapi.InstanceProfilePage) []string {
+func profileNames(pg grpcapi.InstanceProfileListing) []string {
 	out := make([]string, 0, len(pg.Profiles))
 	for _, p := range pg.Profiles {
-		out = append(out, p.Name)
+		out = append(out, p.Profile.Name)
 	}
 	return out
 }
@@ -86,11 +86,14 @@ func TestListInstanceProfilesForRole(t *testing.T) {
 				if pg.IsTruncated || pg.Marker != "" {
 					t.Fatalf("IsTruncated = %v, Marker = %q, want a complete page", pg.IsTruncated, pg.Marker)
 				}
-				if pg.Role.Name != "S3Access" || pg.Role.UID == "" {
-					t.Fatalf("Role = %+v, want S3Access as stored", pg.Role)
+				for _, p := range pg.Profiles {
+					if len(p.Roles) != 1 || p.Roles[0].Object.Name != "S3Access" || p.Roles[0].Object.UID == "" {
+						t.Fatalf("%s roles = %+v, want S3Access as stored", p.Profile.Name, p.Roles)
+					}
 				}
-				if p := pg.Profiles[2]; p.ID != before.Object.ID || p.Path != "/app/" || len(p.Roles) != 1 {
-					t.Fatalf("web profile = %+v, want it as stored %+v", p, before.Object)
+				if p := pg.Profiles[2]; p.Profile.ID != before.Object.ID || p.Profile.Path != "/app/" ||
+					len(p.Profile.Roles) != 1 || p.Version != before.Version {
+					t.Fatalf("web profile = %+v, want it as stored %+v at %q", p, before.Object, before.Version)
 				}
 			}
 			if got := storedProfile(t, b, "web"); got.Version != before.Version {
