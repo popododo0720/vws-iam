@@ -32,9 +32,9 @@ type accountAliasPage struct {
 // as ServiceFailure, the one error AWS documents here.
 //
 // Aliases are ordered by name (aliases are lowercase, so this is the
-// case-folded order the shared page helpers use), and a marker (the last
-// alias of the previous page) continues after it even when aliases change
-// in between. The call only reads; creating and deleting an alias are #88
+// case-folded order the shared page helpers use), and a marker from a previous release continues after that name.
+// Only the latest held alias (Seq, then name) is visible, even if a
+// stopped create left older held records behind. The call only reads; creating and deleting an alias are #88
 // and #89. Authorization (iam:ListAccountAliases) is console-api's, as
 // for the other IAM reads.
 //
@@ -56,19 +56,19 @@ func (s *Server) listAccountAliases(ctx context.Context, pid, marker string, max
 	if err != nil {
 		return accountAliasPage{}, toStatus(ctx, err)
 	}
-	var names []string
+	var latest iam.AccountAlias
 	for _, v := range all {
-		n := v.Object.Name
-		if after != "" && store.Fold(n) <= after {
-			continue
-		}
 		held, err := s.holdsAccountAlias(ctx, pid, v.Object) // else a create left it unclaimed
 		if err != nil {
 			return accountAliasPage{}, toStatus(ctx, err)
 		}
-		if held {
-			names = append(names, n)
+		if held && (latest.UID == "" || aliasBefore(latest, v.Object)) {
+			latest = v.Object
 		}
+	}
+	var names []string
+	if latest.UID != "" && (after == "" || store.Fold(latest.Name) > after) {
+		names = []string{latest.Name}
 	}
 	var out accountAliasPage
 	out.Aliases, out.IsTruncated, out.Marker = pageByFoldedName(names, func(n string) string { return n }, maxItems)
