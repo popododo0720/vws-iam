@@ -1,0 +1,32 @@
+name: policy-fuzz
+on:
+  pull_request:
+    paths:
+      - internal/policy/**
+      - .github/workflows/policy-fuzz.yml
+  schedule:
+    - cron: '21 3 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.10"
+      - name: Differential policy fuzzing
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          duration=30s
+          if [ "$EVENT_NAME" = schedule ]; then duration=5m; fi
+          go test ./internal/policy -run='^$' -fuzz='^FuzzEvaluate$' -fuzztime="$duration" -parallel=2
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: policy-fuzz-failure
+          path: internal/policy/testdata/fuzz/FuzzEvaluate
