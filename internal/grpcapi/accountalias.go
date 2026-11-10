@@ -154,7 +154,8 @@ func (s *Server) deleteAccountAlias(ctx context.Context, pid, alias string) erro
 }
 
 // maxAliasClaimAttempts bounds how often a create rereads an account
-// alias claim that changed under it before ConcurrentModification.
+// alias claim that changed under it, or stages again an alias of its
+// project that vanished under it, before ConcurrentModification.
 const maxAliasClaimAttempts = 8
 
 // createAccountAlias is IAM CreateAccountAlias: it makes alias the
@@ -215,7 +216,12 @@ func (s *Server) createAccountAlias(ctx context.Context, pid, alias string) erro
 
 // storeAccountAlias returns the stored alias of p named alias, creating
 // it one past the greatest Seq of p. Reclaiming an unheld record advances
-// its sequence by CAS; a held alias is unchanged.
+// its sequence by CAS; a held alias is unchanged. A create of p that loses
+// the claim drops the alias it stored, so between this call's create
+// (ErrExists) and its next read the alias can be gone again. Each such
+// round means another create of p has finished, so the read and the create
+// are tried again, up to maxAliasClaimAttempts rounds, before
+// ConcurrentModification (#272).
 func (s *Server) storeAccountAlias(
 	ctx context.Context, p project, alias string,
 ) (store.Versioned[iam.AccountAlias], error) {
