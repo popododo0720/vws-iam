@@ -415,6 +415,11 @@ func (s *Server) TagOpenIDConnectProvider(ctx context.Context, project, arn stri
 	return s.tagOIDCProvider(ctx, project, arn, tags)
 }
 
+// TagUser is IAM TagUser, which vws-proto does not carry yet (#68).
+func (s *Server) TagUser(ctx context.Context, project, userName string, tags []*iamv1.Tag) error {
+	return s.tagUser(ctx, project, userName, tags)
+}
+
 // UntagOpenIDConnectProvider is IAM UntagOpenIDConnectProvider, which
 // vws-proto does not carry yet (#208).
 func (s *Server) UntagOpenIDConnectProvider(ctx context.Context, project, arn string, keys []string) error {

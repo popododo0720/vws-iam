@@ -255,6 +255,9 @@ type User struct {
 	// user's permissions boundary (PutUserPermissionsBoundary, #98);
 	// empty when the user has none (DeleteUserPermissionsBoundary, #99).
 	PermissionsBoundary string `json:"permissionsBoundary,omitempty"`
+	// Tags are the AWS user tags (TagUser, #68), not envelope labels, as
+	// for a role.
+	Tags map[string]string `json:"tags,omitempty"`
 	RenameState
 }
 
@@ -278,6 +281,12 @@ func (u User) Validate() error {
 	}
 	if b := u.PermissionsBoundary; b != "" && !ValidPolicyARN(b) {
 		return invalid("user %q permissions boundary %q is not a policy ARN", u.Name, b)
+	}
+	if len(u.Tags) > MaxUserTags {
+		return invalid("user %q has %d tags", u.Name, len(u.Tags))
+	}
+	if err := CheckTags(u.Tags); err != nil {
+		return invalid("user %q tag: %v", u.Name, err)
 	}
 	if err := checkAttached(u.AttachedPolicies); err != nil {
 		return err
