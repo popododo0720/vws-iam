@@ -96,11 +96,12 @@ func TestDeleteAccountAliasErrors(t *testing.T) {
 	storedAlias(t, b, proj, "example-corp")
 	wantAWS(t, e.api.DeleteAccountAlias(ctx, proj, "missing"), codes.NotFound, "NoSuchEntity")
 	for _, n := range []string{"abc", "a-b", "0-9", "a-b-c-1", strings.Repeat("z", iam.MaxAccountAliasLen)} {
-		seedAlias(t, b, proj, n)
-		if err := e.api.DeleteAccountAlias(ctx, proj, n); err != nil {
+		pid := "p-" + n[:3] // its only alias, so the one it lists
+		seedAlias(t, b, pid, n)
+		if err := e.api.DeleteAccountAlias(ctx, pid, n); err != nil {
 			t.Fatalf("DeleteAccountAlias(%q): %v, want deleted", n, err)
 		}
-		aliasGone(t, b, proj, n)
+		aliasGone(t, b, pid, n)
 	}
 
 	boom := errors.New("backend down")
@@ -117,6 +118,47 @@ func TestDeleteAccountAliasErrors(t *testing.T) {
 			t.Fatalf("error %v leaks backend detail", err)
 		}
 		storedAlias(t, m, proj, "example-corp")
+	}
+}
+
+// TestDeleteAccountAliasHidesStoppedReplacement: after a create stopped
+// before deleting the alias it replaced, the project holds two aliases
+// and lists only the latest. Delete agrees with the listing: the hidden
+// older alias is NoSuchEntity and stays, and deleting the listed one
+// deletes both, so the listing is then empty and the older alias is free
+// for another project. On both store backends.
+func TestDeleteAccountAliasHidesStoppedReplacement(t *testing.T) {
+	for _, bk := range renameBackends {
+		t.Run(bk.name, func(t *testing.T) {
+			b := bk.open()
+			now := time.Now().UTC()
+			e := newEnvOn(t, b, &now)
+			ctx := t.Context()
+			seedAlias(t, b, proj, "zzz-old")
+			seedAlias(t, b, proj, "aaa-latest")
+			if _, err := store.Mutate(ctx, store.Scoped(b, proj), "aaa-latest", func(a *iam.AccountAlias) error {
+				a.Seq = 1
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			old := storedAlias(t, b, proj, "zzz-old")
+			wantAWS(t, e.api.DeleteAccountAlias(ctx, proj, "zzz-old"), codes.NotFound, "NoSuchEntity")
+			if got := storedAlias(t, b, proj, "zzz-old"); got.Version != old.Version {
+				t.Fatalf("a refused delete wrote the hidden alias: version %q, want %q", got.Version, old.Version)
+			}
+			if err := e.api.DeleteAccountAlias(ctx, proj, "aaa-latest"); err != nil {
+				t.Fatal(err)
+			}
+			aliasGone(t, b, proj, "aaa-latest")
+			aliasGone(t, b, proj, "zzz-old")
+			if got := listedAliases(t, e, proj); len(got) != 0 {
+				t.Fatalf("project lists %q after deleting its alias, want none", got)
+			}
+			if err := e.api.CreateAccountAlias(ctx, "other", "zzz-old"); err != nil {
+				t.Fatalf("the dropped older alias for another project: %v, want created", err)
+			}
+		})
 	}
 }
 

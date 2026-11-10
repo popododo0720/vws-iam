@@ -474,8 +474,9 @@ func TestCreateAccountAliasErrors(t *testing.T) {
 
 // TestCreateAccountAliasDropFails: a create whose drop of the replaced
 // alias fails (its List, claim read or Delete) is InternalFailure, never
-// a success that leaves two aliases, and its repeat on a healthy store
-// leaves exactly the new alias.
+// a success that leaves two aliases; until its repeat the project lists
+// only the new alias, and the repeat on a healthy store leaves exactly
+// the new alias.
 func TestCreateAccountAliasDropFails(t *testing.T) {
 	now := time.Now().UTC()
 	boom := errors.New("backend down")
@@ -502,6 +503,9 @@ func TestCreateAccountAliasDropFails(t *testing.T) {
 			}}, &now)
 			wantAWS(t, fail.api.CreateAccountAlias(t.Context(), proj, "new-corp"), codes.Internal, "InternalFailure")
 			e := newEnvOn(t, m, &now)
+			if got := listedAliases(t, e, proj); !slices.Equal(got, []string{"new-corp"}) {
+				t.Fatalf("after the failed drop the project lists %q, want only new-corp", got)
+			}
 			wantAWS(t, e.api.CreateAccountAlias(t.Context(), proj, "new-corp"), codes.AlreadyExists, "EntityAlreadyExists")
 			if got := listedAliases(t, e, proj); !slices.Equal(got, []string{"new-corp"}) {
 				t.Fatalf("after the repeat the project lists %q, want only new-corp", got)

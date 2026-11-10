@@ -52,19 +52,9 @@ func (s *Server) listAccountAliases(ctx context.Context, pid, marker string, max
 	if err != nil {
 		return accountAliasPage{}, err
 	}
-	all, err := store.List[iam.AccountAlias](ctx, s.project(pid).b)
+	latest, err := s.latestAccountAlias(ctx, pid)
 	if err != nil {
 		return accountAliasPage{}, toStatus(ctx, err)
-	}
-	var latest iam.AccountAlias
-	for _, v := range all {
-		held, err := s.holdsAccountAlias(ctx, pid, v.Object) // else a create left it unclaimed
-		if err != nil {
-			return accountAliasPage{}, toStatus(ctx, err)
-		}
-		if held && (latest.UID == "" || aliasBefore(latest, v.Object)) {
-			latest = v.Object
-		}
 	}
 	var names []string
 	if latest.UID != "" && (after == "" || store.Fold(latest.Name) > after) {
@@ -75,6 +65,28 @@ func (s *Server) listAccountAliases(ctx context.Context, pid, marker string, max
 	return out, nil
 }
 
+// latestAccountAlias returns the alias project pid exposes: its latest
+// held alias (aliasBefore), or a zero alias when it holds none. An older
+// held alias is one a stopped create left behind; an unheld one is a
+// create's that never won the claim.
+func (s *Server) latestAccountAlias(ctx context.Context, pid string) (iam.AccountAlias, error) {
+	all, err := store.List[iam.AccountAlias](ctx, s.project(pid).b)
+	if err != nil {
+		return iam.AccountAlias{}, err
+	}
+	var latest iam.AccountAlias
+	for _, v := range all {
+		held, err := s.holdsAccountAlias(ctx, pid, v.Object)
+		if err != nil {
+			return iam.AccountAlias{}, err
+		}
+		if held && (latest.UID == "" || aliasBefore(latest, v.Object)) {
+			latest = v.Object
+		}
+	}
+	return latest, nil
+}
+
 // deleteAccountAlias is IAM DeleteAccountAlias: it deletes account alias
 // alias of project pid.
 //
@@ -82,7 +94,10 @@ func (s *Server) listAccountAliases(ctx context.Context, pid, marker string, max
 // ^[a-z0-9]([a-z0-9]|-(?!-)){1,61}[a-z0-9]$ is ValidationError before any
 // store access. An alias the project does not hold (also one another
 // project holds) is NoSuchEntity, so a retry after a lost response is
-// NoSuchEntity, as in AWS, and changes nothing. The delete is conditional
+// NoSuchEntity, as in AWS, and changes nothing. So is an older alias a
+// stopped create left held, which ListAccountAliases hides; deleting the
+// listed alias first deletes those (dropOlderAliases), so none of them
+// is listed after it. The delete is conditional
 // on the version read: when the alias changes in between, it is read
 // again, up to maxDeleteAttempts times, and then ConcurrentModification;
 // a request that was canceled or whose deadline passed deletes nothing.
@@ -111,15 +126,18 @@ func (s *Server) deleteAccountAlias(ctx context.Context, pid, alias string) erro
 		if err != nil {
 			return toStatus(ctx, err)
 		}
-		held, err := s.holdsAccountAlias(ctx, pid, cur.Object)
+		latest, err := s.latestAccountAlias(ctx, pid)
 		if err != nil {
 			return toStatus(ctx, err)
 		}
-		if !held {
-			return noAlias // stored by a create that never won the claim
+		if latest.UID != cur.Object.UID {
+			return noAlias // unclaimed, or hidden behind a later held alias
 		}
 		if err := ctx.Err(); err != nil {
 			return toStatus(ctx, err) // the caller is gone; delete nothing
+		}
+		if err := s.dropOlderAliases(ctx, p); err != nil {
+			return toStatus(ctx, err) // a repeat drops them
 		}
 		err = store.Delete[iam.AccountAlias](ctx, p.b, alias, cur.Version)
 		switch {
