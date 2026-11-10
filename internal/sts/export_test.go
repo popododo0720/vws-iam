@@ -7,6 +7,12 @@ import (
 	"time"
 )
 
+// SAMLClaims are the claims VerifySAMLResponse reads from a response.
+type SAMLClaims = samlClaims
+
+// VerifySAMLResponse is the SAML response check of AssumeRoleWithSAML.
+var VerifySAMLResponse = verifySAMLResponse
+
 // NewOIDCKeyFetcherForTest returns a fetcher that trusts roots (none when
 // nil), dials addr whatever host a URL names, reads the clock now and gives
 // up after timeout.

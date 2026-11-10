@@ -1,0 +1,40 @@
+name: fuzz
+
+# The SAML response fuzz target (#381): 30 s on a pull request that touches
+# the SAML code or its corpus, 30 min every week.
+on:
+  pull_request:
+    paths:
+      - "internal/sts/saml*.go"
+      - "internal/sts/samltest/**"
+      - "internal/sts/testdata/fuzz/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/fuzz.yml"
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  saml:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.11"
+      - name: FuzzVerifySAMLResponse
+        env:
+          FUZZTIME: ${{ github.event_name == 'pull_request' && '30s' || '30m' }}
+        run: go test -run '^$' -fuzz '^FuzzVerifySAMLResponse$' -fuzztime="$FUZZTIME" ./internal/sts/
+      - name: Keep a failing input
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: saml-fuzz-crasher
+          path: internal/sts/testdata/fuzz/FuzzVerifySAMLResponse/
+          if-no-files-found: ignore
