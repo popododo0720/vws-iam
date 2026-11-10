@@ -70,6 +70,9 @@ type Caller struct {
 	// saml is the SAML identity of a SAML role session (or one chained
 	// from it); callerContext restores it as trusted saml:* keys.
 	saml *SAMLIdentity
+	// sourceIdentity is the source identity of a role session (or one
+	// chained from it); callerContext restores it as aws:SourceIdentity.
+	sourceIdentity string
 }
 
 // Principal is the caller's principal.
@@ -197,6 +200,9 @@ type session struct {
 	// SAML is the cross-service SAML identity (AssumeRoleWithSAML, and
 	// role sessions chained from it).
 	SAML *SAMLIdentity `json:"saml,omitempty"`
+	// SourceIdentity is set once per chain of role sessions and never
+	// changes (#359). A token from before it has none.
+	SourceIdentity string `json:"si,omitempty"`
 	// Pad only grows the token to MinimumSessionTokenSize (#199); nothing
 	// reads it. A release before it ignores the unknown field.
 	Pad string `json:"z,omitempty"`
@@ -221,6 +227,9 @@ type Session struct {
 	// SAML is the SAML identity of a session that AssumeRoleWithSAML
 	// issued, or one chained from it; nil otherwise.
 	SAML *SAMLIdentity
+	// SourceIdentity is the source identity of a role session, or of the
+	// session it was chained from; empty when none was set.
+	SourceIdentity string
 }
 
 // SAMLIdentity is what AWS keeps of a SAML assertion for later requests:
@@ -240,7 +249,7 @@ func (s Session) String() string { return "Session{" + s.AccessKeyID + " " + s.P
 func (s Session) Caller() Caller {
 	return Caller{
 		principal: s.Principal, principalID: s.PrincipalID, mfa: s.MFA, temporary: true, authTime: s.AuthTime,
-		sessionName: s.SessionName, federated: s.Federated, saml: s.SAML.clone(),
+		sessionName: s.SessionName, federated: s.Federated, saml: s.SAML.clone(), sourceIdentity: s.SourceIdentity,
 	}
 }
 
@@ -248,8 +257,24 @@ func (s Session) Caller() Caller {
 func (s Session) Context() map[string][]string {
 	m := map[string][]string{"aws:MultiFactorAuthPresent": {fmt.Sprint(s.MFA)}}
 	s.SAML.addTo(m)
+	addSourceIdentity(m, s.SourceIdentity)
 	return m
 }
+
+// addSourceIdentity sets aws:SourceIdentity in m; an empty id adds none.
+func addSourceIdentity(m map[string][]string, id string) {
+	if id != "" {
+		m[sourceIdentityKey] = []string{id}
+	}
+}
+
+// sourceIdentityKey is the source identity of a session, set only by the
+// server from the sealed session; setSourceIdentityKey is the source
+// identity a role assumption sets, from its parameter or the session.
+const (
+	sourceIdentityKey    = "aws:SourceIdentity"
+	setSourceIdentityKey = "sts:SourceIdentity"
+)
 
 // clone returns a copy of id, so a Caller or Session never shares it.
 func (id *SAMLIdentity) clone() *SAMLIdentity {
@@ -319,7 +344,7 @@ func New(
 var serverKeys = policy.NewKeySet(
 	"aws:MultiFactorAuthPresent", "aws:MultiFactorAuthAge", "aws:PrincipalArn",
 	"aws:username", "aws:userid", "aws:CurrentTime", "aws:EpochTime", "aws:TokenIssueTime",
-	"aws:PrincipalAccount", "aws:PrincipalType", samlKeyPrefix+"*",
+	"aws:PrincipalAccount", "aws:PrincipalType", sourceIdentityKey, setSourceIdentityKey, samlKeyPrefix+"*",
 )
 
 // callerContext copies request keys (aws:SourceIp, sts:ExternalId, ...),
@@ -335,6 +360,7 @@ func (s *Service) callerContext(c Caller, reqCtx map[string][]string) map[string
 		}
 	}
 	c.saml.addTo(m)
+	addSourceIdentity(m, c.sourceIdentity)
 	m["aws:MultiFactorAuthPresent"] = []string{strconv.FormatBool(c.mfa)}
 	if c.mfa {
 		var age time.Duration // a zero authTime means now
@@ -521,7 +547,7 @@ func (s *Service) AssumeRole(
 	if c.principalID == "" {
 		return Credentials{}, fmt.Errorf("%w: unresolved caller", ErrAccessDenied)
 	}
-	o, err := issueOpts(opts)
+	o, err := assumeRoleOpts(opts)
 	if err != nil {
 		return Credentials{}, err
 	}
@@ -541,6 +567,10 @@ func (s *Service) AssumeRole(
 	if errors.Is(err, store.ErrNotFound) || (err == nil && iam.RoleARN(s.account, r.Object) != roleARN) {
 		return Credentials{}, fmt.Errorf("%w: not authorized to assume %s", ErrAccessDenied, roleARN)
 	}
+	if err != nil {
+		return Credentials{}, err
+	}
+	srcID, err := chainSourceIdentity(c.sourceIdentity, o.sourceIdentity)
 	if err != nil {
 		return Credentials{}, err
 	}
@@ -569,13 +599,22 @@ func (s *Service) AssumeRole(
 			int(maxDur.Seconds()),
 		)
 	}
-	// The caller's own permissions must allow sts:AssumeRole on the role.
-	d, err := s.authz.Authorize(ctx, c.principal, "sts:AssumeRole", roleARN, s.callerContext(c, reqCtx))
-	if err != nil {
-		return Credentials{}, err
+	// The caller's own permissions must allow sts:AssumeRole on the role,
+	// and sts:SetSourceIdentity when the session gets a source identity.
+	actions := []string{"sts:AssumeRole"}
+	pctx := s.callerContext(c, reqCtx)
+	if srcID != "" {
+		actions = append(actions, SetSourceIdentityAction)
+		pctx[setSourceIdentityKey] = []string{srcID}
 	}
-	if !d.Allowed {
-		return Credentials{}, fmt.Errorf("%w: %s", ErrAccessDenied, d.Reason)
+	for _, action := range actions {
+		d, err := s.authz.Authorize(ctx, c.principal, action, roleARN, pctx)
+		if err != nil {
+			return Credentials{}, err
+		}
+		if !d.Allowed {
+			return Credentials{}, fmt.Errorf("%w: %s", ErrAccessDenied, d.Reason)
+		}
 	}
 	// The role's trust policy must trust the caller.
 	trust, err := policy.ParseTrust(r.Object.AssumeRolePolicy)
@@ -594,14 +633,17 @@ func (s *Service) AssumeRole(
 	}
 	tctx := s.callerContext(c, reqCtx)
 	tctx["aws:PrincipalArn"] = []string{callerARN}
+	if srcID != "" {
+		tctx[setSourceIdentityKey] = []string{srcID}
+	}
 	setTimeKeys(tctx, s.now())
-	td := policy.Evaluate(
-		policy.Request{Principal: callerARN, Account: s.account, Action: "sts:AssumeRole", Resource: roleARN, Context: tctx},
-		[]policy.Named{{Name: roleARN + " trust policy", Doc: trust}},
-		nil,
-	)
-	if !td.Allowed {
-		return Credentials{}, fmt.Errorf("%w: %s does not trust %s", ErrAccessDenied, roleARN, callerARN)
+	for _, action := range actions {
+		td := policy.Evaluate(policy.Request{
+			Principal: callerARN, Account: s.account, Action: action, Resource: roleARN, Context: tctx,
+		}, []policy.Named{{Name: roleARN + " trust policy", Doc: trust}}, nil)
+		if !td.Allowed {
+			return Credentials{}, fmt.Errorf("%w: %s does not trust %s for %s", ErrAccessDenied, roleARN, callerARN, action)
+		}
 	}
 	// Both stay nil without session policies: an empty non-nil list would
 	// narrow the session to nothing.
@@ -624,7 +666,8 @@ func (s *Service) AssumeRole(
 		Kind: int(authz.Role), Name: r.Object.Name, ARN: arn, MFA: c.mfa, Chained: chained,
 		Policies: policies, PolicyARNs: policyARNs,
 		PrincipalID: r.Object.ID, AuthTime: c.authTime, RoleID: r.Object.ID, SessionName: sessionName,
-		SAML: c.saml.clone(), // a chained session keeps the SAML identity
+		SAML:           c.saml.clone(), // a chained session keeps the SAML identity
+		SourceIdentity: srcID,
 	}, duration, o)
 	creds.AssumedRoleARN = arn
 	creds.PackedPolicySize = packedPercent(packed)
@@ -801,7 +844,7 @@ func (s *Service) validate(ctx context.Context, accessKeyID, token string) (Sess
 		AccessKeyID: sess.AccessKeyID, Secret: sess.Secret, Project: sess.Project, AuthTime: sess.AuthTime,
 		RoleID: sess.RoleID, SessionName: sess.SessionName, Federated: sess.Federated, Principal: p,
 		PrincipalID: sess.PrincipalID, MFA: sess.MFA, IssuedAt: sess.IssuedAt, Expires: sess.Expires,
-		SAML: sess.SAML.clone(),
+		SAML: sess.SAML.clone(), SourceIdentity: sess.SourceIdentity,
 	}, nil
 }
 

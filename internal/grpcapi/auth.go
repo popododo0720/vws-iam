@@ -350,11 +350,12 @@ func checkSessionRef(
 	return sr, nil
 }
 
-// serverKeys are context keys only vws-iam may set, saml:* included.
+// serverKeys are context keys only vws-iam may set, saml:* and the
+// session's aws:SourceIdentity included.
 var serverKeys = policy.NewKeySet(
 	"aws:MultiFactorAuthPresent", "aws:MultiFactorAuthAge", "aws:PrincipalArn",
 	"aws:username", "aws:userid", "aws:CurrentTime", "aws:EpochTime", "aws:PrincipalAccount",
-	"aws:PrincipalType", "aws:TokenIssueTime", "saml:*",
+	"aws:PrincipalType", "aws:TokenIssueTime", "aws:SourceIdentity", "saml:*",
 )
 
 // Authorize evaluates identity policies after rechecking the principal.
@@ -393,16 +394,16 @@ func (s *Server) authorize(
 		}
 		return nil, toStatus(ctx, err)
 	}
-	// saml:* keys come only from a verified assertion or a sealed SAML
-	// session, never from the request: the session's come from its checked
-	// reference below.
+	// saml:* keys and aws:SourceIdentity come only from a verified
+	// assertion or a sealed session, never from the request: the session's
+	// come from its checked reference below.
 	rc := map[string][]string{}
 	for k, v := range req.GetContext() {
 		if !serverKeys.Has(k) {
 			rc[k] = v.GetValues()
 		}
 	}
-	c.session.AddSAMLContext(rc)
+	c.session.AddSessionContext(rc)
 	rc["aws:MultiFactorAuthPresent"] = []string{strconv.FormatBool(c.mfa)}
 	if c.mfa {
 		rc["aws:MultiFactorAuthAge"] = []string{strconv.FormatInt(int64(max(s.now().Sub(c.authTime), 0)/time.Second), 10)}

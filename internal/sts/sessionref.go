@@ -49,6 +49,9 @@ type refPayload struct {
 	// SAML is the session's SAML identity (#202), so Authorize can restore
 	// saml:sub, saml:sub_type and saml:namequalifier.
 	SAML *SAMLIdentity `json:"saml,omitempty"`
+	// SourceIdentity is the session's source identity (#359), so Authorize
+	// can restore aws:SourceIdentity.
+	SourceIdentity string `json:"si,omitempty"`
 }
 
 // SessionRef is a session as a checked reference describes it. It holds no
@@ -60,18 +63,23 @@ type SessionRef struct {
 	Principal   authz.Principal
 	PrincipalID string
 	// RoleID and SessionName are set for an assumed role.
-	RoleID      string
-	SessionName string
-	MFA         bool
-	AuthTime    time.Time
-	Expires     time.Time
-	federated   bool
-	saml        *SAMLIdentity
+	RoleID         string
+	SessionName    string
+	MFA            bool
+	AuthTime       time.Time
+	Expires        time.Time
+	federated      bool
+	saml           *SAMLIdentity
+	sourceIdentity string
 }
 
-// AddSAMLContext adds the session's saml:sub, saml:sub_type and
-// saml:namequalifier to m; a session without a SAML identity adds none.
-func (r SessionRef) AddSAMLContext(m map[string][]string) { r.saml.addTo(m) }
+// AddSessionContext adds the session's saml:sub, saml:sub_type,
+// saml:namequalifier and aws:SourceIdentity to m; a session without a
+// SAML identity or a source identity adds none of those.
+func (r SessionRef) AddSessionContext(m map[string][]string) {
+	r.saml.addTo(m)
+	addSourceIdentity(m, r.sourceIdentity)
+}
 
 // UniqueID is the unique id the gateway reports for the session's
 // principal: the project for root, the user's id, or "<role id>:<session
@@ -94,6 +102,7 @@ func (p refPayload) session() session {
 		Kind: p.Kind, Name: p.Name, ARN: p.ARN, MFA: p.MFA, Expires: p.Expires, PrincipalID: p.PrincipalID,
 		IssuedAt: p.IssuedAt, RevokeGen: p.RevokeGen, Project: p.Project, AuthTime: p.AuthTime,
 		RoleID: p.RoleID, SessionName: p.SessionName, Federated: p.Federated, SAML: p.SAML.clone(),
+		SourceIdentity: p.SourceIdentity,
 	}
 }
 
@@ -114,7 +123,7 @@ func (s *Service) MintSessionRef(accessKeyID, token string) (string, error) {
 		Kind: sess.Kind, Name: sess.Name, ARN: sess.ARN, PrincipalID: sess.PrincipalID, RoleID: sess.RoleID,
 		SessionName: sess.SessionName, MFA: sess.MFA, Federated: sess.Federated, AuthTime: sess.AuthTime,
 		IssuedAt: sess.IssuedAt, Expires: sess.Expires, RevokeGen: sess.RevokeGen, Project: sess.Project,
-		SAML: sess.SAML.clone(),
+		SAML: sess.SAML.clone(), SourceIdentity: sess.SourceIdentity,
 	})
 	if err != nil {
 		return "", fmt.Errorf("session reference: %w", err)
@@ -152,7 +161,7 @@ func (s *Service) CheckSessionRef(ctx context.Context, ref string) (_ SessionRef
 	return SessionRef{
 		Project: p.Project, Principal: sess.principal(), PrincipalID: p.PrincipalID, RoleID: p.RoleID,
 		SessionName: p.SessionName, MFA: p.MFA, AuthTime: p.AuthTime, Expires: p.Expires, federated: p.Federated,
-		saml: sess.SAML,
+		saml: sess.SAML, sourceIdentity: sess.SourceIdentity,
 	}, nil
 }
 
