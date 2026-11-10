@@ -251,7 +251,8 @@ func manifestViolations(root string) ([]string, error) {
 		}
 		for i, line := range strings.Split(string(data), "\n") {
 			code, _, _ := strings.Cut(line, "#")
-			if strings.Contains(code, `"*"`) || strings.Contains(code, "'*'") || strings.Contains(code, "- *") || strings.Contains(code, "[*]") {
+			if strings.Contains(code, `"*"`) || strings.Contains(code, "'*'") || strings.Contains(code, "- *") ||
+				strings.Contains(code, "[*]") {
 				bad = append(bad, fmt.Sprintf("deploy/%s:%d: no wildcards", rel, i+1))
 			}
 		}
@@ -263,12 +264,17 @@ func TestOnlyRBACAndCRDManifests(t *testing.T) {
 	probe := t.TempDir()
 	writeFile(t, filepath.Join(probe, "deploy/crds/ok.yaml"), "kind: CustomResourceDefinition\n")
 	writeFile(t, filepath.Join(probe, "deploy/chart/Chart.yaml"), "name: x\n")
-	writeFile(t, filepath.Join(probe, "deploy/rbac/role.yaml"), "kind: ClusterRole\nrules:\n- verbs: [\"*\"] # ok in a comment: \"*\"\n")
+	writeFile(
+		t,
+		filepath.Join(probe, "deploy/rbac/role.yaml"),
+		"kind: ClusterRole\nrules:\n- verbs: [\"*\"] # ok in a comment: \"*\"\n",
+	)
 	got, err := manifestViolations(probe)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "deploy/chart/Chart.yaml: only deploy/crds and deploy/rbac are allowed|deploy/rbac/role.yaml: RBAC is namespaced, no ClusterRole|deploy/rbac/role.yaml:3: no wildcards"
+	want := "deploy/chart/Chart.yaml: only deploy/crds and deploy/rbac are allowed|" +
+		"deploy/rbac/role.yaml: RBAC is namespaced, no ClusterRole|deploy/rbac/role.yaml:3: no wildcards"
 	if strings.Join(got, "|") != want {
 		t.Fatalf("probe violations = %q", got)
 	}

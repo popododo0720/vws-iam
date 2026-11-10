@@ -36,12 +36,20 @@ func TestRetryRecoversFromTransientErrors(t *testing.T) {
 		t.Fatalf("%v after %d calls", err, f.calls)
 	}
 	f = &flaky{Backend: m, fails: 5}
-	if _, err := store.Get[iam.Group](ctx, store.WithRetry(f, 3, time.Millisecond), "g"); !errors.Is(err, store.ErrUnavailable) || f.calls != 3 {
+	if _, err := store.Get[iam.Group](ctx, store.WithRetry(f, 3, time.Millisecond), "g"); !errors.Is(
+		err,
+		store.ErrUnavailable,
+	) ||
+		f.calls != 3 {
 		t.Fatalf("%v after %d calls", err, f.calls)
 	}
 	// A permanent error is not retried.
 	f = &flaky{Backend: m}
-	if _, err := store.Get[iam.Group](ctx, store.WithRetry(f, 3, time.Millisecond), "missing"); !errors.Is(err, store.ErrNotFound) || f.calls != 1 {
+	if _, err := store.Get[iam.Group](ctx, store.WithRetry(f, 3, time.Millisecond), "missing"); !errors.Is(
+		err,
+		store.ErrNotFound,
+	) ||
+		f.calls != 1 {
 		t.Fatalf("%v after %d calls", err, f.calls)
 	}
 	// A cancelled context stops the backoff.

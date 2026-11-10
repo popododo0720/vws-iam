@@ -58,7 +58,8 @@ func TestRenewLock(t *testing.T) {
 		if d.LockedUntil.After(start.Add(mfa.MaxLockout)) {
 			t.Fatalf("lock %v past cap %v", d.LockedUntil, start.Add(mfa.MaxLockout))
 		}
-		if clk.t.Before(start.Add(mfa.MaxLockout-mfa.LockoutDuration)) && !d.LockedUntil.Equal(clk.t.UTC().Add(mfa.LockoutDuration)) {
+		if clk.t.Before(start.Add(mfa.MaxLockout-mfa.LockoutDuration)) &&
+			!d.LockedUntil.Equal(clk.t.UTC().Add(mfa.LockoutDuration)) {
 			t.Fatalf("not renewed at %v: %v", clk.t, d.LockedUntil)
 		}
 		clk.t = clk.t.Add(10 * time.Minute)

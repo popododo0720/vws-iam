@@ -33,7 +33,15 @@ func Hash(pw string) (string, error) {
 		return "", fmt.Errorf("salt: %w", err)
 	}
 	h := argon2.IDKey([]byte(pw), salt, time, memory, threads, keyLen)
-	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s", argon2.Version, memory, time, threads, b64.EncodeToString(salt), b64.EncodeToString(h)), nil
+	return fmt.Sprintf(
+		"$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
+		argon2.Version,
+		memory,
+		time,
+		threads,
+		b64.EncodeToString(salt),
+		b64.EncodeToString(h),
+	), nil
 }
 
 // Verify checks pw against a Hash result in constant time.
@@ -48,7 +56,9 @@ func Verify(pw, phc string) error {
 	if _, err := fmt.Sscanf(parts[2], "v=%d", &v); err != nil || v != argon2.Version {
 		return errors.New("unsupported argon2 version")
 	}
-	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &m, &t, &p); err != nil || m == 0 || m > 1<<21 || t == 0 || t > 16 || p == 0 {
+	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &m, &t, &p); err != nil || m == 0 || m > 1<<21 || t == 0 ||
+		t > 16 ||
+		p == 0 {
 		return errors.New("bad argon2 parameters")
 	}
 	salt, err := b64.DecodeString(parts[4])

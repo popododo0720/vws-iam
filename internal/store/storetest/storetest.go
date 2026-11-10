@@ -23,17 +23,47 @@ func sealed() iam.Sealed { return iam.Sealed{KeyID: "kek-1", Ciphertext: []byte{
 func Samples() []iam.Object {
 	now := time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)
 	return []iam.Object{
-		iam.User{Name: "Alice", ID: "AIDA1", Created: now, Meta: iam.Meta{UID: "u-1", Generation: 1, Labels: map[string]string{"team": "a"}}, InlinePolicies: map[string]string{"p": `{}`}},
-		iam.Group{Name: "admins", ID: "AGPA1", Created: now, Members: []string{"Alice"}, AttachedPolicies: []string{"arn:vws:iam::000000000000:policy/x"}},
-		iam.Role{Name: "deployer", ID: "AROA1", Created: now, AssumeRolePolicy: `{"Version":"2012-10-17","Statement":[]}`, MaxSessionDuration: time.Hour},
-		iam.Policy{Name: "x", ID: "ANPA1", Created: now, DefaultVersion: "v1", Versions: []iam.PolicyVersion{{ID: "v1", Document: `{}`, Created: now}}},
+		iam.User{
+			Name:           "Alice",
+			ID:             "AIDA1",
+			Created:        now,
+			Meta:           iam.Meta{UID: "u-1", Generation: 1, Labels: map[string]string{"team": "a"}},
+			InlinePolicies: map[string]string{"p": `{}`},
+		},
+		iam.Group{
+			Name:             "admins",
+			ID:               "AGPA1",
+			Created:          now,
+			Members:          []string{"Alice"},
+			AttachedPolicies: []string{"arn:vws:iam::000000000000:policy/x"},
+		},
+		iam.Role{
+			Name:               "deployer",
+			ID:                 "AROA1",
+			Created:            now,
+			AssumeRolePolicy:   `{"Version":"2012-10-17","Statement":[]}`,
+			MaxSessionDuration: time.Hour,
+		},
+		iam.Policy{
+			Name:           "x",
+			ID:             "ANPA1",
+			Created:        now,
+			DefaultVersion: "v1",
+			Versions:       []iam.PolicyVersion{{ID: "v1", Document: `{}`, Created: now}},
+		},
 		iam.AccessKey{ID: "AKIAABCDEFGHIJKLMNOP", UserName: "Alice", Status: iam.KeyActive, Created: now, Secret: sealed()},
 		iam.MfaDevice{
 			Name: "alice-phone", UserName: "Alice", Created: now, Seed: sealed(),
 			FailedAttempts: 2, LockedSince: now, LockedUntil: now.Add(time.Hour), Lockouts: 3,
 		},
 		iam.KeyIndex{ID: "AKIAABCDEFGHIJKLMNOP", Project: "proj-a"},
-		iam.Session{Hash: strings.Repeat("ab", 32), Project: "proj-a", UserName: "Alice", AuthTime: now, Expires: now.Add(time.Hour)},
+		iam.Session{
+			Hash:     strings.Repeat("ab", 32),
+			Project:  "proj-a",
+			UserName: "Alice",
+			AuthTime: now,
+			Expires:  now.Add(time.Hour),
+		},
 		iam.ConsoleSession{
 			Hash: strings.Repeat("a1", 32), Project: "proj-a", ID: "web-1", UserName: "Alice", UserUID: "u-1",
 			RevokeGeneration: 2, MFA: true, SourceIP: "192.0.2.1", Created: now, Expires: now.Add(12 * time.Hour),
@@ -217,7 +247,8 @@ func Run(t *testing.T, open func(t *testing.T) store.Backend, without ...iam.Kin
 		want := map[string]bool{}
 		for i := range 5 {
 			h := strings.Repeat(strconv.Itoa(i), 64)
-			if _, err := store.Create(ctx, b, iam.ReplayEntry{Hash: h, Expires: time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)}); err != nil {
+			entry := iam.ReplayEntry{Hash: h, Expires: time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)}
+			if _, err := store.Create(ctx, b, entry); err != nil {
 				t.Fatal(err)
 			}
 			want[h] = true
@@ -272,7 +303,11 @@ func Run(t *testing.T, open func(t *testing.T) store.Backend, without ...iam.Kin
 		if _, err := store.Create(ctx, b, iam.User{Name: "bad name!"}); !errors.Is(err, iam.ErrInvalid) {
 			t.Fatalf("bad name: %v", err)
 		}
-		if _, err := store.Create(ctx, b, iam.AccessKey{ID: "AKIAABCDEFGHIJKLMNOP", UserName: "a", Status: iam.KeyActive}); !errors.Is(err, iam.ErrInvalid) {
+		key := iam.AccessKey{ID: "AKIAABCDEFGHIJKLMNOP", UserName: "a", Status: iam.KeyActive}
+		if _, err := store.Create(ctx, b, key); !errors.Is(
+			err,
+			iam.ErrInvalid,
+		) {
 			t.Fatalf("unsealed key: %v", err)
 		}
 		if all, err := store.List[iam.User](ctx, b); err != nil || len(all) != 0 {

@@ -93,7 +93,11 @@ var ownerRules = []struct {
 	why    string
 }{
 	{hasPrefix("database/sql"), nil, "no SQL: state lives in custom resources"},
-	{func(imp string) bool { return imp == "log" || hasPrefix("github.com/getsentry")(imp) }, nil, "logs are slog through vws-lib obs"},
+	{
+		func(imp string) bool { return imp == "log" || hasPrefix("github.com/getsentry")(imp) },
+		nil,
+		"logs are slog through vws-lib obs",
+	},
 	{
 		hasPrefix(
 			"google.golang.org/protobuf",
@@ -105,9 +109,17 @@ var ownerRules = []struct {
 		"wire types stay in grpcapi",
 	},
 	{hasPrefix("google.golang.org/grpc"), []string{"internal/grpcapi", "cmd/vws-iam"}, "gRPC stays at the edge"},
-	{hasPrefix("k8s.io", "sigs.k8s.io"), []string{"internal/store/kubestore"}, "Kubernetes client types stay in the custom resource store"},
+	{
+		hasPrefix("k8s.io", "sigs.k8s.io"),
+		[]string{"internal/store/kubestore"},
+		"Kubernetes client types stay in the custom resource store",
+	},
 	{hasPrefix("go.etcd.io"), []string{"internal/store/etcdstore"}, "etcd client types stay in the etcd store"},
-	{hasPrefix("github.com/popododo0720/vws-lib"), []string{"internal/grpcapi", "cmd/vws-iam"}, "observability is wired at the edge"},
+	{
+		hasPrefix("github.com/popododo0720/vws-lib"),
+		[]string{"internal/grpcapi", "cmd/vws-iam"},
+		"observability is wired at the edge",
+	},
 	{func(imp string) bool { return imp == "testing" }, testSupport, "production code does not import testing"},
 }
 
@@ -118,7 +130,11 @@ var selectorRules = []struct {
 	owners []string
 	why    string
 }{
-	{[]string{"GetSigningCredential"}, []string{"internal/accesskey", "internal/grpcapi"}, "a plaintext secret is opened only for signature checks"},
+	{
+		[]string{"GetSigningCredential"},
+		[]string{"internal/accesskey", "internal/grpcapi"},
+		"a plaintext secret is opened only for signature checks",
+	},
 }
 
 // constrainedDirs are the directories a rule constrains by name. Renaming
@@ -202,17 +218,18 @@ func TestArchitectureRules(t *testing.T) {
 	// Every rule must catch a deliberate violation in a probe tree.
 	probe := t.TempDir()
 	for rel, src := range map[string]string{
-		"internal/iam/i.go":                 `package iam; import _ "` + module + `/internal/store"`,
-		"internal/policy/p.go":              `package policy; import _ "google.golang.org/protobuf/proto"`,
-		"internal/password/p.go":            `package password; import _ "` + module + `/internal/iam"`,
-		"internal/secret/s.go":              `package secret; import _ "` + module + `/internal/store"`,
-		"internal/store/s.go":               `package store; import _ "database/sql"`,
-		"internal/authz/a.go":               `package authz; import _ "google.golang.org/grpc"`,
-		"internal/mfa/m.go":                 `package mfa; import _ "google.golang.org/grpc"`,
-		"internal/sigv4/v.go":               `package sigv4; import _ "google.golang.org/grpc"`,
-		"internal/totp/t.go":                `package totp; import _ "` + module + `/internal/iam"`,
-		"internal/sts/s.go":                 `package sts; import _ "google.golang.org/grpc"`,
-		"internal/grpcapi/g.go":             `package grpcapi; import _ "` + module + `/internal/store/kubestore"; func f(s S) { s.GetSigningCredential() }`,
+		"internal/iam/i.go":      `package iam; import _ "` + module + `/internal/store"`,
+		"internal/policy/p.go":   `package policy; import _ "google.golang.org/protobuf/proto"`,
+		"internal/password/p.go": `package password; import _ "` + module + `/internal/iam"`,
+		"internal/secret/s.go":   `package secret; import _ "` + module + `/internal/store"`,
+		"internal/store/s.go":    `package store; import _ "database/sql"`,
+		"internal/authz/a.go":    `package authz; import _ "google.golang.org/grpc"`,
+		"internal/mfa/m.go":      `package mfa; import _ "google.golang.org/grpc"`,
+		"internal/sigv4/v.go":    `package sigv4; import _ "google.golang.org/grpc"`,
+		"internal/totp/t.go":     `package totp; import _ "` + module + `/internal/iam"`,
+		"internal/sts/s.go":      `package sts; import _ "google.golang.org/grpc"`,
+		"internal/grpcapi/g.go": `package grpcapi; import _ "` + module + `/internal/store/kubestore"; ` +
+			`func f(s S) { s.GetSigningCredential() }`,
 		"internal/widget/k.go":              `package widget; import _ "k8s.io/apimachinery/pkg/types"`,
 		"internal/widget/e.go":              `package widget; import _ "go.etcd.io/etcd/client/v3"`,
 		"internal/widget/l.go":              `package widget; import "log"; var _ = log.Println`,
@@ -235,7 +252,8 @@ func TestArchitectureRules(t *testing.T) {
 		"internal/sts imports google.golang.org/grpc: gRPC stays at the edge",
 		"internal/sigv4 imports google.golang.org/grpc: SigV4 verification is pure",
 		"internal/sigv4 imports google.golang.org/grpc: gRPC stays at the edge",
-		"internal/grpcapi imports " + module + "/internal/store/kubestore: the server uses the store.Backend contract, not a backend's internals",
+		"internal/grpcapi imports " + module + "/internal/store/kubestore: the server uses the store.Backend contract," +
+			" not a backend's internals",
 		"internal/iam imports " + module + "/internal/store: the domain types are pure",
 		"internal/password imports " + module + "/internal/iam: password hashing imports nothing from this module",
 		"internal/policy imports google.golang.org/protobuf/proto: the policy engine is pure",

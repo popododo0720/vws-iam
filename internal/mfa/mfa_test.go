@@ -170,13 +170,19 @@ func TestEnableNeedsTwoConsecutiveCodes(t *testing.T) {
 	if err := svc.Enable(ctx, "bob", "d2", code(seedOf(t, e2), clk.t, 0), code(seedOf(t, e2), clk.t, 1)); err != nil {
 		t.Fatalf("(0,+1): %v", err)
 	}
-	if err := svc.Enable(ctx, "nobody", "d1", code(seed, clk.t, -1), code(seed, clk.t, 0)); !errors.Is(err, store.ErrNotFound) {
+	if err := svc.Enable(ctx, "nobody", "d1", code(seed, clk.t, -1), code(seed, clk.t, 0)); !errors.Is(
+		err,
+		store.ErrNotFound,
+	) {
 		t.Fatalf("unknown user: %v", err)
 	}
 	if err := svc.Enable(ctx, "alice", "d1", code(seed, clk.t, -1), code(seed, clk.t, 0)); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Enable(ctx, "bob", "d1", code(seed, clk.t, 0), code(seed, clk.t, 1)); !errors.Is(err, mfa.ErrEntityInUse) {
+	if err := svc.Enable(ctx, "bob", "d1", code(seed, clk.t, 0), code(seed, clk.t, 1)); !errors.Is(
+		err,
+		mfa.ErrEntityInUse,
+	) {
 		t.Fatalf("device stolen by bob: %v", err)
 	}
 	if req, err := svc.Required(ctx, "alice"); err != nil || !req {
@@ -265,7 +271,9 @@ func TestMFARequiredPolicyDeniesWithoutMFA(t *testing.T) {
 	svc, b, clk := setup(t)
 	ctx := context.Background()
 	if _, err := store.Mutate(ctx, b, "alice", func(u *iam.User) error {
-		u.InlinePolicies = map[string]string{"mfa": `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ec2:*","Resource":"*"},{"Sid":"RequireMFA","Effect":"Deny","Action":"ec2:TerminateInstances","Resource":"*","Condition":{"BoolIfExists":{"aws:MultiFactorAuthPresent":"false"}}}]}`}
+		u.InlinePolicies = map[string]string{"mfa": `{"Version":"2012-10-17","Statement":[{"Effect":"Allow",` +
+			`"Action":"ec2:*","Resource":"*"},{"Sid":"RequireMFA","Effect":"Deny","Action":"ec2:TerminateInstances",` +
+			`"Resource":"*","Condition":{"BoolIfExists":{"aws:MultiFactorAuthPresent":"false"}}}]}`}
 		return nil
 	}); err != nil {
 		t.Fatal(err)

@@ -20,23 +20,40 @@ func must(t *testing.T, doc string) policy.Named {
 }
 
 func req(action, resource string, ctx map[string][]string) policy.Request {
-	return policy.Request{Principal: "arn:vws:iam::" + acct + ":user/alice", Account: acct, Action: action, Resource: resource, Context: ctx}
+	return policy.Request{
+		Principal: "arn:vws:iam::" + acct + ":user/alice",
+		Account:   acct,
+		Action:    action,
+		Resource:  resource,
+		Context:   ctx,
+	}
 }
 
 // Cases adapted from the AWS IAM user guide policy examples and the
 // policy evaluation logic page.
 func TestEvaluateAWSExamples(t *testing.T) {
-	s3list := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucket"],"Resource":"arn:vws:s3:::example-bucket"},{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject"],"Resource":"arn:vws:s3:::example-bucket/*"}]}`
+	s3list := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucket"],` +
+		`"Resource":"arn:vws:s3:::example-bucket"},{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject"],` +
+		`"Resource":"arn:vws:s3:::example-bucket/*"}]}`
 	denyAllButIAM := `{"Version":"2012-10-17","Statement":{"Effect":"Deny","NotAction":"iam:*","Resource":"*"}}`
 	adminAll := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*"}}`
-	mfa := `{"Version":"2012-10-17","Statement":[{"Sid":"AllowAll","Effect":"Allow","Action":"ec2:*","Resource":"*"},{"Sid":"DenyStopWithoutMFA","Effect":"Deny","Action":["ec2:StopInstances","ec2:TerminateInstances"],"Resource":"*","Condition":{"BoolIfExists":{"aws:MultiFactorAuthPresent":"false"}}}]}`
-	ip := `{"Version":"2012-10-17","Statement":{"Effect":"Deny","Action":"*","Resource":"*","Condition":{"NotIpAddress":{"aws:SourceIp":["192.0.2.0/24","203.0.113.0/24"]}}}}`
-	region := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"ec2:*","Resource":"*","Condition":{"StringEquals":{"aws:RequestedRegion":["kr-central-1"]}}}}`
-	homeDir := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:*","Resource":"arn:vws:s3:::home/${aws:username}/*"}}`
-	expiring := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"ec2:Describe*","Resource":"*","Condition":{"DateLessThan":{"aws:CurrentTime":"2026-12-31T23:59:59Z"}}}}`
-	notRes := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:*","NotResource":["arn:vws:s3:::secret","arn:vws:s3:::secret/*"]}}`
-	arnLike := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"iam:PassRole","Resource":"*","Condition":{"ArnLike":{"aws:PrincipalArn":"arn:vws:iam::*:user/a*"}}}}`
-	like := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:ListBucket","Resource":"arn:vws:s3:::b","Condition":{"StringLike":{"s3:prefix":["home/${aws:username}/*"]}}}}`
+	mfa := `{"Version":"2012-10-17","Statement":[{"Sid":"AllowAll","Effect":"Allow","Action":"ec2:*","Resource":"*"},` +
+		`{"Sid":"DenyStopWithoutMFA","Effect":"Deny","Action":["ec2:StopInstances","ec2:TerminateInstances"],` +
+		`"Resource":"*","Condition":{"BoolIfExists":{"aws:MultiFactorAuthPresent":"false"}}}]}`
+	ip := `{"Version":"2012-10-17","Statement":{"Effect":"Deny","Action":"*","Resource":"*",` +
+		`"Condition":{"NotIpAddress":{"aws:SourceIp":["192.0.2.0/24","203.0.113.0/24"]}}}}`
+	region := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"ec2:*","Resource":"*",` +
+		`"Condition":{"StringEquals":{"aws:RequestedRegion":["kr-central-1"]}}}}`
+	homeDir := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:*",` +
+		`"Resource":"arn:vws:s3:::home/${aws:username}/*"}}`
+	expiring := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"ec2:Describe*","Resource":"*",` +
+		`"Condition":{"DateLessThan":{"aws:CurrentTime":"2026-12-31T23:59:59Z"}}}}`
+	notRes := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:*",` +
+		`"NotResource":["arn:vws:s3:::secret","arn:vws:s3:::secret/*"]}}`
+	arnLike := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"iam:PassRole","Resource":"*",` +
+		`"Condition":{"ArnLike":{"aws:PrincipalArn":"arn:vws:iam::*:user/a*"}}}}`
+	like := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:ListBucket","Resource":"arn:vws:s3:::b",` +
+		`"Condition":{"StringLike":{"s3:prefix":["home/${aws:username}/*"]}}}}`
 	user := map[string][]string{"aws:username": {"alice"}}
 
 	cases := []struct {
@@ -46,37 +63,161 @@ func TestEvaluateAWSExamples(t *testing.T) {
 		allowed  bool
 		reason   string
 	}{
-		{"implicit deny with no policy", nil, req("s3:GetObject", "arn:vws:s3:::x/y", nil), false, "no identity-based policy"},
+		{
+			"implicit deny with no policy",
+			nil,
+			req("s3:GetObject", "arn:vws:s3:::x/y", nil),
+			false,
+			"no identity-based policy",
+		},
 		{"s3 object allowed", []string{s3list}, req("s3:GetObject", "arn:vws:s3:::example-bucket/a/b", nil), true, ""},
 		{"s3 list on object denied", []string{s3list}, req("s3:ListBucket", "arn:vws:s3:::example-bucket/a", nil), false, ""},
 		{"action is case-insensitive", []string{s3list}, req("S3:getobject", "arn:vws:s3:::example-bucket/a", nil), true, ""},
-		{"resource is case-sensitive", []string{s3list}, req("s3:GetObject", "arn:vws:s3:::Example-Bucket/a", nil), false, ""},
-		{"explicit deny beats allow", []string{adminAll, denyAllButIAM}, req("ec2:RunInstances", "*", nil), false, "explicit deny"},
+		{
+			"resource is case-sensitive",
+			[]string{s3list},
+			req("s3:GetObject", "arn:vws:s3:::Example-Bucket/a", nil),
+			false,
+			"",
+		},
+		{
+			"explicit deny beats allow",
+			[]string{adminAll, denyAllButIAM},
+			req("ec2:RunInstances", "*", nil),
+			false,
+			"explicit deny",
+		},
 		{"NotAction deny leaves iam", []string{adminAll, denyAllButIAM}, req("iam:CreateUser", "*", nil), true, ""},
-		{"mfa absent denies stop", []string{mfa}, req("ec2:StopInstances", "arn:vws:ec2:kr-central-1:"+acct+":instance/i-1", nil), false, "DenyStopWithoutMFA"},
-		{"mfa false denies stop", []string{mfa}, req("ec2:StopInstances", "*", map[string][]string{"aws:MultiFactorAuthPresent": {"false"}}), false, ""},
-		{"mfa true allows stop", []string{mfa}, req("ec2:StopInstances", "*", map[string][]string{"aws:MultiFactorAuthPresent": {"true"}}), true, "AllowAll"},
+		{
+			"mfa absent denies stop",
+			[]string{mfa},
+			req("ec2:StopInstances", "arn:vws:ec2:kr-central-1:"+acct+":instance/i-1", nil),
+			false,
+			"DenyStopWithoutMFA",
+		},
+		{
+			"mfa false denies stop",
+			[]string{mfa},
+			req("ec2:StopInstances", "*", map[string][]string{"aws:MultiFactorAuthPresent": {"false"}}),
+			false,
+			"",
+		},
+		{
+			"mfa true allows stop",
+			[]string{mfa},
+			req("ec2:StopInstances", "*", map[string][]string{"aws:MultiFactorAuthPresent": {"true"}}),
+			true,
+			"AllowAll",
+		},
 		{"mfa irrelevant to describe", []string{mfa}, req("ec2:DescribeInstances", "*", nil), true, ""},
-		{"source ip inside", []string{adminAll, ip}, req("s3:GetObject", "*", map[string][]string{"aws:SourceIp": {"192.0.2.7"}}), true, ""},
-		{"source ip outside", []string{adminAll, ip}, req("s3:GetObject", "*", map[string][]string{"aws:SourceIp": {"198.51.100.1"}}), false, ""},
+		{
+			"source ip inside",
+			[]string{adminAll, ip},
+			req("s3:GetObject", "*", map[string][]string{"aws:SourceIp": {"192.0.2.7"}}),
+			true,
+			"",
+		},
+		{
+			"source ip outside",
+			[]string{adminAll, ip},
+			req("s3:GetObject", "*", map[string][]string{"aws:SourceIp": {"198.51.100.1"}}),
+			false,
+			"",
+		},
 		{"source ip missing denies (negated op)", []string{adminAll, ip}, req("s3:GetObject", "*", nil), false, ""},
-		{"region match", []string{region}, req("ec2:RunInstances", "*", map[string][]string{"aws:RequestedRegion": {"kr-central-1"}}), true, ""},
-		{"region mismatch", []string{region}, req("ec2:RunInstances", "*", map[string][]string{"aws:RequestedRegion": {"us-east-1"}}), false, ""},
+		{
+			"region match",
+			[]string{region},
+			req("ec2:RunInstances", "*", map[string][]string{"aws:RequestedRegion": {"kr-central-1"}}),
+			true,
+			"",
+		},
+		{
+			"region mismatch",
+			[]string{region},
+			req("ec2:RunInstances", "*", map[string][]string{"aws:RequestedRegion": {"us-east-1"}}),
+			false,
+			"",
+		},
 		{"region missing", []string{region}, req("ec2:RunInstances", "*", nil), false, ""},
 		{"policy variable own home", []string{homeDir}, req("s3:GetObject", "arn:vws:s3:::home/alice/f", user), true, ""},
 		{"policy variable other home", []string{homeDir}, req("s3:GetObject", "arn:vws:s3:::home/bob/f", user), false, ""},
 		{"policy variable unresolved", []string{homeDir}, req("s3:GetObject", "arn:vws:s3:::home/alice/f", nil), false, ""},
-		{"date before", []string{expiring}, req("ec2:DescribeVpcs", "*", map[string][]string{"aws:CurrentTime": {"2026-10-14T00:00:00Z"}}), true, ""},
-		{"date after", []string{expiring}, req("ec2:DescribeVpcs", "*", map[string][]string{"aws:CurrentTime": {"2027-01-01T00:00:00Z"}}), false, ""},
+		{
+			"date before",
+			[]string{expiring},
+			req("ec2:DescribeVpcs", "*", map[string][]string{"aws:CurrentTime": {"2026-10-14T00:00:00Z"}}),
+			true,
+			"",
+		},
+		{
+			"date after",
+			[]string{expiring},
+			req("ec2:DescribeVpcs", "*", map[string][]string{"aws:CurrentTime": {"2027-01-01T00:00:00Z"}}),
+			false,
+			"",
+		},
 		{"NotResource excludes", []string{notRes}, req("s3:GetObject", "arn:vws:s3:::secret/x", nil), false, ""},
 		{"NotResource includes others", []string{notRes}, req("s3:GetObject", "arn:vws:s3:::public/x", nil), true, ""},
-		{"ArnLike segment wildcard", []string{arnLike}, req("iam:PassRole", "*", map[string][]string{"aws:PrincipalArn": {"arn:vws:iam::" + acct + ":user/alice"}}), true, ""},
-		{"ArnLike no match", []string{arnLike}, req("iam:PassRole", "*", map[string][]string{"aws:PrincipalArn": {"arn:vws:iam::" + acct + ":role/alice"}}), false, ""},
-		{"StringLike with variable", []string{like}, req("s3:ListBucket", "arn:vws:s3:::b", map[string][]string{"aws:username": {"alice"}, "s3:prefix": {"home/alice/docs"}}), true, ""},
-		{"StringLike other prefix", []string{like}, req("s3:ListBucket", "arn:vws:s3:::b", map[string][]string{"aws:username": {"alice"}, "s3:prefix": {"home/bob/"}}), false, ""},
-		{"mfa age under limit", []string{`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"iam:*","Resource":"*","Condition":{"NumericLessThan":{"aws:MultiFactorAuthAge":"3600"}}}}`}, req("iam:CreateUser", "*", map[string][]string{"aws:MultiFactorAuthAge": {"120"}}), true, ""},
-		{"mfa age over limit", []string{`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"iam:*","Resource":"*","Condition":{"NumericLessThan":{"aws:MultiFactorAuthAge":"3600"}}}}`}, req("iam:CreateUser", "*", map[string][]string{"aws:MultiFactorAuthAge": {"7200"}}), false, ""},
-		{"condition key case-insensitive", []string{region}, req("ec2:RunInstances", "*", map[string][]string{"AWS:REQUESTEDREGION": {"kr-central-1"}}), true, ""},
+		{
+			"ArnLike segment wildcard",
+			[]string{arnLike},
+			req("iam:PassRole", "*", map[string][]string{"aws:PrincipalArn": {"arn:vws:iam::" + acct + ":user/alice"}}),
+			true,
+			"",
+		},
+		{
+			"ArnLike no match",
+			[]string{arnLike},
+			req("iam:PassRole", "*", map[string][]string{"aws:PrincipalArn": {"arn:vws:iam::" + acct + ":role/alice"}}),
+			false,
+			"",
+		},
+		{
+			"StringLike with variable",
+			[]string{like},
+			req(
+				"s3:ListBucket",
+				"arn:vws:s3:::b",
+				map[string][]string{"aws:username": {"alice"}, "s3:prefix": {"home/alice/docs"}},
+			),
+			true,
+			"",
+		},
+		{
+			"StringLike other prefix",
+			[]string{like},
+			req("s3:ListBucket", "arn:vws:s3:::b", map[string][]string{"aws:username": {"alice"}, "s3:prefix": {"home/bob/"}}),
+			false,
+			"",
+		},
+		{
+			"mfa age under limit",
+			[]string{
+				`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"iam:*","Resource":"*",` +
+					`"Condition":{"NumericLessThan":{"aws:MultiFactorAuthAge":"3600"}}}}`,
+			},
+			req("iam:CreateUser", "*", map[string][]string{"aws:MultiFactorAuthAge": {"120"}}),
+			true,
+			"",
+		},
+		{
+			"mfa age over limit",
+			[]string{
+				`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"iam:*","Resource":"*",` +
+					`"Condition":{"NumericLessThan":{"aws:MultiFactorAuthAge":"3600"}}}}`,
+			},
+			req("iam:CreateUser", "*", map[string][]string{"aws:MultiFactorAuthAge": {"7200"}}),
+			false,
+			"",
+		},
+		{
+			"condition key case-insensitive",
+			[]string{region},
+			req("ec2:RunInstances", "*", map[string][]string{"AWS:REQUESTEDREGION": {"kr-central-1"}}),
+			true,
+			"",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -99,22 +240,34 @@ func TestSessionPolicyOnlyNarrows(t *testing.T) {
 	if d := policy.Evaluate(req("s3:GetObject", "*", nil), []policy.Named{admin}, []policy.Named{s3only}); !d.Allowed {
 		t.Fatal(d)
 	}
-	if d := policy.Evaluate(req("ec2:RunInstances", "*", nil), []policy.Named{admin}, []policy.Named{s3only}); d.Allowed || !strings.Contains(d.Reason, "session") {
+	if d := policy.Evaluate(req("ec2:RunInstances", "*", nil), []policy.Named{admin}, []policy.Named{s3only}); d.Allowed ||
+		!strings.Contains(d.Reason, "session") {
 		t.Fatal(d)
 	}
 	// A session policy cannot grant what the identity lacks.
-	if d := policy.Evaluate(req("ec2:RunInstances", "*", nil), []policy.Named{s3only}, []policy.Named{ec2only}); d.Allowed {
+	if d := policy.Evaluate(
+		req("ec2:RunInstances", "*", nil), []policy.Named{s3only}, []policy.Named{ec2only},
+	); d.Allowed {
 		t.Fatal(d)
 	}
 }
 
 func TestTrustPolicy(t *testing.T) {
-	trust, err := policy.ParseTrust(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:vws:iam::` + acct + `:root"},"Action":"sts:AssumeRole","Condition":{"Bool":{"aws:MultiFactorAuthPresent":"true"}}},{"Effect":"Allow","Principal":{"Service":"ec2.vws.internal"},"Action":"sts:AssumeRole"}]}`)
+	trust, err := policy.ParseTrust(
+		`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:vws:iam::` + acct + `:root"},` +
+			`"Action":"sts:AssumeRole","Condition":{"Bool":{"aws:MultiFactorAuthPresent":"true"}}},{"Effect":"Allow",` +
+			`"Principal":{"Service":"ec2.vws.internal"},"Action":"sts:AssumeRole"}]}`,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	set := []policy.Named{{Name: "trust", Doc: trust}}
-	r := policy.Request{Principal: "arn:vws:iam::" + acct + ":user/alice", Account: acct, Action: "sts:AssumeRole", Context: map[string][]string{"aws:MultiFactorAuthPresent": {"true"}}}
+	r := policy.Request{
+		Principal: "arn:vws:iam::" + acct + ":user/alice",
+		Account:   acct,
+		Action:    "sts:AssumeRole",
+		Context:   map[string][]string{"aws:MultiFactorAuthPresent": {"true"}},
+	}
 	if d := policy.Evaluate(r, set, nil); !d.Allowed {
 		t.Fatal(d)
 	}
@@ -122,7 +275,12 @@ func TestTrustPolicy(t *testing.T) {
 	if d := policy.Evaluate(r, set, nil); d.Allowed {
 		t.Fatal("trust without MFA allowed")
 	}
-	other := policy.Request{Principal: "arn:vws:iam::999988887777:user/eve", Account: "999988887777", Action: "sts:AssumeRole", Context: map[string][]string{"aws:MultiFactorAuthPresent": {"true"}}}
+	other := policy.Request{
+		Principal: "arn:vws:iam::999988887777:user/eve",
+		Account:   "999988887777",
+		Action:    "sts:AssumeRole",
+		Context:   map[string][]string{"aws:MultiFactorAuthPresent": {"true"}},
+	}
 	if d := policy.Evaluate(other, set, nil); d.Allowed {
 		t.Fatal("foreign account trusted")
 	}
@@ -176,13 +334,19 @@ func TestMalformedPolicies(t *testing.T) {
 		`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","NotAction":"s3:*","Resource":"*"}}`,
 		`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3GetObject","Resource":"*"}}`,
 		`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"bucket"}}`,
-		`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*","Condition":{"StringMagic":{"a":"b"}}}}`,
-		`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*","Condition":{"IpAddress":{"aws:SourceIp":"not-an-ip"}}}}`,
-		`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*","Condition":{"Bool":{"aws:SecureTransport":"yes"}}}}`,
-		`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*","Condition":{"DateLessThan":{"aws:CurrentTime":"tomorrow"}}}}`,
+		`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*",` +
+			`"Condition":{"StringMagic":{"a":"b"}}}}`,
+		`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*",` +
+			`"Condition":{"IpAddress":{"aws:SourceIp":"not-an-ip"}}}}`,
+		`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*",` +
+			`"Condition":{"Bool":{"aws:SecureTransport":"yes"}}}}`,
+		`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*",` +
+			`"Condition":{"DateLessThan":{"aws:CurrentTime":"tomorrow"}}}}`,
 		`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*","Extra":1}}`,
-		`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*","Condition":{"NumericLessThan":{"aws:MultiFactorAuthAge":"soon"}}}}`,
-		`{"Version":"2012-10-17","Statement":[{"Sid":"a","Effect":"Allow","Action":"*","Resource":"*"},{"Sid":"a","Effect":"Deny","Action":"*","Resource":"*"}]}`,
+		`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*",` +
+			`"Condition":{"NumericLessThan":{"aws:MultiFactorAuthAge":"soon"}}}}`,
+		`{"Version":"2012-10-17","Statement":[{"Sid":"a","Effect":"Allow","Action":"*","Resource":"*"},{"Sid":"a",` +
+			`"Effect":"Deny","Action":"*","Resource":"*"}]}`,
 		`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*"}} trailing`,
 		`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":[],"Resource":"*"}}`,
 		`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":{"x":1},"Resource":"*"}}`,
@@ -195,10 +359,18 @@ func TestMalformedPolicies(t *testing.T) {
 			t.Errorf("%.80q: %v, want MalformedPolicyDocument", d, err)
 		}
 	}
-	if _, err := policy.ParseIdentity(`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Principal":"*","Action":"*","Resource":"*"}}`); !errors.Is(err, policy.ErrMalformed) {
+	if _, err := policy.ParseIdentity(`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Principal":"*",` +
+		`"Action":"*","Resource":"*"}}`); !errors.Is(
+		err,
+		policy.ErrMalformed,
+	) {
 		t.Errorf("identity policy with principal: %v", err)
 	}
-	if _, err := policy.ParseTrust(`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*"}}`); !errors.Is(err, policy.ErrMalformed) {
+	if _, err := policy.ParseTrust(`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*",` +
+		`"Resource":"*"}}`); !errors.Is(
+		err,
+		policy.ErrMalformed,
+	) {
 		t.Errorf("trust policy without principal: %v", err)
 	}
 }
@@ -259,7 +431,15 @@ func TestMatchIsLinear(t *testing.T) {
 	for _, c := range []struct {
 		p, s string
 		ok   bool
-	}{{"*", "", true}, {"a?c", "abc", true}, {"a?c", "ac", false}, {"ec2:Describe*", "ec2:DescribeVpcs", true}, {"*:*", "s3:x", true}, {"a*b*c", "aXbYc", true}, {"a*b*c", "aXbY", false}} {
+	}{
+		{"*", "", true},
+		{"a?c", "abc", true},
+		{"a?c", "ac", false},
+		{"ec2:Describe*", "ec2:DescribeVpcs", true},
+		{"*:*", "s3:x", true},
+		{"a*b*c", "aXbYc", true},
+		{"a*b*c", "aXbY", false},
+	} {
 		if policy.Match(c.p, c.s, false) != c.ok {
 			t.Errorf("Match(%q,%q) != %v", c.p, c.s, c.ok)
 		}
@@ -268,11 +448,17 @@ func TestMatchIsLinear(t *testing.T) {
 
 func FuzzParse(f *testing.F) {
 	f.Add(`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*"}}`)
-	f.Add(`{"Version":"2012-10-17","Statement":[{"Effect":"Deny","NotAction":["s3:*"],"NotResource":"arn:vws:s3:::x","Condition":{"StringLikeIfExists":{"k":["${aws:username}*"]},"Null":{"x":"true"}}}]}`)
+	f.Add(
+		`{"Version":"2012-10-17","Statement":[{"Effect":"Deny","NotAction":["s3:*"],"NotResource":"arn:vws:s3:::x",` +
+			`"Condition":{"StringLikeIfExists":{"k":["${aws:username}*"]},"Null":{"x":"true"}}}]}`,
+	)
 	f.Add(`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*","Condition":{` +
 		`"ForAllValues:StringNotLikeIfExists":{"aws:TagKeys":["a*","${aws:username}"]},` +
 		`"ForAnyValue:IpAddress":{"aws:SourceIp":"10.0.0.0/8"}}}}`)
-	f.Add(`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Principal":{"AWS":["1","arn:vws:iam::1:root"]},"Action":"sts:AssumeRole"}}`)
+	f.Add(
+		`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Principal":{"AWS":["1","arn:vws:iam::1:root"]},` +
+			`"Action":"sts:AssumeRole"}}`,
+	)
 	f.Fuzz(func(t *testing.T, doc string) {
 		d, err := policy.Parse(doc)
 		if err != nil {
@@ -282,7 +468,15 @@ func FuzzParse(f *testing.F) {
 			return
 		}
 		// A parsed policy evaluates without panicking.
-		policy.Evaluate(policy.Request{Action: "s3:GetObject", Resource: "arn:vws:s3:::b/k", Context: map[string][]string{"aws:SourceIp": {"10.0.0.1"}, "aws:CurrentTime": {"2026-01-01T00:00:00Z"}}}, []policy.Named{{Name: "f", Doc: d}}, []policy.Named{{Name: "f", Doc: d}})
+		policy.Evaluate(
+			policy.Request{
+				Action:   "s3:GetObject",
+				Resource: "arn:vws:s3:::b/k",
+				Context:  map[string][]string{"aws:SourceIp": {"10.0.0.1"}, "aws:CurrentTime": {"2026-01-01T00:00:00Z"}},
+			},
+			[]policy.Named{{Name: "f", Doc: d}},
+			[]policy.Named{{Name: "f", Doc: d}},
+		)
 	})
 }
 

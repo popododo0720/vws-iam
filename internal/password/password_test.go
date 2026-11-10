@@ -32,7 +32,8 @@ func TestHashVerify(t *testing.T) {
 }
 
 func TestVerifyRejectsHostileHashes(t *testing.T) {
-	for _, h := range []string{"", "plain", "$argon2i$v=19$m=1,t=1,p=1$AA$AA", "$argon2id$v=19$m=4294967295,t=1,p=1$AA$AA", "$argon2id$v=19$m=8,t=99,p=1$AA$AA", "$argon2id$v=16$m=8,t=1,p=1$AA$AA"} {
+	for _, h := range []string{"", "plain", "$argon2i$v=19$m=1,t=1,p=1$AA$AA", "$argon2id$v=19$m=4294967295,t=1," +
+		"p=1$AA$AA", "$argon2id$v=19$m=8,t=99,p=1$AA$AA", "$argon2id$v=16$m=8,t=1,p=1$AA$AA"} {
 		if err := password.Verify("x", h); err == nil || errors.Is(err, password.ErrMismatch) {
 			t.Errorf("%q: %v", h, err)
 		}

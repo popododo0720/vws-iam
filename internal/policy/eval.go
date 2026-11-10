@@ -65,7 +65,11 @@ func init() {
 		}
 	}
 	operators["NumericEquals"] = op{kind: kindNumeric, match: num(func(a, b float64) bool { return a == b })}
-	operators["NumericNotEquals"] = op{kind: kindNumeric, negate: true, match: num(func(a, b float64) bool { return a == b })}
+	operators["NumericNotEquals"] = op{
+		kind:   kindNumeric,
+		negate: true,
+		match:  num(func(a, b float64) bool { return a == b }),
+	}
 	operators["NumericLessThan"] = op{kind: kindNumeric, match: num(func(a, b float64) bool { return a < b })}
 	operators["NumericLessThanEquals"] = op{kind: kindNumeric, match: num(func(a, b float64) bool { return a <= b })}
 	operators["NumericGreaterThan"] = op{kind: kindNumeric, match: num(func(a, b float64) bool { return a > b })}
