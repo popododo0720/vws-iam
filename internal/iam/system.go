@@ -33,7 +33,8 @@ func (k KeyIndex) Session() bool { return !k.Expires.IsZero() }
 func (KeyIndex) Kind() Kind    { return KindKeyIndex }
 func (k KeyIndex) Key() string { return k.ID }
 func (k KeyIndex) Validate() error {
-	if !accessKeyRE.MatchString(k.ID) || !ValidProject(k.Project) || (k.Session() && !strings.HasPrefix(k.ID, "ASIA")) {
+	validID := accessKeyRE.MatchString(k.ID) || legacyRootKeyRE.MatchString(k.ID)
+	if !validID || !ValidProject(k.Project) || (k.Session() && !strings.HasPrefix(k.ID, "ASIA")) {
 		return invalid("key index %q -> %q", k.ID, k.Project)
 	}
 	return nil
