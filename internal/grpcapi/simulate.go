@@ -352,6 +352,9 @@ func simulateActions(
 			per = append(per, toResult(resource, policy.Simulate(r, identity, boundary)))
 		}
 		e := evaluationResult{ActionName: action, resourceResult: aggregate(per)}
+		if template := simulationResourceTemplates[strings.ToLower(action)]; template != "" {
+			e.ResourceName = template
+		}
 		if explicit {
 			e.ResourceSpecific = per
 		}
@@ -420,10 +423,8 @@ var decisionRank = map[string]int{
 // statements of the resources with that decision (only those that
 // contributed to it), the union of the missing context values of every
 // resource, and the boundary allowing it only when it allows every
-// resource. Its resource name is "*": AWS gives the ARN template of the
-// action's resource type there (or "*" when the action has none), which
-// needs a catalog of resource types this service does not have yet
-// (#256).
+// resource. simulateActions replaces the default resource name with a
+// catalog template when one is known.
 func aggregate(per []resourceResult) resourceResult {
 	top := resourceResult{ResourceName: "*", Decision: policy.DecisionAllowed}
 	for _, r := range per {
