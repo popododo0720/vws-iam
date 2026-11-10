@@ -112,15 +112,6 @@ func (s *Server) AssumeRoleWithWebIdentity(
 	return nil, status.Error(codes.Unimplemented, "AssumeRoleWithWebIdentity is not served yet")
 }
 
-// ListInstanceProfiles is not served yet.
-//
-// TODO(#94): serve it through listInstanceProfiles.
-func (s *Server) ListInstanceProfiles(
-	context.Context, *iamv1.ListInstanceProfilesRequest,
-) (*iamv1.ListInstanceProfilesResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ListInstanceProfiles is not served yet")
-}
-
 // ListInstanceProfilesForRole is not served yet.
 //
 // TODO(#95): serve it through listInstanceProfilesForRole.

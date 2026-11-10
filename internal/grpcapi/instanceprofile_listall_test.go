@@ -2,7 +2,6 @@ package grpcapi_test
 
 import (
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -33,7 +32,7 @@ func seedProfileAt(t *testing.T, b store.Backend, name, path string, roles ...st
 func listedNames(pg grpcapi.InstanceProfileListing) []string {
 	out := make([]string, 0, len(pg.Profiles))
 	for _, p := range pg.Profiles {
-		out = append(out, p.Name)
+		out = append(out, p.Profile.Name)
 	}
 	return out
 }
@@ -103,16 +102,19 @@ func TestListInstanceProfiles(t *testing.T) {
 					if pg.IsTruncated || pg.Marker != "" {
 						t.Fatalf("IsTruncated = %v, Marker = %q, want a complete page", pg.IsTruncated, pg.Marker)
 					}
-					if p := pg.Profiles[4]; p.ID != before.Object.ID || p.Path != "/app/" ||
-						!slices.Equal(p.Roles, []string{"s3access"}) {
-						t.Fatalf("web profile = %+v, want it as stored %+v", p, before.Object)
+					if p := pg.Profiles[4]; p.Profile.ID != before.Object.ID || p.Profile.Path != "/app/" ||
+						!slices.Equal(p.Profile.Roles, []string{"s3access"}) || p.Version != before.Version ||
+						p.ARN != "arn:vws:iam::"+proj+":instance-profile/app/web" {
+						t.Fatalf("web profile = %+v, want it as stored %+v at %q", p, before.Object, before.Version)
 					}
-					keys := slices.Sorted(maps.Keys(pg.Roles))
-					if !slices.Equal(keys, []string{"other", "s3access"}) {
-						t.Fatalf("Roles keys = %q, want [other s3access] (no unused or deleted role)", keys)
+					var held []string
+					for _, p := range pg.Profiles {
+						for _, r := range p.Roles {
+							held = append(held, p.Profile.Name+"="+r.Object.Name)
+						}
 					}
-					if r := pg.Roles["s3access"]; r.Name != "S3Access" || r.UID == "" {
-						t.Fatalf("Roles[s3access] = %+v, want S3Access as stored", r)
+					if want := []string{"Batch=Other", "web=S3Access"}; !slices.Equal(held, want) {
+						t.Fatalf("roles = %q, want %q (no unused or deleted role)", held, want)
 					}
 				}
 			}
@@ -156,7 +158,7 @@ func TestListInstanceProfilesEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pg.Profiles) != 0 || len(pg.Roles) != 0 || pg.IsTruncated || pg.Marker != "" {
+	if len(pg.Profiles) != 0 || pg.IsTruncated || pg.Marker != "" {
 		t.Fatalf("page = %+v, want empty and complete", pg)
 	}
 }
