@@ -63,7 +63,7 @@ func TestRemoveRoleFromInstanceProfile(t *testing.T) {
 			seedRole(t, e, "S3Access")
 			before := seedInstanceProfile(t, b, "Webserver", "S3Access")
 
-			if err := e.api.RemoveRoleFromInstanceProfile(t.Context(), proj, "webserver", "s3access"); err != nil {
+			if err := e.api.RemoveProfileRole(t.Context(), proj, "webserver", "s3access"); err != nil {
 				t.Fatal(err)
 			}
 			got := storedProfile(t, b, "Webserver")
@@ -79,7 +79,7 @@ func TestRemoveRoleFromInstanceProfile(t *testing.T) {
 			if _, err := store.Get[iam.Role](t.Context(), store.Scoped(b, proj), "S3Access"); err != nil {
 				t.Fatalf("role after remove: %v", err)
 			}
-			err := newEnvOn(t, b, &now).api.RemoveRoleFromInstanceProfile(t.Context(), proj, "Webserver", "S3Access")
+			err := newEnvOn(t, b, &now).api.RemoveProfileRole(t.Context(), proj, "Webserver", "S3Access")
 			wantAWS(t, err, codes.NotFound, "NoSuchEntity")
 			if again := storedProfile(t, b, "Webserver"); again.Version != got.Version {
 				t.Fatalf("repeat wrote the profile: version %q, want %q", again.Version, got.Version)
@@ -102,27 +102,27 @@ func TestRemoveRoleFromInstanceProfileErrors(t *testing.T) {
 	seedInstanceProfile(t, b, "web", "inside")
 	before := storedProfile(t, b, "web")
 
-	wantAWS(t, e.api.RemoveRoleFromInstanceProfile(ctx, proj, "missing", "inside"), codes.NotFound, "NoSuchEntity")
-	wantAWS(t, e.api.RemoveRoleFromInstanceProfile(ctx, proj, strings.Repeat("p", 128), "inside"),
+	wantAWS(t, e.api.RemoveProfileRole(ctx, proj, "missing", "inside"), codes.NotFound, "NoSuchEntity")
+	wantAWS(t, e.api.RemoveProfileRole(ctx, proj, strings.Repeat("p", 128), "inside"),
 		codes.NotFound, "NoSuchEntity")
-	wantAWS(t, e.api.RemoveRoleFromInstanceProfile(ctx, proj, "web", "missing"), codes.NotFound, "NoSuchEntity")
-	wantAWS(t, e.api.RemoveRoleFromInstanceProfile(ctx, proj, "web", "outside"), codes.NotFound, "NoSuchEntity")
+	wantAWS(t, e.api.RemoveProfileRole(ctx, proj, "web", "missing"), codes.NotFound, "NoSuchEntity")
+	wantAWS(t, e.api.RemoveProfileRole(ctx, proj, "web", "outside"), codes.NotFound, "NoSuchEntity")
 
 	slr := seedLinkedRole(t, b, "linked")
 	seedInstanceProfile(t, b, "svc", slr.Name)
-	wantAWS(t, e.api.RemoveRoleFromInstanceProfile(ctx, proj, "svc", slr.Name),
+	wantAWS(t, e.api.RemoveProfileRole(ctx, proj, "svc", slr.Name),
 		codes.FailedPrecondition, "UnmodifiableEntity")
 	if got := storedProfile(t, b, "svc").Object.Roles; len(got) != 1 || got[0] != slr.Name {
 		t.Fatalf("service-linked profile roles = %q, want [%q] kept", got, slr.Name)
 	}
 
 	for _, n := range []string{"", strings.Repeat("p", 129), "a/b", "a b", "prôfile"} {
-		wantAWS(t, e.api.RemoveRoleFromInstanceProfile(ctx, proj, n, "inside"), codes.InvalidArgument, "ValidationError")
+		wantAWS(t, e.api.RemoveProfileRole(ctx, proj, n, "inside"), codes.InvalidArgument, "ValidationError")
 	}
 	for _, n := range []string{"", strings.Repeat("r", 65), "a/b", "a b", "rôle"} {
-		wantAWS(t, e.api.RemoveRoleFromInstanceProfile(ctx, proj, "web", n), codes.InvalidArgument, "ValidationError")
+		wantAWS(t, e.api.RemoveProfileRole(ctx, proj, "web", n), codes.InvalidArgument, "ValidationError")
 	}
-	wantAWS(t, e.api.RemoveRoleFromInstanceProfile(ctx, "Bad_Project", "web", "inside"),
+	wantAWS(t, e.api.RemoveProfileRole(ctx, "Bad_Project", "web", "inside"),
 		codes.InvalidArgument, "ValidationError")
 	if got := storedProfile(t, b, "web"); got.Version != before.Version {
 		t.Fatalf("a refused request wrote the profile: version %q, want %q", got.Version, before.Version)
@@ -136,7 +136,7 @@ func TestRemoveRoleFromInstanceProfileDeletedRole(t *testing.T) {
 	now := time.Now().UTC()
 	e := newEnvOn(t, b, &now)
 	seedInstanceProfile(t, b, "web", "Gone")
-	if err := e.api.RemoveRoleFromInstanceProfile(t.Context(), proj, "web", "gone"); err != nil {
+	if err := e.api.RemoveProfileRole(t.Context(), proj, "web", "gone"); err != nil {
 		t.Fatal(err)
 	}
 	if got := storedProfile(t, b, "web").Object.Roles; len(got) != 0 {
@@ -155,7 +155,7 @@ func TestRemoveRoleFromInstanceProfileCanceled(t *testing.T) {
 	before := storedProfile(t, b, "web")
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	err := e.api.RemoveRoleFromInstanceProfile(ctx, proj, "web", "r")
+	err := e.api.RemoveProfileRole(ctx, proj, "web", "r")
 	if status.Code(err) != codes.Canceled {
 		t.Fatalf("canceled request: %v, want Canceled", err)
 	}
@@ -180,7 +180,7 @@ func TestRemoveRoleFromInstanceProfileConcurrent(t *testing.T) {
 			errs := make([]error, 16)
 			for i := range errs {
 				wg.Go(func() {
-					errs[i] = replicas[i%2].api.RemoveRoleFromInstanceProfile(t.Context(), proj, "web", "racer")
+					errs[i] = replicas[i%2].api.RemoveProfileRole(t.Context(), proj, "web", "racer")
 				})
 			}
 			wg.Wait()
@@ -239,7 +239,7 @@ func TestRemoveRoleFromInstanceProfileStaleRead(t *testing.T) {
 			seedRole(t, newEnvOn(t, inner, &now), "stale")
 			seedInstanceProfile(t, inner, "web", "stale")
 			b := &changingProfile{Backend: inner, t: t}
-			if err := newEnvOn(t, b, &now).api.RemoveRoleFromInstanceProfile(t.Context(), proj, "web", "stale"); err != nil {
+			if err := newEnvOn(t, b, &now).api.RemoveProfileRole(t.Context(), proj, "web", "stale"); err != nil {
 				t.Fatal(err)
 			}
 			got := storedProfile(t, inner, "web").Object

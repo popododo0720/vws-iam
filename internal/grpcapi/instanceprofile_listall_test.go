@@ -45,7 +45,7 @@ func listEvery(t *testing.T, e *env, prefix string, maxItems int) ([]string, int
 	var names []string
 	marker := ""
 	for pages := 1; ; pages++ {
-		pg, err := e.api.ListInstanceProfiles(t.Context(), proj, prefix, marker, maxItems)
+		pg, err := e.api.ListProfiles(t.Context(), proj, prefix, marker, maxItems)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -92,7 +92,7 @@ func TestListInstanceProfiles(t *testing.T) {
 
 			for _, replica := range []*env{e, newEnvOn(t, b, &now)} {
 				for _, prefix := range []string{"", "/"} {
-					pg, err := replica.api.ListInstanceProfiles(t.Context(), proj, prefix, "", 0)
+					pg, err := replica.api.ListProfiles(t.Context(), proj, prefix, "", 0)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -126,7 +126,7 @@ func TestListInstanceProfiles(t *testing.T) {
 				{"/APP/", nil},
 				{"/none/", nil},
 			} {
-				pg, err := e.api.ListInstanceProfiles(t.Context(), proj, tc.prefix, "", 0)
+				pg, err := e.api.ListProfiles(t.Context(), proj, tc.prefix, "", 0)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -152,7 +152,7 @@ func TestListInstanceProfilesEmpty(t *testing.T) {
 	now := time.Now().UTC()
 	e := newEnvOn(t, b, &now)
 	seedRole(t, e, "Lonely")
-	pg, err := e.api.ListInstanceProfiles(t.Context(), proj, "", "", 0)
+	pg, err := e.api.ListProfiles(t.Context(), proj, "", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestListInstanceProfilesDefaultPage(t *testing.T) {
 	for i := range grpcapi.DefaultInstanceProfilePageSize + 1 {
 		seedProfileAt(t, b, fmt.Sprintf("p%03d", i), "/")
 	}
-	pg, err := e.api.ListInstanceProfiles(t.Context(), proj, "", "", 0)
+	pg, err := e.api.ListProfiles(t.Context(), proj, "", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestListInstanceProfilesDefaultPage(t *testing.T) {
 		t.Fatalf("default page: %d profiles, IsTruncated %v, Marker %q; want 100, true, set",
 			len(pg.Profiles), pg.IsTruncated, pg.Marker)
 	}
-	next, err := e.api.ListInstanceProfiles(t.Context(), proj, "", pg.Marker, 0)
+	next, err := e.api.ListProfiles(t.Context(), proj, "", pg.Marker, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestListInstanceProfilesChangesBetweenPages(t *testing.T) {
 	for _, n := range []string{"a", "b", "c", "d"} {
 		seedProfileAt(t, b, n, "/")
 	}
-	pg, err := e.api.ListInstanceProfiles(t.Context(), proj, "", "", 2)
+	pg, err := e.api.ListProfiles(t.Context(), proj, "", "", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,14 +241,14 @@ func TestListInstanceProfilesChangesBetweenPages(t *testing.T) {
 	}
 	seedProfileAt(t, b, "AA", "/")
 	seedProfileAt(t, b, "e", "/")
-	next, err := e.api.ListInstanceProfiles(t.Context(), proj, "", pg.Marker, 2)
+	next, err := e.api.ListProfiles(t.Context(), proj, "", pg.Marker, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := listedNames(next); !slices.Equal(got, []string{"c", "d"}) || !next.IsTruncated {
 		t.Fatalf("second page = %q (IsTruncated %v), want [c d] truncated", got, next.IsTruncated)
 	}
-	last, err := e.api.ListInstanceProfiles(t.Context(), proj, "", next.Marker, 2)
+	last, err := e.api.ListProfiles(t.Context(), proj, "", next.Marker, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +285,7 @@ func TestListInstanceProfilesErrors(t *testing.T) {
 	seedProfileAt(t, b, "web", "/")
 
 	list := func(pid, prefix, marker string, maxItems int) error {
-		_, err := e.api.ListInstanceProfiles(ctx, pid, prefix, marker, maxItems)
+		_, err := e.api.ListProfiles(ctx, pid, prefix, marker, maxItems)
 		return err
 	}
 	for _, p := range []string{"app/", "/a b/", "/\x00", "/é/", "/" + strings.Repeat("p", iam.MaxPathPrefixLen)} {

@@ -47,6 +47,7 @@ type env struct {
 	mfa      iamv1.MfaDeviceServiceClient
 	auth     iamv1.AuthServiceClient
 	token    iamv1.TokenServiceClient
+	profiles iamv1.InstanceProfileServiceClient
 	ops      longrunningpb.OperationsClient
 	now      *time.Time
 	nonce    int
@@ -93,6 +94,7 @@ func newEnvOn(t *testing.T, b store.Backend, now *time.Time, opts ...grpcapi.Opt
 		users: iamv1.NewUserServiceClient(cc), groups: iamv1.NewGroupServiceClient(cc), roles: iamv1.NewRoleServiceClient(cc),
 		policies: iamv1.NewPolicyServiceClient(cc), keys: iamv1.NewAccessKeyServiceClient(cc), mfa: iamv1.NewMfaDeviceServiceClient(cc),
 		auth: iamv1.NewAuthServiceClient(cc), token: iamv1.NewTokenServiceClient(cc), ops: longrunningpb.NewOperationsClient(cc), now: now, api: api,
+		profiles: iamv1.NewInstanceProfileServiceClient(cc),
 	}
 }
 

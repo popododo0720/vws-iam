@@ -54,7 +54,7 @@ func TestDeleteInstanceProfile(t *testing.T) {
 			if got := storedProfile(t, b, "app"); got.Version != before.Version {
 				t.Fatalf("a refused delete wrote the profile: version %q, want %q", got.Version, before.Version)
 			}
-			if err := e.api.RemoveRoleFromInstanceProfile(ctx, proj, "app", "s3access"); err != nil {
+			if err := e.api.RemoveProfileRole(ctx, proj, "app", "s3access"); err != nil {
 				t.Fatal(err)
 			}
 			if err := other.api.DeleteInstanceProfile(ctx, proj, "app"); err != nil {
@@ -167,7 +167,7 @@ func TestDeleteInstanceProfileConcurrent(t *testing.T) {
 					if i/2%2 == 0 {
 						errs[i] = api.DeleteInstanceProfile(t.Context(), proj, "web")
 					} else {
-						errs[i] = api.AddRoleToInstanceProfile(t.Context(), proj, "web", "r")
+						errs[i] = api.AddProfileRole(t.Context(), proj, "web", "r")
 					}
 				})
 			}

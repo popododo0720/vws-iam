@@ -67,29 +67,29 @@ func (s *Server) AccessKeyInfo(
 	return s.getAccessKeyInfo(ctx, sigv4, console, consoleIP, accessKeyID)
 }
 
-// GetFederationToken is STS GetFederationToken, which vws-proto does not
-// carry yet (#107).
-func (s *Server) GetFederationToken(
+// FederationToken is STS GetFederationToken, which this server does not
+// serve over gRPC yet (#107).
+func (s *Server) FederationToken(
 	ctx context.Context, sigv4 *iamv1.AuthenticateRequest, console string, req sts.FederationRequest,
 ) (sts.FederationToken, error) {
 	return s.getFederationToken(ctx, sigv4, console, req)
 }
 
-// AssumeRoleWithSAML is STS AssumeRoleWithSAML, which vws-proto does not
-// carry yet (#106).
-func (s *Server) AssumeRoleWithSAML(ctx context.Context, req sts.SAMLRequest) (sts.SAMLRoleSession, error) {
+// AssumeSAMLRole is STS AssumeRoleWithSAML, which this server does not
+// serve over gRPC yet (#106).
+func (s *Server) AssumeSAMLRole(ctx context.Context, req sts.SAMLRequest) (sts.SAMLRoleSession, error) {
 	return s.assumeRoleWithSAML(ctx, req)
 }
 
-// DeleteServiceLinkedRole is IAM DeleteServiceLinkedRole, which vws-proto
-// does not carry yet (#104).
-func (s *Server) DeleteServiceLinkedRole(ctx context.Context, project, roleName string) (string, error) {
+// DeleteLinkedRole is IAM DeleteServiceLinkedRole, which this server
+// does not serve over gRPC yet (#104).
+func (s *Server) DeleteLinkedRole(ctx context.Context, project, roleName string) (string, error) {
 	return s.deleteServiceLinkedRole(ctx, project, roleName)
 }
 
-// CreateServiceLinkedRole is IAM CreateServiceLinkedRole, which vws-proto
-// does not carry yet (#103).
-func (s *Server) CreateServiceLinkedRole(
+// CreateLinkedRole is IAM CreateServiceLinkedRole, which this server
+// does not serve over gRPC yet (#103).
+func (s *Server) CreateLinkedRole(
 	ctx context.Context, project string, req ServiceLinkedRoleRequest,
 ) (*iamv1.Role, error) {
 	return s.createServiceLinkedRole(ctx, project, req)
@@ -101,9 +101,9 @@ func (s *Server) ResyncMFADevice(ctx context.Context, project string, req Resync
 	return s.resyncMfaDevice(ctx, project, req)
 }
 
-// DeleteRolePermissionsBoundary is IAM DeleteRolePermissionsBoundary,
-// which vws-proto does not carry yet (#101).
-func (s *Server) DeleteRolePermissionsBoundary(ctx context.Context, project, roleName string) error {
+// DeleteRoleBoundary is IAM DeleteRolePermissionsBoundary, which this
+// server does not serve over gRPC yet (#101).
+func (s *Server) DeleteRoleBoundary(ctx context.Context, project, roleName string) error {
 	return s.deleteRolePermissionsBoundary(ctx, project, roleName)
 }
 
@@ -113,36 +113,36 @@ func (s *Server) PutRoleBoundary(ctx context.Context, project, roleName, boundar
 	return s.putRolePermissionsBoundary(ctx, project, roleName, boundaryARN)
 }
 
-// DeleteUserPermissionsBoundary is IAM DeleteUserPermissionsBoundary,
-// which vws-proto does not carry yet (#99).
-func (s *Server) DeleteUserPermissionsBoundary(ctx context.Context, project, userName string) error {
+// DeleteUserBoundary is IAM DeleteUserPermissionsBoundary, which this
+// server does not serve over gRPC yet (#99).
+func (s *Server) DeleteUserBoundary(ctx context.Context, project, userName string) error {
 	return s.deleteUserPermissionsBoundary(ctx, project, userName)
 }
 
-// PutUserPermissionsBoundary is IAM PutUserPermissionsBoundary, which
-// vws-proto does not carry yet (#98).
-func (s *Server) PutUserPermissionsBoundary(ctx context.Context, project, userName, boundaryARN string) error {
+// PutUserBoundary is IAM PutUserPermissionsBoundary, which this server
+// does not serve over gRPC yet (#98).
+func (s *Server) PutUserBoundary(ctx context.Context, project, userName, boundaryARN string) error {
 	return s.putUserPermissionsBoundary(ctx, project, userName, boundaryARN)
 }
 
-// RemoveRoleFromInstanceProfile is IAM RemoveRoleFromInstanceProfile,
-// which vws-proto does not carry yet (#97).
-func (s *Server) RemoveRoleFromInstanceProfile(ctx context.Context, project, profileName, roleName string) error {
+// RemoveProfileRole is IAM RemoveRoleFromInstanceProfile, which this
+// server does not serve over gRPC yet (#97).
+func (s *Server) RemoveProfileRole(ctx context.Context, project, profileName, roleName string) error {
 	return s.removeRoleFromInstanceProfile(ctx, project, profileName, roleName)
 }
 
-// AddRoleToInstanceProfile is IAM AddRoleToInstanceProfile, which
-// vws-proto does not carry yet (#96).
-func (s *Server) AddRoleToInstanceProfile(ctx context.Context, project, profileName, roleName string) error {
+// AddProfileRole is IAM AddRoleToInstanceProfile, which this server
+// does not serve over gRPC yet (#96).
+func (s *Server) AddProfileRole(ctx context.Context, project, profileName, roleName string) error {
 	return s.addRoleToInstanceProfile(ctx, project, profileName, roleName)
 }
 
 // InstanceProfilePage is one page of ListInstanceProfilesForRole.
 type InstanceProfilePage = instanceProfilePage
 
-// ListInstanceProfilesForRole is IAM ListInstanceProfilesForRole, which
-// vws-proto does not carry yet (#95).
-func (s *Server) ListInstanceProfilesForRole(
+// ProfilesForRole is IAM ListInstanceProfilesForRole, which this server
+// does not serve over gRPC yet (#95).
+func (s *Server) ProfilesForRole(
 	ctx context.Context, project, roleName, marker string, maxItems int,
 ) (InstanceProfilePage, error) {
 	return s.listInstanceProfilesForRole(ctx, project, roleName, marker, maxItems)
@@ -151,9 +151,9 @@ func (s *Server) ListInstanceProfilesForRole(
 // InstanceProfileListing is one page of ListInstanceProfiles.
 type InstanceProfileListing = instanceProfileListing
 
-// ListInstanceProfiles is IAM ListInstanceProfiles, which vws-proto does
-// not carry yet (#94).
-func (s *Server) ListInstanceProfiles(
+// ListProfiles is IAM ListInstanceProfiles, which this server does not
+// serve over gRPC yet (#94).
+func (s *Server) ListProfiles(
 	ctx context.Context, project, pathPrefix, marker string, maxItems int,
 ) (InstanceProfileListing, error) {
 	return s.listInstanceProfiles(ctx, project, pathPrefix, marker, maxItems)
@@ -162,9 +162,9 @@ func (s *Server) ListInstanceProfiles(
 // InstanceProfileView is the result of GetInstanceProfile.
 type InstanceProfileView = instanceProfileView
 
-// GetInstanceProfile is IAM GetInstanceProfile, which vws-proto does not
-// carry yet (#93).
-func (s *Server) GetInstanceProfile(ctx context.Context, project, profileName string) (InstanceProfileView, error) {
+// GetProfile is the service layer of IAM GetInstanceProfile (#93), which
+// InstanceProfileService.GetInstanceProfile serves.
+func (s *Server) GetProfile(ctx context.Context, project, profileName string) (InstanceProfileView, error) {
 	return s.getInstanceProfile(ctx, project, profileName)
 }
 

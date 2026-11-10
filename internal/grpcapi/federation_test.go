@@ -37,7 +37,7 @@ func TestGetFederationToken(t *testing.T) {
 				{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}}`}
 
 			once := sign()
-			tok, err := e.api.GetFederationToken(ctx, once, "", req)
+			tok, err := e.api.FederationToken(ctx, once, "", req)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -48,21 +48,21 @@ func TestGetFederationToken(t *testing.T) {
 			}
 			// The same signed request cannot be used twice; one signed for
 			// another action is refused.
-			_, err = e.api.GetFederationToken(ctx, once, "", req)
+			_, err = e.api.FederationToken(ctx, once, "", req)
 			wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
-			_, err = e.api.GetFederationToken(ctx, e.stsSign(broker.id, broker.secretKey, "", "GetSessionToken"), "", req)
+			_, err = e.api.FederationToken(ctx, e.stsSign(broker.id, broker.secretKey, "", "GetSessionToken"), "", req)
 			wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
 			// No permission, and an IP-conditioned Deny on the SigV4 address.
-			_, err = e.api.GetFederationToken(ctx, e.stsSign(nobody.id, nobody.secretKey, "", fedAction), "", req)
+			_, err = e.api.FederationToken(ctx, e.stsSign(nobody.id, nobody.secretKey, "", fedAction), "", req)
 			wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
 			from := sign()
 			from.SourceIp = "10.1.2.3"
-			_, err = e.api.GetFederationToken(ctx, from, "", req)
+			_, err = e.api.FederationToken(ctx, from, "", req)
 			wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
 			// The federated credentials cannot call it again: for now they
 			// do not authenticate at all (see the end of this test); the
 			// AccessDenied of a federated caller is TestGetFederationTokenCallers.
-			_, err = e.api.GetFederationToken(ctx, e.stsSign(c.AccessKeyID, c.Secret, c.SessionToken, fedAction), "", req)
+			_, err = e.api.FederationToken(ctx, e.stsSign(c.AccessKeyID, c.Secret, c.SessionToken, fedAction), "", req)
 			wantErr(t, err, codes.Unauthenticated, "INVALID_CREDENTIALS", "InvalidClientTokenId")
 
 			// AWS error codes.
@@ -90,11 +90,11 @@ func TestGetFederationToken(t *testing.T) {
 					codes.InvalidArgument, "INVALID_SPEC", "PackedPolicyTooLarge",
 				},
 			} {
-				_, err = e.api.GetFederationToken(ctx, sign(), "", bad.req)
+				_, err = e.api.FederationToken(ctx, sign(), "", bad.req)
 				wantErr(t, err, bad.code, bad.reason, bad.want)
 			}
 			// No authentication, and a console session.
-			_, err = e.api.GetFederationToken(ctx, nil, "", req)
+			_, err = e.api.FederationToken(ctx, nil, "", req)
 			wantErr(t, err, codes.Unauthenticated, "INVALID_CREDENTIALS", "MissingAuthenticationToken")
 			const pw = "correct horse battery"
 			lp := &iamv1.SetLoginProfileRequest{Name: broker.user.GetName(), Password: pw}
@@ -105,7 +105,7 @@ func TestGetFederationToken(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = e.api.GetFederationToken(ctx, nil, l.GetSessionToken(), req)
+			_, err = e.api.FederationToken(ctx, nil, l.GetSessionToken(), req)
 			wantErr(t, err, codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
 
 			// The gateway cannot be given a principal for a federated

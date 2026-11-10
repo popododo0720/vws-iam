@@ -32,7 +32,7 @@ func listAll(t *testing.T, e *env, role string, maxItems int) ([]string, int) {
 	var names []string
 	marker := ""
 	for pages := 1; ; pages++ {
-		pg, err := e.api.ListInstanceProfilesForRole(t.Context(), proj, role, marker, maxItems)
+		pg, err := e.api.ProfilesForRole(t.Context(), proj, role, marker, maxItems)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -76,7 +76,7 @@ func TestListInstanceProfilesForRole(t *testing.T) {
 			before := storedProfile(t, b, "web")
 
 			for _, replica := range []*env{e, newEnvOn(t, b, &now)} {
-				pg, err := replica.api.ListInstanceProfilesForRole(t.Context(), proj, "s3access", "", 0)
+				pg, err := replica.api.ProfilesForRole(t.Context(), proj, "s3access", "", 0)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -109,7 +109,7 @@ func TestListInstanceProfilesForRoleEmpty(t *testing.T) {
 	seedRole(t, e, "Lonely")
 	seedRole(t, e, "Busy")
 	seedInstanceProfile(t, b, "web", "Busy")
-	pg, err := e.api.ListInstanceProfilesForRole(t.Context(), proj, "Lonely", "", 0)
+	pg, err := e.api.ProfilesForRole(t.Context(), proj, "Lonely", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestListInstanceProfilesForRoleDefaultPage(t *testing.T) {
 	for i := range grpcapi.DefaultInstanceProfilePageSize + 1 {
 		seedInstanceProfile(t, b, fmt.Sprintf("p%03d", i), "Shared")
 	}
-	pg, err := e.api.ListInstanceProfilesForRole(t.Context(), proj, "Shared", "", 0)
+	pg, err := e.api.ProfilesForRole(t.Context(), proj, "Shared", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestListInstanceProfilesForRoleDefaultPage(t *testing.T) {
 		t.Fatalf("default page: %d profiles, IsTruncated %v, Marker %q; want 100, true, set",
 			len(pg.Profiles), pg.IsTruncated, pg.Marker)
 	}
-	next, err := e.api.ListInstanceProfilesForRole(t.Context(), proj, "Shared", pg.Marker, 0)
+	next, err := e.api.ProfilesForRole(t.Context(), proj, "Shared", pg.Marker, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestListInstanceProfilesForRoleChangesBetweenPages(t *testing.T) {
 	for _, n := range []string{"a", "b", "c", "d"} {
 		seedInstanceProfile(t, b, n, "Shared")
 	}
-	pg, err := e.api.ListInstanceProfilesForRole(t.Context(), proj, "Shared", "", 2)
+	pg, err := e.api.ProfilesForRole(t.Context(), proj, "Shared", "", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,14 +198,14 @@ func TestListInstanceProfilesForRoleChangesBetweenPages(t *testing.T) {
 	}
 	seedInstanceProfile(t, b, "AA", "Shared")
 	seedInstanceProfile(t, b, "e", "Shared")
-	next, err := e.api.ListInstanceProfilesForRole(t.Context(), proj, "Shared", pg.Marker, 2)
+	next, err := e.api.ProfilesForRole(t.Context(), proj, "Shared", pg.Marker, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := profileNames(next); !slices.Equal(got, []string{"c", "d"}) || !next.IsTruncated {
 		t.Fatalf("second page = %q (IsTruncated %v), want [c d] truncated", got, next.IsTruncated)
 	}
-	last, err := e.api.ListInstanceProfilesForRole(t.Context(), proj, "Shared", next.Marker, 2)
+	last, err := e.api.ProfilesForRole(t.Context(), proj, "Shared", next.Marker, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestListInstanceProfilesForRoleErrors(t *testing.T) {
 	seedInstanceProfile(t, b, "stale", "Gone")
 
 	list := func(pid, role, marker string, maxItems int) error {
-		_, err := e.api.ListInstanceProfilesForRole(ctx, pid, role, marker, maxItems)
+		_, err := e.api.ProfilesForRole(ctx, pid, role, marker, maxItems)
 		return err
 	}
 	wantAWS(t, list(proj, "missing", "", 0), codes.NotFound, "NoSuchEntity")

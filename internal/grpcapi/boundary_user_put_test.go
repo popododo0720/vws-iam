@@ -44,7 +44,7 @@ func TestPutUserPermissionsBoundary(t *testing.T) {
 			second := seedBoundaryPolicy(t, e, "Second", "/team/")
 			before := seedPlainUser(t, e, b, "Bounded")
 
-			if err := e.api.PutUserPermissionsBoundary(t.Context(), proj, "bounded", first); err != nil {
+			if err := e.api.PutUserBoundary(t.Context(), proj, "bounded", first); err != nil {
 				t.Fatal(err)
 			}
 			got := storedUser(t, b, "Bounded")
@@ -58,7 +58,7 @@ func TestPutUserPermissionsBoundary(t *testing.T) {
 				t.Fatalf("Generation = %d, want %d", got.Object.Generation, before.Generation+1)
 			}
 
-			if err := e.api.PutUserPermissionsBoundary(t.Context(), proj, "Bounded", second); err != nil {
+			if err := e.api.PutUserBoundary(t.Context(), proj, "Bounded", second); err != nil {
 				t.Fatal(err)
 			}
 			replaced := storedUser(t, b, "Bounded")
@@ -67,14 +67,14 @@ func TestPutUserPermissionsBoundary(t *testing.T) {
 					replaced.Object.PermissionsBoundary, replaced.Object.Generation, second, before.Generation+2)
 			}
 
-			if err := newEnvOn(t, b, &now).api.PutUserPermissionsBoundary(t.Context(), proj, "Bounded", second); err != nil {
+			if err := newEnvOn(t, b, &now).api.PutUserBoundary(t.Context(), proj, "Bounded", second); err != nil {
 				t.Fatalf("repeat on another replica: %v", err)
 			}
 			if again := storedUser(t, b, "Bounded"); again.Version != replaced.Version {
 				t.Fatalf("repeat wrote the user: version %q, want %q", again.Version, replaced.Version)
 			}
 
-			if err := e.api.DeleteUserPermissionsBoundary(t.Context(), proj, "Bounded"); err != nil {
+			if err := e.api.DeleteUserBoundary(t.Context(), proj, "Bounded"); err != nil {
 				t.Fatal(err)
 			}
 			if got := storedUser(t, b, "Bounded"); got.Object.PermissionsBoundary != "" {
@@ -98,8 +98,8 @@ func TestPutUserPermissionsBoundaryErrors(t *testing.T) {
 	seedPlainUser(t, e, b, "plain")
 	before := storedUser(t, b, "plain")
 
-	wantAWS(t, e.api.PutUserPermissionsBoundary(ctx, proj, "missing", pol), codes.NotFound, "NoSuchEntity")
-	wantAWS(t, e.api.PutUserPermissionsBoundary(ctx, proj, strings.Repeat("u", 64), pol), codes.NotFound, "NoSuchEntity")
+	wantAWS(t, e.api.PutUserBoundary(ctx, proj, "missing", pol), codes.NotFound, "NoSuchEntity")
+	wantAWS(t, e.api.PutUserBoundary(ctx, proj, strings.Repeat("u", 64), pol), codes.NotFound, "NoSuchEntity")
 	for _, a := range []string{
 		"arn:vws:iam::" + proj + ":policy/team/Nope",                   // no such policy
 		"arn:vws:iam::" + proj + ":policy/Boundary",                    // wrong path
@@ -108,7 +108,7 @@ func TestPutUserPermissionsBoundaryErrors(t *testing.T) {
 		"arn:vws:iam::aws:policy/AdministratorAccess",                  // no AWS managed policies
 		"arn:vws:iam::" + proj + ":policy/" + strings.Repeat("p", 129), // not a policy name
 	} {
-		wantAWS(t, e.api.PutUserPermissionsBoundary(ctx, proj, "plain", a), codes.NotFound, "NoSuchEntity")
+		wantAWS(t, e.api.PutUserBoundary(ctx, proj, "plain", a), codes.NotFound, "NoSuchEntity")
 	}
 
 	renaming := iam.User{
@@ -118,16 +118,16 @@ func TestPutUserPermissionsBoundaryErrors(t *testing.T) {
 	if _, err := store.CreateMarked(ctx, store.Scoped(b, proj), renaming); err != nil {
 		t.Fatal(err)
 	}
-	wantAWS(t, e.api.PutUserPermissionsBoundary(ctx, proj, "moving", pol), codes.Aborted, "ConcurrentModification")
+	wantAWS(t, e.api.PutUserBoundary(ctx, proj, "moving", pol), codes.Aborted, "ConcurrentModification")
 	if got := storedUser(t, b, "moving"); got.Object.PermissionsBoundary != "" {
 		t.Fatalf("renaming user boundary = %q, want none", got.Object.PermissionsBoundary)
 	}
 
 	for _, n := range []string{"", strings.Repeat("u", 65), "a/b", "a b", "üser"} {
-		wantAWS(t, e.api.PutUserPermissionsBoundary(ctx, proj, n, pol), codes.InvalidArgument, "ValidationError")
+		wantAWS(t, e.api.PutUserBoundary(ctx, proj, n, pol), codes.InvalidArgument, "ValidationError")
 	}
 	for _, a := range []string{"", "arn:vws:iam::p:pol", "arn:vws:iam::" + proj + ":policy/" + strings.Repeat("p", 2049)} {
-		wantAWS(t, e.api.PutUserPermissionsBoundary(ctx, proj, "plain", a), codes.InvalidArgument, "ValidationError")
+		wantAWS(t, e.api.PutUserBoundary(ctx, proj, "plain", a), codes.InvalidArgument, "ValidationError")
 	}
 	for _, a := range []string{
 		"arn:aws:iam::" + proj + ":policy/team/Boundary",
@@ -136,9 +136,9 @@ func TestPutUserPermissionsBoundaryErrors(t *testing.T) {
 		"arn:vws:iam:::policy/team/Boundary",
 		"not-an-arn-at-all-but-long",
 	} {
-		wantAWS(t, e.api.PutUserPermissionsBoundary(ctx, proj, "plain", a), codes.InvalidArgument, "InvalidInput")
+		wantAWS(t, e.api.PutUserBoundary(ctx, proj, "plain", a), codes.InvalidArgument, "InvalidInput")
 	}
-	err := e.api.PutUserPermissionsBoundary(ctx, "Bad_Project", "plain", pol)
+	err := e.api.PutUserBoundary(ctx, "Bad_Project", "plain", pol)
 	wantAWS(t, err, codes.InvalidArgument, "ValidationError")
 
 	if got := storedUser(t, b, "plain"); got.Version != before.Version || got.Object.PermissionsBoundary != "" {
@@ -157,7 +157,7 @@ func TestPutUserPermissionsBoundaryCanceled(t *testing.T) {
 	before := storedUser(t, b, "plain")
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	err := e.api.PutUserPermissionsBoundary(ctx, proj, "plain", pol)
+	err := e.api.PutUserBoundary(ctx, proj, "plain", pol)
 	if status.Code(err) != codes.Canceled {
 		t.Fatalf("canceled request: %v, want Canceled", err)
 	}
@@ -181,7 +181,7 @@ func TestPutUserPermissionsBoundaryConcurrent(t *testing.T) {
 			errs := make([]error, 16)
 			for i := range errs {
 				wg.Go(func() {
-					errs[i] = replicas[i%2].api.PutUserPermissionsBoundary(t.Context(), proj, "racer", pol)
+					errs[i] = replicas[i%2].api.PutUserBoundary(t.Context(), proj, "racer", pol)
 				})
 			}
 			wg.Wait()
@@ -211,7 +211,7 @@ func TestPutUserPermissionsBoundaryStaleRead(t *testing.T) {
 			pol := seedBoundaryPolicy(t, seed, "Boundary", "")
 			seedPlainUser(t, seed, inner, "stale")
 			b := &changingUser{Backend: inner, t: t}
-			if err := newEnvOn(t, b, &now).api.PutUserPermissionsBoundary(t.Context(), proj, "stale", pol); err != nil {
+			if err := newEnvOn(t, b, &now).api.PutUserBoundary(t.Context(), proj, "stale", pol); err != nil {
 				t.Fatal(err)
 			}
 			got := storedUser(t, inner, "stale").Object

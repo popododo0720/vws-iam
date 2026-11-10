@@ -43,7 +43,7 @@ func TestCreateInstanceProfile(t *testing.T) {
 				t.Fatalf("stored %+v, want it as returned %+v", s, p)
 			}
 			for _, replica := range []*env{e, newEnvOn(t, b, &now)} {
-				v, err := replica.api.GetInstanceProfile(t.Context(), proj, "webserver")
+				v, err := replica.api.GetProfile(t.Context(), proj, "webserver")
 				if err != nil || v.Profile.ID != p.ID || v.ARN != got.ARN {
 					t.Fatalf("GetInstanceProfile = %+v, %v, want the created profile", v, err)
 				}
