@@ -179,3 +179,13 @@ func (l MembershipLock) Validate() error {
 	}
 	return nil
 }
+
+// MaxMFADevicesPerUser is the shared AWS quota for virtual and FIDO devices.
+const MaxMFADevicesPerUser = 8
+
+// MFARegistrationLease is a per-user quota hold. Its versioned user write
+// fences a device commit if another replica takes an expired hold.
+type MFARegistrationLease struct {
+	Holder  string    `json:"holder,omitempty"`
+	Expires time.Time `json:"expires,omitzero"`
+}

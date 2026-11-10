@@ -41,6 +41,8 @@ var (
 // Nothing here is secret: PublicKey is the credential's public COSE key.
 type FidoDevice struct {
 	Meta
+	// Pending is an uncommitted registration, invisible to readers and quotas.
+	Pending bool `json:"pending,omitempty"`
 	// ID is FidoID(CredentialID).
 	ID string `json:"id"`
 	// UserName is the user the key is registered to.

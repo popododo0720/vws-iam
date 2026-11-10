@@ -227,6 +227,12 @@ const maxEnableAttempts = 8
 func (s *Service) Enable(ctx context.Context, user, name, code1, code2 string) (err error) {
 	ctx, end := start(ctx, "Enable")
 	defer end(&err)
+	locked, unlock, err := s.lockMFA(ctx, user)
+	if err != nil {
+		return fmt.Errorf("enable mfa device %s: user %q: %w", name, user, err)
+	}
+	defer unlock()
+	holder := locked.Object.MFARegistrationLease.Holder
 	uid := ""
 	for attempt := 0; ; attempt++ {
 		u, err := store.Get[iam.User](ctx, s.b, user)
@@ -240,7 +246,20 @@ func (s *Service) Enable(ctx context.Context, user, name, code1, code2 string) (
 			return fmt.Errorf("user %q was replaced: %w", user, store.ErrConflict)
 		}
 		uid = u.Object.UID
-		pre := store.PreOf(u)
+		d, err := store.Get[iam.MfaDevice](ctx, s.b, name)
+		if err != nil {
+			return fmt.Errorf("enable mfa device %s: %w", name, err)
+		}
+		if d.Object.Enabled {
+			return fmt.Errorf("enable mfa device %s: %w", name, ErrEntityInUse)
+		}
+		pre, err := s.claimMFASlot(ctx, u, holder, false)
+		if errors.Is(err, store.ErrConflict) && attempt+1 < maxEnableAttempts {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("enable mfa device %s: %w", name, err)
+		}
 		err = s.enable(ctx, u.Object.Name, name, code1, code2, &pre)
 		if errors.Is(err, store.ErrConflict) && attempt+1 < maxEnableAttempts {
 			continue
