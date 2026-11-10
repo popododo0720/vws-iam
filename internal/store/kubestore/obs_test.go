@@ -212,11 +212,11 @@ func TestSentinelErrorsStayBare(t *testing.T) {
 	if _, err := b.Get(ctx, iam.KindUser, "nobody"); err == nil || err.Error() != store.ErrNotFound.Error() {
 		t.Errorf("not found text %v, want %q as memstore answers", err, store.ErrNotFound)
 	}
-	_, err = store.Create(ctx, b, iam.User{Name: "alice", ID: "2"})
+	_, err = b.Create(ctx, iam.KindUser, "alice", []byte(`{"name":"alice","id":"2"}`))
 	if err == nil || err.Error() != store.ErrExists.Error() {
 		t.Errorf("exists text %v", err)
 	}
-	_, err = store.Update(ctx, b, iam.User{Name: "alice", ID: "1"}, u)
+	_, err = b.Update(ctx, iam.KindUser, "alice", []byte(`{"name":"alice","id":"1"}`), u)
 	if err == nil || err.Error() != store.ErrConflict.Error() {
 		t.Errorf("conflict text %v", err)
 	}
