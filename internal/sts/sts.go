@@ -363,6 +363,7 @@ func (s *Service) userID(c Caller) string {
 func (s *Service) Resolve(ctx context.Context, cred Credential) (_ Caller, err error) {
 	ctx, end := start(ctx, "Resolve")
 	defer end(&err)
+	defer wrapOperationError("Resolve", &err)
 	if cred.SessionToken != "" {
 		sess, err := s.validate(ctx, cred.AccessKeyID, cred.SessionToken)
 		if err != nil {
@@ -509,6 +510,7 @@ func (s *Service) AssumeRole(
 ) (_ Credentials, err error) {
 	ctx, end := start(ctx, "AssumeRole")
 	defer end(&err)
+	defer wrapOperationError("AssumeRole", &err)
 	if c.principalID == "" {
 		return Credentials{}, fmt.Errorf("%w: unresolved caller", ErrAccessDenied)
 	}
@@ -620,6 +622,7 @@ func (s *Service) GetSessionToken(
 ) (_ Credentials, err error) {
 	ctx, end := start(ctx, "GetSessionToken")
 	defer end(&err)
+	defer wrapOperationError("GetSessionToken", &err)
 	o, err := issueOpts(opts)
 	if err != nil {
 		return Credentials{}, err

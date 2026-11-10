@@ -86,6 +86,7 @@ func (s *Service) GetFederationToken(
 ) (_ FederationToken, err error) {
 	ctx, end := start(ctx, "GetFederationToken")
 	defer end(&err)
+	defer wrapOperationError("GetFederationToken", &err)
 	if c.principalID == "" {
 		return FederationToken{}, fmt.Errorf("%w: unresolved caller", ErrAccessDenied)
 	}

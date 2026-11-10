@@ -154,6 +154,7 @@ func (s *Service) AssumeRoleWithSAML(
 ) (_ SAMLRoleSession, err error) {
 	ctx, end := start(ctx, "AssumeRoleWithSAML")
 	defer end(&err)
+	defer wrapOperationError("AssumeRoleWithSAML", &err)
 	packed, err := validateSAMLRequest(req)
 	if err != nil {
 		return SAMLRoleSession{}, err
