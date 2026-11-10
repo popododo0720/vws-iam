@@ -121,15 +121,6 @@ func (s *Server) AddRoleToInstanceProfile(
 	return nil, status.Error(codes.Unimplemented, "AddRoleToInstanceProfile is not served yet")
 }
 
-// RemoveRoleFromInstanceProfile is not served yet.
-//
-// TODO(#97): serve it through removeRoleFromInstanceProfile.
-func (s *Server) RemoveRoleFromInstanceProfile(
-	context.Context, *iamv1.RemoveRoleFromInstanceProfileRequest,
-) (*iamv1.RemoveRoleFromInstanceProfileResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "RemoveRoleFromInstanceProfile is not served yet")
-}
-
 // unservedField answers UNIMPLEMENTED for a request field vws-proto
 // carries that this server does not honor yet, so the request is refused
 // before any write and never served as if the field were unset.

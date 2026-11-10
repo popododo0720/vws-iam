@@ -74,10 +74,6 @@ func TestUnservedRPCsAreUnimplemented(t *testing.T) {
 			_, err := e.profiles.AddRoleToInstanceProfile(ctx, &iamv1.AddRoleToInstanceProfileRequest{})
 			return err
 		},
-		"RemoveRoleFromInstanceProfile": func() error {
-			_, err := e.profiles.RemoveRoleFromInstanceProfile(ctx, &iamv1.RemoveRoleFromInstanceProfileRequest{})
-			return err
-		},
 	} {
 		if err := call(); status.Code(err) != codes.Unimplemented {
 			t.Errorf("%s: %v, want Unimplemented", name, err)

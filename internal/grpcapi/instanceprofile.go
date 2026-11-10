@@ -32,10 +32,7 @@ import (
 // canceled or whose deadline passed is not written. Removing a role
 // raises no quota, so LimitExceeded cannot occur.
 // Authorization (iam:RemoveRoleFromInstanceProfile) is console-api's, as
-// for UpdateRole.
-//
-// TODO(#97): serve this as an RPC once vws-proto carries it
-// (popododo0720/vws-proto#118).
+// for UpdateRole. RemoveRoleFromInstanceProfile serves it over gRPC.
 func (s *Server) removeRoleFromInstanceProfile(ctx context.Context, pid, profileName, roleName string) error {
 	if !iam.ValidProject(pid) {
 		return invalidID("project " + quote(pid) + " is not a project id")
@@ -612,6 +609,23 @@ func (s *Server) ListInstanceProfilesForRole(
 		out.InstanceProfiles = append(out.InstanceProfiles, p.instanceProfileProto(v))
 	}
 	return out, nil
+}
+
+// RemoveRoleFromInstanceProfile is IAM RemoveRoleFromInstanceProfile over
+// gRPC (#97): it removes role_name from the instance profile name names,
+// through removeRoleFromInstanceProfile. The response is empty, as AWS
+// returns only a request id.
+func (s *Server) RemoveRoleFromInstanceProfile(
+	ctx context.Context, req *iamv1.RemoveRoleFromInstanceProfileRequest,
+) (*iamv1.RemoveRoleFromInstanceProfileResponse, error) {
+	pid, id, err := child(req.GetName(), "instanceProfiles")
+	if err != nil {
+		return nil, err
+	}
+	if err := s.removeRoleFromInstanceProfile(ctx, pid, id, req.GetRoleName()); err != nil {
+		return nil, err
+	}
+	return &iamv1.RemoveRoleFromInstanceProfileResponse{}, nil
 }
 
 // instanceProfileProto renders v. spec.roles and status.roles both list

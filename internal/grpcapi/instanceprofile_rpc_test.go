@@ -443,3 +443,122 @@ func TestListInstanceProfilesForRoleRPCErrors(t *testing.T) {
 		}
 	}
 }
+
+func removeRoleRPC(t *testing.T, e *env, name, role string) (*iamv1.RemoveRoleFromInstanceProfileResponse, error) {
+	t.Helper()
+	return e.profiles.RemoveRoleFromInstanceProfile(t.Context(), &iamv1.RemoveRoleFromInstanceProfileRequest{
+		Name: name, RoleName: role,
+	})
+}
+
+// TestRemoveRoleFromInstanceProfileRPC:
+// InstanceProfileService.RemoveRoleFromInstanceProfile removes the role,
+// named in any case, from the profile, named in any case, and answers an
+// empty response; the role and the profile stay, and GetInstanceProfile on
+// a second server over the same store (another replica, or this one
+// restarted) shows the profile without the role at the next generation. A
+// repeat on that server is NOT_FOUND (NoSuchEntity), as in AWS, and writes
+// nothing. On both store backends.
+func TestRemoveRoleFromInstanceProfileRPC(t *testing.T) {
+	for _, bk := range renameBackends {
+		t.Run(bk.name, func(t *testing.T) {
+			b := bk.open()
+			now := time.Now().UTC()
+			e := newEnvOn(t, b, &now)
+			seedRole(t, e, "S3Access")
+			seedProfileAt(t, b, "Webserver", "/app/", "S3Access")
+			profile := parentName + "/instanceProfiles/Webserver"
+
+			got, err := removeRoleRPC(t, e, parentName+"/instanceProfiles/webSERVER", "s3access")
+			if err != nil {
+				t.Fatalf("RemoveRoleFromInstanceProfile: %v", err)
+			}
+			if !proto.Equal(got, &iamv1.RemoveRoleFromInstanceProfileResponse{}) {
+				t.Fatalf("response = %v, want empty", got)
+			}
+
+			replica := newEnvOn(t, b, &now)
+			ip, err := getProfileRPC(t, replica, profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(ip.GetSpec().GetRoles()) != 0 || len(ip.GetStatus().GetRoles()) != 0 ||
+				ip.GetGeneration() != 2 || ip.GetSpec().GetPath() != "/app/" {
+				t.Fatalf("after remove: %v, want path /app/, no role, generation 2", ip)
+			}
+			if _, err := replica.roles.GetRole(t.Context(), &iamv1.GetRoleRequest{
+				Name: parentName + "/roles/S3Access",
+			}); err != nil {
+				t.Fatalf("the role did not stay: %v", err)
+			}
+
+			stored := storedProfile(t, b, "Webserver")
+			_, err = removeRoleRPC(t, replica, profile, "S3Access")
+			wantAWS(t, err, codes.NotFound, "NoSuchEntity")
+			if again := storedProfile(t, b, "Webserver"); again.Version != stored.Version {
+				t.Fatalf("the repeat wrote the profile: version %q, want %q", again.Version, stored.Version)
+			}
+		})
+	}
+}
+
+// TestRemoveRoleFromInstanceProfileRPCErrors: a name that is not
+// projects/{project}/instanceProfiles/{id}, a bad project, an
+// InstanceProfileName or role_name outside the AWS rule is
+// INVALID_ARGUMENT (ValidationError); an unknown profile, an unknown role
+// and a role not in the profile are NOT_FOUND (NoSuchEntity); a
+// service-linked role is FAILED_PRECONDITION (UnmodifiableEntity); a store
+// failure on the write is INTERNAL without backend detail. None of them
+// changes the profile.
+func TestRemoveRoleFromInstanceProfileRPCErrors(t *testing.T) {
+	b := memstore.New()
+	now := time.Now().UTC()
+	e := newEnvOn(t, b, &now)
+	seedRole(t, e, "inside")
+	seedRole(t, e, "outside")
+	seedInstanceProfile(t, b, "web", "inside")
+	before := storedProfile(t, b, "web")
+	web := parentName + "/instanceProfiles/web"
+
+	for _, n := range []string{
+		"", "web", parentName, parentName + "/roles/web", parentName + "/instanceProfiles/",
+		parentName + "/instanceProfiles/a/b", "projects/Bad_Project/instanceProfiles/web",
+		parentName + "/instanceProfiles/a b", parentName + "/instanceProfiles/é",
+		parentName + "/instanceProfiles/" + strings.Repeat("p", iam.MaxInstanceProfileNameLen+1),
+	} {
+		_, err := removeRoleRPC(t, e, n, "inside")
+		wantAWS(t, err, codes.InvalidArgument, "ValidationError")
+	}
+	for _, r := range []string{"", strings.Repeat("r", 65), "a/b", "a b", "rôle"} {
+		_, err := removeRoleRPC(t, e, web, r)
+		wantAWS(t, err, codes.InvalidArgument, "ValidationError")
+	}
+	for _, c := range []struct{ profile, role string }{
+		{parentName + "/instanceProfiles/missing", "inside"},
+		{parentName + "/instanceProfiles/" + strings.Repeat("p", iam.MaxInstanceProfileNameLen), "inside"},
+		{web, "missing"},
+		{web, "outside"},
+	} {
+		_, err := removeRoleRPC(t, e, c.profile, c.role)
+		wantAWS(t, err, codes.NotFound, "NoSuchEntity")
+	}
+	slr := seedLinkedRole(t, b, "linked")
+	seedInstanceProfile(t, b, "svc", slr.Name)
+	_, err := removeRoleRPC(t, e, parentName+"/instanceProfiles/svc", slr.Name)
+	wantAWS(t, err, codes.FailedPrecondition, "UnmodifiableEntity")
+	if got := storedProfile(t, b, "web"); got.Version != before.Version {
+		t.Fatalf("a refused request wrote the profile: version %q, want %q", got.Version, before.Version)
+	}
+
+	inner := memstore.New()
+	fe := newEnvOn(t, failingUpdate{inner, iam.KindInstanceProfile, errors.New("backend down")}, &now)
+	seedRole(t, fe, "r")
+	seedInstanceProfile(t, inner, "web", "r")
+	got, err := removeRoleRPC(t, fe, web, "r")
+	if status.Code(err) != codes.Internal || strings.Contains(err.Error(), "backend down") || got != nil {
+		t.Fatalf("store failure on the write: %v, %v; want a bare INTERNAL and no response", got, err)
+	}
+	if roles := storedProfile(t, inner, "web").Object.Roles; len(roles) != 1 {
+		t.Fatalf("after a failed write the profile holds %q, want the role kept", roles)
+	}
+}
