@@ -14,9 +14,9 @@ import (
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
 )
 
-// TestUnservedRPCsAreUnimplemented: the RPCs vws-proto v0.9.0 and v0.11.0
-// added that this server does not serve yet answer UNIMPLEMENTED (#100,
-// #102, #108).
+// TestUnservedRPCsAreUnimplemented: the RPCs vws-proto v0.9.0 to v0.20.0
+// added that this server does not serve yet answer UNIMPLEMENTED (#98 to
+// #108).
 func TestUnservedRPCsAreUnimplemented(t *testing.T) {
 	e := newEnv(t)
 	_, err := e.roles.PutRolePermissionsBoundary(t.Context(), &iamv1.PutRolePermissionsBoundaryRequest{
@@ -35,6 +35,45 @@ func TestUnservedRPCsAreUnimplemented(t *testing.T) {
 	_, err = e.token.GetAccessKeyInfo(t.Context(), &iamv1.GetAccessKeyInfoRequest{AccessKeyId: "AKIAAAAAAAAAAAAAAAAA"})
 	if status.Code(err) != codes.Unimplemented {
 		t.Fatalf("GetAccessKeyInfo: %v, want Unimplemented", err)
+	}
+	ctx := t.Context()
+	for name, call := range map[string]func() error{
+		"DeleteUserPermissionsBoundary": func() error {
+			_, err := e.users.DeleteUserPermissionsBoundary(ctx, &iamv1.DeleteUserPermissionsBoundaryRequest{})
+			return err
+		},
+		"PutUserPermissionsBoundary": func() error {
+			_, err := e.users.PutUserPermissionsBoundary(ctx, &iamv1.PutUserPermissionsBoundaryRequest{})
+			return err
+		},
+		"DeleteRolePermissionsBoundary": func() error {
+			_, err := e.roles.DeleteRolePermissionsBoundary(ctx, &iamv1.DeleteRolePermissionsBoundaryRequest{})
+			return err
+		},
+		"CreateServiceLinkedRole": func() error {
+			_, err := e.roles.CreateServiceLinkedRole(ctx, &iamv1.CreateServiceLinkedRoleRequest{})
+			return err
+		},
+		"DeleteServiceLinkedRole": func() error {
+			_, err := e.roles.DeleteServiceLinkedRole(ctx, &iamv1.DeleteServiceLinkedRoleRequest{})
+			return err
+		},
+		"AssumeRoleWithSAML": func() error {
+			_, err := e.token.AssumeRoleWithSAML(ctx, &iamv1.AssumeRoleWithSAMLRequest{})
+			return err
+		},
+		"AssumeRoleWithWebIdentity": func() error {
+			_, err := e.token.AssumeRoleWithWebIdentity(ctx, &iamv1.AssumeRoleWithWebIdentityRequest{})
+			return err
+		},
+		"GetFederationToken": func() error {
+			_, err := e.token.GetFederationToken(ctx, &iamv1.GetFederationTokenRequest{})
+			return err
+		},
+	} {
+		if err := call(); status.Code(err) != codes.Unimplemented {
+			t.Errorf("%s: %v, want Unimplemented", name, err)
+		}
 	}
 }
 

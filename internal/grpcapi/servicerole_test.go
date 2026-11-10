@@ -56,7 +56,7 @@ func TestDeleteServiceLinkedRole(t *testing.T) {
 			ctx := t.Context()
 			r := seedLinkedRole(t, b, "VWSServiceRoleForLexBots")
 
-			id, err := e.api.DeleteServiceLinkedRole(ctx, proj, "vwsserviceroleforlexbots")
+			id, err := e.api.DeleteLinkedRole(ctx, proj, "vwsserviceroleforlexbots")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -66,7 +66,7 @@ func TestDeleteServiceLinkedRole(t *testing.T) {
 			}
 			wantNoRole(t, e, r.Name)
 			wantNoRole(t, newEnvOn(t, b, &now), r.Name)
-			_, err = e.api.DeleteServiceLinkedRole(ctx, proj, r.Name)
+			_, err = e.api.DeleteLinkedRole(ctx, proj, r.Name)
 			wantAWS(t, err, codes.NotFound, "NoSuchEntity")
 		})
 	}
@@ -86,7 +86,7 @@ func TestDeleteServiceLinkedRoleRefusesOtherRoles(t *testing.T) {
 	if _, err := e.roles.CreateRole(ctx, req); err != nil {
 		t.Fatal(err)
 	}
-	_, err := e.api.DeleteServiceLinkedRole(ctx, proj, "plain")
+	_, err := e.api.DeleteLinkedRole(ctx, proj, "plain")
 	wantAWS(t, err, codes.NotFound, "NoSuchEntity")
 	if _, err := e.roles.GetRole(ctx, &iamv1.GetRoleRequest{Name: parentName + "/roles/plain"}); err != nil {
 		t.Fatalf("plain role after DeleteServiceLinkedRole: %v", err)
@@ -95,7 +95,7 @@ func TestDeleteServiceLinkedRoleRefusesOtherRoles(t *testing.T) {
 	slr := seedLinkedRole(t, b, "linked")
 	_, err = e.roles.DeleteRole(ctx, &iamv1.DeleteRoleRequest{Name: parentName + "/roles/linked"})
 	wantAWS(t, err, codes.FailedPrecondition, "UnmodifiableEntity")
-	if _, err := e.api.DeleteServiceLinkedRole(ctx, proj, slr.Name); err != nil {
+	if _, err := e.api.DeleteLinkedRole(ctx, proj, slr.Name); err != nil {
 		t.Fatalf("service-linked role after DeleteRole: %v", err)
 	}
 }
@@ -107,12 +107,12 @@ func TestDeleteServiceLinkedRoleValidation(t *testing.T) {
 	e := newEnv(t)
 	ctx := t.Context()
 	for _, n := range []string{"", strings.Repeat("r", 65), "a/b", "a b", "rôle"} {
-		_, err := e.api.DeleteServiceLinkedRole(ctx, proj, n)
+		_, err := e.api.DeleteLinkedRole(ctx, proj, n)
 		wantAWS(t, err, codes.InvalidArgument, "ValidationError")
 	}
-	_, err := e.api.DeleteServiceLinkedRole(ctx, "Bad_Project", "r")
+	_, err := e.api.DeleteLinkedRole(ctx, "Bad_Project", "r")
 	wantAWS(t, err, codes.InvalidArgument, "ValidationError")
-	_, err = e.api.DeleteServiceLinkedRole(ctx, proj, strings.Repeat("r", 64))
+	_, err = e.api.DeleteLinkedRole(ctx, proj, strings.Repeat("r", 64))
 	wantAWS(t, err, codes.NotFound, "NoSuchEntity")
 }
 
@@ -132,7 +132,7 @@ func TestDeleteServiceLinkedRoleConcurrent(t *testing.T) {
 			errs := make([]error, len(ids))
 			for i := range ids {
 				wg.Go(func() {
-					ids[i], errs[i] = replicas[i%2].api.DeleteServiceLinkedRole(t.Context(), proj, r.Name)
+					ids[i], errs[i] = replicas[i%2].api.DeleteLinkedRole(t.Context(), proj, r.Name)
 				})
 			}
 			wg.Wait()
@@ -188,7 +188,7 @@ func TestDeleteServiceLinkedRoleStaleRead(t *testing.T) {
 			now := time.Now().UTC()
 			e := newEnvOn(t, b, &now)
 			seedLinkedRole(t, b, "swapped")
-			_, err := e.api.DeleteServiceLinkedRole(t.Context(), proj, "swapped")
+			_, err := e.api.DeleteLinkedRole(t.Context(), proj, "swapped")
 			wantAWS(t, err, codes.NotFound, "NoSuchEntity")
 			got, err := e.roles.GetRole(t.Context(), &iamv1.GetRoleRequest{Name: parentName + "/roles/swapped"})
 			if err != nil || got.GetSpec().GetPath() != "/" {

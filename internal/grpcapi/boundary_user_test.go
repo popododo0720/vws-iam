@@ -51,7 +51,7 @@ func TestDeleteUserPermissionsBoundary(t *testing.T) {
 			e := newEnvOn(t, b, &now)
 			before := seedBoundedUser(t, e, b, "Bounded")
 
-			if err := e.api.DeleteUserPermissionsBoundary(t.Context(), proj, "bounded"); err != nil {
+			if err := e.api.DeleteUserBoundary(t.Context(), proj, "bounded"); err != nil {
 				t.Fatal(err)
 			}
 			got := storedUser(t, b, "Bounded")
@@ -64,7 +64,7 @@ func TestDeleteUserPermissionsBoundary(t *testing.T) {
 			if got.Object.Generation != before.Generation+1 {
 				t.Fatalf("Generation = %d, want %d", got.Object.Generation, before.Generation+1)
 			}
-			if err := newEnvOn(t, b, &now).api.DeleteUserPermissionsBoundary(t.Context(), proj, "Bounded"); err != nil {
+			if err := newEnvOn(t, b, &now).api.DeleteUserBoundary(t.Context(), proj, "Bounded"); err != nil {
 				t.Fatalf("repeat on another replica: %v", err)
 			}
 			if again := storedUser(t, b, "Bounded"); again.Version != got.Version {
@@ -82,7 +82,7 @@ func TestDeleteUserPermissionsBoundaryNoBoundary(t *testing.T) {
 	e := newEnvOn(t, b, &now)
 	e.createUser(t, t.Context(), "plain")
 	before := storedUser(t, b, "plain")
-	if err := e.api.DeleteUserPermissionsBoundary(t.Context(), proj, "plain"); err != nil {
+	if err := e.api.DeleteUserBoundary(t.Context(), proj, "plain"); err != nil {
 		t.Fatal(err)
 	}
 	if got := storedUser(t, b, "plain"); got.Version != before.Version {
@@ -100,8 +100,8 @@ func TestDeleteUserPermissionsBoundaryErrors(t *testing.T) {
 	e := newEnvOn(t, b, &now)
 	ctx := t.Context()
 
-	wantAWS(t, e.api.DeleteUserPermissionsBoundary(ctx, proj, "missing"), codes.NotFound, "NoSuchEntity")
-	wantAWS(t, e.api.DeleteUserPermissionsBoundary(ctx, proj, strings.Repeat("u", 64)), codes.NotFound, "NoSuchEntity")
+	wantAWS(t, e.api.DeleteUserBoundary(ctx, proj, "missing"), codes.NotFound, "NoSuchEntity")
+	wantAWS(t, e.api.DeleteUserBoundary(ctx, proj, strings.Repeat("u", 64)), codes.NotFound, "NoSuchEntity")
 
 	renaming := iam.User{
 		Meta: iam.Meta{UID: iam.NewUID(), Generation: 1}, Name: "moving", ID: iam.NewUniqueID("AIDA"),
@@ -111,15 +111,15 @@ func TestDeleteUserPermissionsBoundaryErrors(t *testing.T) {
 	if _, err := store.CreateMarked(ctx, store.Scoped(b, proj), renaming); err != nil {
 		t.Fatal(err)
 	}
-	wantAWS(t, e.api.DeleteUserPermissionsBoundary(ctx, proj, "moving"), codes.Aborted, "ConcurrentModification")
+	wantAWS(t, e.api.DeleteUserBoundary(ctx, proj, "moving"), codes.Aborted, "ConcurrentModification")
 	if got := storedUser(t, b, "moving"); got.Object.PermissionsBoundary != boundaryARN {
 		t.Fatalf("renaming user boundary = %q, want %q kept", got.Object.PermissionsBoundary, boundaryARN)
 	}
 
 	for _, n := range []string{"", strings.Repeat("u", 65), "a/b", "a b", "üser"} {
-		wantAWS(t, e.api.DeleteUserPermissionsBoundary(ctx, proj, n), codes.InvalidArgument, "ValidationError")
+		wantAWS(t, e.api.DeleteUserBoundary(ctx, proj, n), codes.InvalidArgument, "ValidationError")
 	}
-	wantAWS(t, e.api.DeleteUserPermissionsBoundary(ctx, "Bad_Project", "u"), codes.InvalidArgument, "ValidationError")
+	wantAWS(t, e.api.DeleteUserBoundary(ctx, "Bad_Project", "u"), codes.InvalidArgument, "ValidationError")
 }
 
 // TestDeleteUserPermissionsBoundaryConcurrent: requests racing on two
@@ -136,7 +136,7 @@ func TestDeleteUserPermissionsBoundaryConcurrent(t *testing.T) {
 			errs := make([]error, 16)
 			for i := range errs {
 				wg.Go(func() {
-					errs[i] = replicas[i%2].api.DeleteUserPermissionsBoundary(t.Context(), proj, "racer")
+					errs[i] = replicas[i%2].api.DeleteUserBoundary(t.Context(), proj, "racer")
 				})
 			}
 			wg.Wait()
@@ -187,7 +187,7 @@ func TestDeleteUserPermissionsBoundaryStaleRead(t *testing.T) {
 			now := time.Now().UTC()
 			seedBoundedUser(t, newEnvOn(t, inner, &now), inner, "stale")
 			b := &changingUser{Backend: inner, t: t}
-			if err := newEnvOn(t, b, &now).api.DeleteUserPermissionsBoundary(t.Context(), proj, "stale"); err != nil {
+			if err := newEnvOn(t, b, &now).api.DeleteUserBoundary(t.Context(), proj, "stale"); err != nil {
 				t.Fatal(err)
 			}
 			got := storedUser(t, inner, "stale").Object

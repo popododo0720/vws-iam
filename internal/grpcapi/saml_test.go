@@ -64,7 +64,7 @@ func TestAssumeRoleWithSAML(t *testing.T) {
 			}
 			req := sts.SAMLRequest{RoleARN: samlRoleARN, PrincipalARN: samlIdpARN, Assertion: resp(good)}
 
-			out, err := e.api.AssumeRoleWithSAML(ctx, req)
+			out, err := e.api.AssumeSAMLRole(ctx, req)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -124,13 +124,13 @@ func TestAssumeRoleWithSAML(t *testing.T) {
 					RoleARN: samlRoleARN, PrincipalARN: samlIdpARN, Assertion: req.Assertion, Policy: "{",
 				}, codes.InvalidArgument, "INVALID_SPEC", "MalformedPolicyDocument"},
 			} {
-				_, err := e.api.AssumeRoleWithSAML(ctx, tc.req)
+				_, err := e.api.AssumeSAMLRole(ctx, tc.req)
 				t.Run(tc.name, func(t *testing.T) { wantErr(t, err, tc.code, tc.reason, tc.awsError) })
 			}
 
 			// Fail closed with no SAML providers configured.
 			off := newEnvOn(t, b, &now)
-			_, err = off.api.AssumeRoleWithSAML(ctx, req)
+			_, err = off.api.AssumeSAMLRole(ctx, req)
 			wantErr(t, err, codes.InvalidArgument, "INVALID_CREDENTIALS", "InvalidIdentityToken")
 		})
 	}
@@ -183,7 +183,7 @@ func TestAssumeRoleWithSAMLSessionIdentity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			out, err := e.api.AssumeRoleWithSAML(ctx, sts.SAMLRequest{
+			out, err := e.api.AssumeSAMLRole(ctx, sts.SAMLRequest{
 				RoleARN: samlRoleARN, PrincipalARN: samlIdpARN, Assertion: r,
 			})
 			if err != nil {

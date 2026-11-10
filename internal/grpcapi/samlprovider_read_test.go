@@ -167,7 +167,7 @@ func TestDeleteSAMLProvider(t *testing.T) {
 			writer, reader := f.server(t), f.server(t)
 			f.create(t, writer, proj)
 			f.create(t, writer, "beta")
-			if _, err := reader.api.AssumeRoleWithSAML(t.Context(), f.signed(t, f.idp)); err != nil {
+			if _, err := reader.api.AssumeSAMLRole(t.Context(), f.signed(t, f.idp)); err != nil {
 				t.Fatalf("before the delete: %v", err)
 			}
 			err := writer.api.DeleteSAMLProvider(t.Context(), proj, samlARN(proj, "CORP"))
@@ -178,7 +178,7 @@ func TestDeleteSAMLProvider(t *testing.T) {
 				t.Fatal(err)
 			}
 			samlGone(t, f.b, "corp")
-			_, err = reader.api.AssumeRoleWithSAML(t.Context(), f.signed(t, f.idp))
+			_, err = reader.api.AssumeSAMLRole(t.Context(), f.signed(t, f.idp))
 			wantAWS(t, err, codes.InvalidArgument, "InvalidIdentityToken")
 			_, err = reader.api.GetSAMLProvider(t.Context(), proj, samlIdpARN)
 			wantAWS(t, err, codes.NotFound, "NoSuchEntity")
@@ -192,7 +192,7 @@ func TestDeleteSAMLProvider(t *testing.T) {
 			}
 
 			f.create(t, reader, proj)
-			if _, err := writer.api.AssumeRoleWithSAML(t.Context(), f.signed(t, f.idp)); err != nil {
+			if _, err := writer.api.AssumeSAMLRole(t.Context(), f.signed(t, f.idp)); err != nil {
 				t.Fatalf("created again: %v", err)
 			}
 		})

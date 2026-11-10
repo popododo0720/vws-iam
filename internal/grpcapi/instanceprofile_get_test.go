@@ -30,7 +30,7 @@ func TestGetInstanceProfile(t *testing.T) {
 
 			for _, replica := range []*env{e, newEnvOn(t, b, &now)} {
 				for _, name := range []string{"Webserver", "webserver", "WEBSERVER"} {
-					got, err := replica.api.GetInstanceProfile(t.Context(), proj, name)
+					got, err := replica.api.GetProfile(t.Context(), proj, name)
 					if err != nil {
 						t.Fatalf("GetInstanceProfile(%q): %v", name, err)
 					}
@@ -65,7 +65,7 @@ func TestGetInstanceProfileWithoutRole(t *testing.T) {
 	now := time.Now().UTC()
 	e := newEnvOn(t, b, &now)
 	seedProfileAt(t, b, "empty", "")
-	got, err := e.api.GetInstanceProfile(t.Context(), proj, "empty")
+	got, err := e.api.GetProfile(t.Context(), proj, "empty")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestGetInstanceProfileDeletedRole(t *testing.T) {
 	now := time.Now().UTC()
 	e := newEnvOn(t, b, &now)
 	seedInstanceProfile(t, b, "web", "Gone")
-	got, err := e.api.GetInstanceProfile(t.Context(), proj, "web")
+	got, err := e.api.GetProfile(t.Context(), proj, "web")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestGetInstanceProfileErrors(t *testing.T) {
 	seedProfileAt(t, b, "A+=,.@_-z9", "/")
 
 	get := func(pid, name string) error {
-		_, err := e.api.GetInstanceProfile(ctx, pid, name)
+		_, err := e.api.GetProfile(ctx, pid, name)
 		return err
 	}
 	for _, n := range []string{"", "a b", "a/b", "é", strings.Repeat("p", iam.MaxInstanceProfileNameLen+1)} {
@@ -139,7 +139,7 @@ func TestGetInstanceProfileErrors(t *testing.T) {
 		fb := failingGet{memstore.New(), k, boom}
 		fe := newEnvOn(t, fb, &now)
 		seedInstanceProfile(t, fb, "web", "r")
-		_, err := fe.api.GetInstanceProfile(ctx, proj, "web")
+		_, err := fe.api.GetProfile(ctx, proj, "web")
 		wantAWS(t, err, codes.Internal, "InternalFailure")
 	}
 }

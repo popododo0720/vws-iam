@@ -58,7 +58,7 @@ func TestDeleteRolePermissionsBoundary(t *testing.T) {
 			e := newEnvOn(t, b, &now)
 			before := seedBoundedRole(t, e, b, "Bounded")
 
-			if err := e.api.DeleteRolePermissionsBoundary(t.Context(), proj, "bounded"); err != nil {
+			if err := e.api.DeleteRoleBoundary(t.Context(), proj, "bounded"); err != nil {
 				t.Fatal(err)
 			}
 			got := storedRole(t, b, "Bounded")
@@ -71,7 +71,7 @@ func TestDeleteRolePermissionsBoundary(t *testing.T) {
 			if got.Object.Generation != before.Generation+1 {
 				t.Fatalf("Generation = %d, want %d", got.Object.Generation, before.Generation+1)
 			}
-			if err := newEnvOn(t, b, &now).api.DeleteRolePermissionsBoundary(t.Context(), proj, "Bounded"); err != nil {
+			if err := newEnvOn(t, b, &now).api.DeleteRoleBoundary(t.Context(), proj, "Bounded"); err != nil {
 				t.Fatalf("repeat on another replica: %v", err)
 			}
 			if again := storedRole(t, b, "Bounded"); again.Version != got.Version {
@@ -91,8 +91,8 @@ func TestDeleteRolePermissionsBoundaryErrors(t *testing.T) {
 	e := newEnvOn(t, b, &now)
 	ctx := t.Context()
 
-	wantAWS(t, e.api.DeleteRolePermissionsBoundary(ctx, proj, "missing"), codes.NotFound, "NoSuchEntity")
-	wantAWS(t, e.api.DeleteRolePermissionsBoundary(ctx, proj, strings.Repeat("r", 64)), codes.NotFound, "NoSuchEntity")
+	wantAWS(t, e.api.DeleteRoleBoundary(ctx, proj, "missing"), codes.NotFound, "NoSuchEntity")
+	wantAWS(t, e.api.DeleteRoleBoundary(ctx, proj, strings.Repeat("r", 64)), codes.NotFound, "NoSuchEntity")
 
 	slr := seedLinkedRole(t, b, "linked")
 	if _, err := store.Mutate(ctx, store.Scoped(b, proj), slr.Name, func(r *iam.Role) error {
@@ -101,15 +101,15 @@ func TestDeleteRolePermissionsBoundaryErrors(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	wantAWS(t, e.api.DeleteRolePermissionsBoundary(ctx, proj, slr.Name), codes.FailedPrecondition, "UnmodifiableEntity")
+	wantAWS(t, e.api.DeleteRoleBoundary(ctx, proj, slr.Name), codes.FailedPrecondition, "UnmodifiableEntity")
 	if got := storedRole(t, b, slr.Name); got.Object.PermissionsBoundary != boundaryARN {
 		t.Fatalf("service-linked boundary = %q, want %q kept", got.Object.PermissionsBoundary, boundaryARN)
 	}
 
 	for _, n := range []string{"", strings.Repeat("r", 65), "a/b", "a b", "rôle"} {
-		wantAWS(t, e.api.DeleteRolePermissionsBoundary(ctx, proj, n), codes.InvalidArgument, "ValidationError")
+		wantAWS(t, e.api.DeleteRoleBoundary(ctx, proj, n), codes.InvalidArgument, "ValidationError")
 	}
-	wantAWS(t, e.api.DeleteRolePermissionsBoundary(ctx, "Bad_Project", "r"), codes.InvalidArgument, "ValidationError")
+	wantAWS(t, e.api.DeleteRoleBoundary(ctx, "Bad_Project", "r"), codes.InvalidArgument, "ValidationError")
 }
 
 // TestDeleteRolePermissionsBoundaryConcurrent: requests racing on two
@@ -126,7 +126,7 @@ func TestDeleteRolePermissionsBoundaryConcurrent(t *testing.T) {
 			errs := make([]error, 16)
 			for i := range errs {
 				wg.Go(func() {
-					errs[i] = replicas[i%2].api.DeleteRolePermissionsBoundary(t.Context(), proj, "racer")
+					errs[i] = replicas[i%2].api.DeleteRoleBoundary(t.Context(), proj, "racer")
 				})
 			}
 			wg.Wait()
@@ -177,7 +177,7 @@ func TestDeleteRolePermissionsBoundaryStaleRead(t *testing.T) {
 			now := time.Now().UTC()
 			seedBoundedRole(t, newEnvOn(t, inner, &now), inner, "stale")
 			b := &changing{Backend: inner, t: t}
-			if err := newEnvOn(t, b, &now).api.DeleteRolePermissionsBoundary(t.Context(), proj, "stale"); err != nil {
+			if err := newEnvOn(t, b, &now).api.DeleteRoleBoundary(t.Context(), proj, "stale"); err != nil {
 				t.Fatal(err)
 			}
 			got := storedRole(t, inner, "stale").Object

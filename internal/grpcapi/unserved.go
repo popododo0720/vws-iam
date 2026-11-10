@@ -40,6 +40,78 @@ func (s *Server) GetAccessKeyInfo(
 	return nil, status.Error(codes.Unimplemented, "GetAccessKeyInfo is not served yet")
 }
 
+// DeleteUserPermissionsBoundary is not served yet.
+//
+// TODO(#99): serve it through deleteUserPermissionsBoundary.
+func (s *Server) DeleteUserPermissionsBoundary(
+	context.Context, *iamv1.DeleteUserPermissionsBoundaryRequest,
+) (*iamv1.DeleteUserPermissionsBoundaryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "DeleteUserPermissionsBoundary is not served yet")
+}
+
+// PutUserPermissionsBoundary is not served yet.
+//
+// TODO(#98): serve it through putUserPermissionsBoundary.
+func (s *Server) PutUserPermissionsBoundary(
+	context.Context, *iamv1.PutUserPermissionsBoundaryRequest,
+) (*iamv1.PutUserPermissionsBoundaryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "PutUserPermissionsBoundary is not served yet")
+}
+
+// DeleteRolePermissionsBoundary is not served yet.
+//
+// TODO(#101): serve it through deleteRolePermissionsBoundary.
+func (s *Server) DeleteRolePermissionsBoundary(
+	context.Context, *iamv1.DeleteRolePermissionsBoundaryRequest,
+) (*iamv1.DeleteRolePermissionsBoundaryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "DeleteRolePermissionsBoundary is not served yet")
+}
+
+// CreateServiceLinkedRole is not served yet.
+//
+// TODO(#103): serve it through createServiceLinkedRole.
+func (s *Server) CreateServiceLinkedRole(
+	context.Context, *iamv1.CreateServiceLinkedRoleRequest,
+) (*iamv1.CreateServiceLinkedRoleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "CreateServiceLinkedRole is not served yet")
+}
+
+// DeleteServiceLinkedRole is not served yet.
+//
+// TODO(#104): serve it through deleteServiceLinkedRole.
+func (s *Server) DeleteServiceLinkedRole(
+	context.Context, *iamv1.DeleteServiceLinkedRoleRequest,
+) (*iamv1.DeleteServiceLinkedRoleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "DeleteServiceLinkedRole is not served yet")
+}
+
+// AssumeRoleWithSAML is not served yet.
+//
+// TODO(#106): serve it through assumeRoleWithSAML.
+func (s *Server) AssumeRoleWithSAML(
+	context.Context, *iamv1.AssumeRoleWithSAMLRequest,
+) (*iamv1.AssumeRoleWithSAMLResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "AssumeRoleWithSAML is not served yet")
+}
+
+// GetFederationToken is not served yet.
+//
+// TODO(#107): serve it through getFederationToken.
+func (s *Server) GetFederationToken(
+	context.Context, *iamv1.GetFederationTokenRequest,
+) (*iamv1.GetFederationTokenResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "GetFederationToken is not served yet")
+}
+
+// AssumeRoleWithWebIdentity is not served yet.
+//
+// TODO(#105): serve it once the service layer exists.
+func (s *Server) AssumeRoleWithWebIdentity(
+	context.Context, *iamv1.AssumeRoleWithWebIdentityRequest,
+) (*iamv1.AssumeRoleWithWebIdentityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "AssumeRoleWithWebIdentity is not served yet")
+}
+
 // unservedField answers UNIMPLEMENTED for a request field vws-proto
 // carries that this server does not honor yet, so the request is refused
 // before any write and never served as if the field were unset.

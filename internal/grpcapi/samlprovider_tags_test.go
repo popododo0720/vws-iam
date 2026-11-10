@@ -78,7 +78,7 @@ func TestSAMLProviderTags(t *testing.T) {
 			}
 			tagged := map[string]string{"team": "b", "Env": "prod", "env": ""}
 			wantSAMLTags(t, f.server(t), tagged)
-			if _, err := f.server(t).api.AssumeRoleWithSAML(t.Context(), f.signed(t, f.idp)); err != nil {
+			if _, err := f.server(t).api.AssumeSAMLRole(t.Context(), f.signed(t, f.idp)); err != nil {
 				t.Fatalf("AssumeRoleWithSAML after tagging: %v", err)
 			}
 

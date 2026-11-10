@@ -28,7 +28,7 @@ func TestAddRoleToInstanceProfile(t *testing.T) {
 			seedRole(t, e, "S3Access")
 			before := seedInstanceProfile(t, b, "Webserver")
 
-			if err := e.api.AddRoleToInstanceProfile(t.Context(), proj, "webserver", "s3access"); err != nil {
+			if err := e.api.AddProfileRole(t.Context(), proj, "webserver", "s3access"); err != nil {
 				t.Fatal(err)
 			}
 			got := storedProfile(t, b, "Webserver")
@@ -41,7 +41,7 @@ func TestAddRoleToInstanceProfile(t *testing.T) {
 			if !got.Object.Updated.Equal(now) {
 				t.Fatalf("Updated = %v, want %v", got.Object.Updated, now)
 			}
-			err := newEnvOn(t, b, &now).api.AddRoleToInstanceProfile(t.Context(), proj, "Webserver", "S3Access")
+			err := newEnvOn(t, b, &now).api.AddProfileRole(t.Context(), proj, "Webserver", "S3Access")
 			wantAWS(t, err, codes.ResourceExhausted, "LimitExceeded")
 			if again := storedProfile(t, b, "Webserver"); again.Version != got.Version {
 				t.Fatalf("repeat wrote the profile: version %q, want %q", again.Version, got.Version)
@@ -65,24 +65,24 @@ func TestAddRoleToInstanceProfileErrors(t *testing.T) {
 	seedInstanceProfile(t, b, "empty")
 	full, empty := storedProfile(t, b, "full"), storedProfile(t, b, "empty")
 
-	wantAWS(t, e.api.AddRoleToInstanceProfile(ctx, proj, "missing", "outside"), codes.NotFound, "NoSuchEntity")
-	wantAWS(t, e.api.AddRoleToInstanceProfile(ctx, proj, strings.Repeat("p", 128), "outside"),
+	wantAWS(t, e.api.AddProfileRole(ctx, proj, "missing", "outside"), codes.NotFound, "NoSuchEntity")
+	wantAWS(t, e.api.AddProfileRole(ctx, proj, strings.Repeat("p", 128), "outside"),
 		codes.NotFound, "NoSuchEntity")
-	wantAWS(t, e.api.AddRoleToInstanceProfile(ctx, proj, "empty", "missing"), codes.NotFound, "NoSuchEntity")
-	wantAWS(t, e.api.AddRoleToInstanceProfile(ctx, proj, "full", "outside"), codes.ResourceExhausted, "LimitExceeded")
-	wantAWS(t, e.api.AddRoleToInstanceProfile(ctx, proj, "full", "INSIDE"), codes.ResourceExhausted, "LimitExceeded")
+	wantAWS(t, e.api.AddProfileRole(ctx, proj, "empty", "missing"), codes.NotFound, "NoSuchEntity")
+	wantAWS(t, e.api.AddProfileRole(ctx, proj, "full", "outside"), codes.ResourceExhausted, "LimitExceeded")
+	wantAWS(t, e.api.AddProfileRole(ctx, proj, "full", "INSIDE"), codes.ResourceExhausted, "LimitExceeded")
 
 	slr := seedLinkedRole(t, b, "linked")
-	wantAWS(t, e.api.AddRoleToInstanceProfile(ctx, proj, "empty", slr.Name),
+	wantAWS(t, e.api.AddProfileRole(ctx, proj, "empty", slr.Name),
 		codes.FailedPrecondition, "UnmodifiableEntity")
 
 	for _, n := range []string{"", strings.Repeat("p", 129), "a/b", "a b", "prôfile"} {
-		wantAWS(t, e.api.AddRoleToInstanceProfile(ctx, proj, n, "outside"), codes.InvalidArgument, "ValidationError")
+		wantAWS(t, e.api.AddProfileRole(ctx, proj, n, "outside"), codes.InvalidArgument, "ValidationError")
 	}
 	for _, n := range []string{"", strings.Repeat("r", 65), "a/b", "a b", "rôle"} {
-		wantAWS(t, e.api.AddRoleToInstanceProfile(ctx, proj, "empty", n), codes.InvalidArgument, "ValidationError")
+		wantAWS(t, e.api.AddProfileRole(ctx, proj, "empty", n), codes.InvalidArgument, "ValidationError")
 	}
-	wantAWS(t, e.api.AddRoleToInstanceProfile(ctx, "Bad_Project", "empty", "outside"),
+	wantAWS(t, e.api.AddProfileRole(ctx, "Bad_Project", "empty", "outside"),
 		codes.InvalidArgument, "ValidationError")
 	if got := storedProfile(t, b, "full"); got.Version != full.Version {
 		t.Fatalf("a refused request wrote profile full: version %q, want %q", got.Version, full.Version)
@@ -103,7 +103,7 @@ func TestAddRoleToInstanceProfileCanceled(t *testing.T) {
 	before := storedProfile(t, b, "web")
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	err := e.api.AddRoleToInstanceProfile(ctx, proj, "web", "r")
+	err := e.api.AddProfileRole(ctx, proj, "web", "r")
 	if status.Code(err) != codes.Canceled {
 		t.Fatalf("canceled request: %v, want Canceled", err)
 	}
@@ -131,7 +131,7 @@ func TestAddRoleToInstanceProfileConcurrent(t *testing.T) {
 			errs := make([]error, 16)
 			for i := range errs {
 				wg.Go(func() {
-					errs[i] = replicas[i%2].api.AddRoleToInstanceProfile(t.Context(), proj, "web", roles[i/2%2])
+					errs[i] = replicas[i%2].api.AddProfileRole(t.Context(), proj, "web", roles[i/2%2])
 				})
 			}
 			wg.Wait()
@@ -194,7 +194,7 @@ func TestAddRoleToInstanceProfileStaleRead(t *testing.T) {
 				})
 				return err
 			}}
-			if err := newEnvOn(t, b, &now).api.AddRoleToInstanceProfile(t.Context(), proj, "web", "stale"); err != nil {
+			if err := newEnvOn(t, b, &now).api.AddProfileRole(t.Context(), proj, "web", "stale"); err != nil {
 				t.Fatal(err)
 			}
 			got := storedProfile(t, inner, "web").Object
@@ -218,7 +218,7 @@ func TestAddRoleToInstanceProfileRoleDeleted(t *testing.T) {
 			b := &changingBeforeAdd{Backend: inner, t: t, change: func(ctx context.Context, b store.Backend) error {
 				return b.Delete(ctx, iam.KindRole, "doomed", "")
 			}}
-			err := newEnvOn(t, b, &now).api.AddRoleToInstanceProfile(t.Context(), proj, "web", "doomed")
+			err := newEnvOn(t, b, &now).api.AddProfileRole(t.Context(), proj, "web", "doomed")
 			wantAWS(t, err, codes.NotFound, "NoSuchEntity")
 			if got := storedProfile(t, inner, "web").Object; len(got.Roles) != 0 {
 				t.Fatalf("Roles = %q after the role was deleted, want none", got.Roles)

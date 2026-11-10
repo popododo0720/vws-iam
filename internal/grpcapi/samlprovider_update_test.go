@@ -38,7 +38,7 @@ func TestUpdateSAMLProvider(t *testing.T) {
 			}
 			f.create(t, writer, "beta")
 			before := storedSAML(t, f.b, "corp")
-			if _, err := reader.api.AssumeRoleWithSAML(t.Context(), f.signed(t, f.idp)); err != nil {
+			if _, err := reader.api.AssumeSAMLRole(t.Context(), f.signed(t, f.idp)); err != nil {
 				t.Fatalf("before the update: %v", err)
 			}
 
@@ -53,10 +53,10 @@ func TestUpdateSAMLProvider(t *testing.T) {
 			if err != nil || arn != samlIdpARN {
 				t.Fatalf("UpdateSAMLProvider = %q, %v, want %s", arn, err, samlIdpARN)
 			}
-			if _, err := reader.api.AssumeRoleWithSAML(t.Context(), f.signed(t, rotated)); err != nil {
+			if _, err := reader.api.AssumeSAMLRole(t.Context(), f.signed(t, rotated)); err != nil {
 				t.Fatalf("signed by the new IdP: %v", err)
 			}
-			_, err = reader.api.AssumeRoleWithSAML(t.Context(), f.signed(t, f.idp))
+			_, err = reader.api.AssumeSAMLRole(t.Context(), f.signed(t, f.idp))
 			wantAWS(t, err, codes.InvalidArgument, "InvalidIdentityToken")
 
 			after := storedSAML(t, f.b, "corp")

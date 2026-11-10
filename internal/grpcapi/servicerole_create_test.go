@@ -29,7 +29,7 @@ var linkedCatalog = grpcapi.WithLinkedServices(
 
 func createSLR(t *testing.T, e *env, req grpcapi.ServiceLinkedRoleRequest) (*iamv1.Role, error) {
 	t.Helper()
-	return e.api.CreateServiceLinkedRole(t.Context(), proj, req)
+	return e.api.CreateLinkedRole(t.Context(), proj, req)
 }
 
 // TestCreateServiceLinkedRole: the role is stored with the AWS name,
@@ -75,7 +75,7 @@ func TestCreateServiceLinkedRole(t *testing.T) {
 
 			_, err = e.roles.DeleteRole(ctx, &iamv1.DeleteRoleRequest{Name: got.GetName()})
 			wantAWS(t, err, codes.FailedPrecondition, "UnmodifiableEntity")
-			if _, err := e.api.DeleteServiceLinkedRole(ctx, proj, name); err != nil {
+			if _, err := e.api.DeleteLinkedRole(ctx, proj, name); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := createSLR(t, e, grpcapi.ServiceLinkedRoleRequest{AWSServiceName: asService}); err != nil {
@@ -137,7 +137,7 @@ func TestCreateServiceLinkedRoleValidation(t *testing.T) {
 		wantAWS(t, err, codes.InvalidArgument, "ValidationError")
 	}
 	badProject := grpcapi.ServiceLinkedRoleRequest{AWSServiceName: as}
-	_, err := e.api.CreateServiceLinkedRole(t.Context(), "Bad_Project", badProject)
+	_, err := e.api.CreateLinkedRole(t.Context(), "Bad_Project", badProject)
 	wantAWS(t, err, codes.InvalidArgument, "ValidationError")
 
 	longest := strings.Repeat("s", 64-len("AWSServiceRoleForAutoScaling_"))
@@ -211,7 +211,7 @@ func TestCreateServiceLinkedRoleConcurrent(t *testing.T) {
 			errs := make([]error, len(roles))
 			for i := range roles {
 				wg.Go(func() {
-					roles[i], errs[i] = replicas[i%2].api.CreateServiceLinkedRole(t.Context(), proj,
+					roles[i], errs[i] = replicas[i%2].api.CreateLinkedRole(t.Context(), proj,
 						grpcapi.ServiceLinkedRoleRequest{AWSServiceName: slrService})
 				})
 			}

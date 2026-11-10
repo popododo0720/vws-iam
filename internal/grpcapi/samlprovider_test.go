@@ -206,12 +206,12 @@ func TestCreateSAMLProviderServesAssumeRoleWithSAML(t *testing.T) {
 				t.Fatal(err)
 			}
 			writer := f.server(t)
-			_, err = writer.api.AssumeRoleWithSAML(t.Context(), f.signed(t, f.idp))
+			_, err = writer.api.AssumeSAMLRole(t.Context(), f.signed(t, f.idp))
 			wantAWS(t, err, codes.InvalidArgument, "InvalidIdentityToken")
 
 			// Same name in another project: not this project's provider.
 			f.create(t, writer, "beta")
-			_, err = writer.api.AssumeRoleWithSAML(t.Context(), f.signed(t, f.idp))
+			_, err = writer.api.AssumeSAMLRole(t.Context(), f.signed(t, f.idp))
 			wantAWS(t, err, codes.InvalidArgument, "InvalidIdentityToken")
 
 			created, err := writer.api.CreateSAMLProvider(t.Context(), proj, "corp", f.idp.Metadata(f.now.Add(time.Hour)), nil)
@@ -222,21 +222,21 @@ func TestCreateSAMLProviderServesAssumeRoleWithSAML(t *testing.T) {
 				t.Fatalf("Arn = %q, want %q", created.ARN, samlIdpARN)
 			}
 			e := f.server(t)
-			out, err := e.api.AssumeRoleWithSAML(t.Context(), f.signed(t, f.idp))
+			out, err := e.api.AssumeSAMLRole(t.Context(), f.signed(t, f.idp))
 			if err != nil {
 				t.Fatalf("AssumeRoleWithSAML with the created provider: %v", err)
 			}
 			if out.Credentials.AssumedRoleARN != "arn:vws:sts::"+proj+":assumed-role/saml-dev/alice" {
 				t.Fatalf("assumed %q", out.Credentials.AssumedRoleARN)
 			}
-			_, err = e.api.AssumeRoleWithSAML(t.Context(), f.signed(t, other))
+			_, err = e.api.AssumeSAMLRole(t.Context(), f.signed(t, other))
 			wantAWS(t, err, codes.InvalidArgument, "InvalidIdentityToken")
 
 			v := storedSAML(t, f.b, "corp")
 			if err := store.Scoped(f.b, proj).Delete(t.Context(), iam.KindSAMLProvider, "corp", v.Version); err != nil {
 				t.Fatal(err)
 			}
-			_, err = e.api.AssumeRoleWithSAML(t.Context(), f.signed(t, f.idp))
+			_, err = e.api.AssumeSAMLRole(t.Context(), f.signed(t, f.idp))
 			wantAWS(t, err, codes.InvalidArgument, "InvalidIdentityToken")
 		})
 	}
@@ -248,7 +248,7 @@ func TestStoredSAMLProviderStoreFailure(t *testing.T) {
 	f := newSAMLFixture(t, memstore.New())
 	f.create(t, f.server(t), proj)
 	f.b = failingGet{Backend: f.b, k: iam.KindSAMLProvider, err: store.ErrUnavailable}
-	out, err := f.server(t).api.AssumeRoleWithSAML(t.Context(), f.signed(t, f.idp))
+	out, err := f.server(t).api.AssumeSAMLRole(t.Context(), f.signed(t, f.idp))
 	if status.Code(err) != codes.Unavailable || out.Credentials.AccessKeyID != "" {
 		t.Fatalf("store down: %v %+v, want UNAVAILABLE and no credentials", err, out.Credentials)
 	}
@@ -273,7 +273,7 @@ func (c corruptSAMLGet) Get(ctx context.Context, k iam.Kind, key string) (store.
 func TestStoredSAMLProviderCorruptDocument(t *testing.T) {
 	f := newSAMLFixture(t, memstore.New())
 	f.b = corruptSAMLGet{Backend: f.b}
-	out, err := f.server(t).api.AssumeRoleWithSAML(t.Context(), f.signed(t, f.idp))
+	out, err := f.server(t).api.AssumeSAMLRole(t.Context(), f.signed(t, f.idp))
 	wantAWS(t, err, codes.Internal, "InternalFailure")
 	if strings.Contains(err.Error(), "CANARY") || out.Credentials.AccessKeyID != "" {
 		t.Fatalf("corrupt document: %v %+v", err, out.Credentials)
@@ -288,11 +288,11 @@ func TestStoredSAMLReplacesInjected(t *testing.T) {
 	f.create(t, f.server(t), proj)
 	none := samltest.Providers{}
 	stored := newEnvOn(t, f.b, &f.now, grpcapi.WithSAML(none, f.sp), grpcapi.WithStoredSAML(f.sp))
-	if _, err := stored.api.AssumeRoleWithSAML(t.Context(), f.signed(t, f.idp)); err != nil {
+	if _, err := stored.api.AssumeSAMLRole(t.Context(), f.signed(t, f.idp)); err != nil {
 		t.Fatalf("WithSAML then WithStoredSAML: %v", err)
 	}
 	injected := newEnvOn(t, f.b, &f.now, grpcapi.WithStoredSAML(f.sp), grpcapi.WithSAML(none, f.sp))
-	_, err := injected.api.AssumeRoleWithSAML(t.Context(), f.signed(t, f.idp))
+	_, err := injected.api.AssumeSAMLRole(t.Context(), f.signed(t, f.idp))
 	wantAWS(t, err, codes.InvalidArgument, "InvalidIdentityToken")
 }
 
@@ -308,7 +308,7 @@ func TestStoredSAMLNeedsServiceProvider(t *testing.T) {
 		if got := e.api.SAMLServiceProvider(); got != sp {
 			t.Fatalf("SAMLServiceProvider = %+v, want %+v", got, sp)
 		}
-		_, err := e.api.AssumeRoleWithSAML(t.Context(), f.signed(t, f.idp))
+		_, err := e.api.AssumeSAMLRole(t.Context(), f.signed(t, f.idp))
 		wantAWS(t, err, codes.InvalidArgument, "InvalidIdentityToken")
 	}
 }

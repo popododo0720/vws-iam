@@ -159,7 +159,7 @@ func TestPendingSAMLProviderIsInert(t *testing.T) {
 			putPending(t, f.b, "corp", doc)
 			e := f.server(t)
 			ctx := t.Context()
-			_, err := e.api.AssumeRoleWithSAML(ctx, f.signed(t, f.idp))
+			_, err := e.api.AssumeSAMLRole(ctx, f.signed(t, f.idp))
 			wantAWS(t, err, codes.InvalidArgument, "InvalidIdentityToken")
 			_, err = e.api.GetSAMLProvider(ctx, proj, samlIdpARN)
 			wantAWS(t, err, codes.NotFound, "NoSuchEntity")
@@ -184,7 +184,7 @@ func TestPendingSAMLProviderIsInert(t *testing.T) {
 			if got.Pending || got.UID != created.Provider.UID || len(got.Tags) != 0 {
 				t.Fatalf("stored %+v, want the new request's active provider", got)
 			}
-			if _, err := e.api.AssumeRoleWithSAML(ctx, f.signed(t, f.idp)); err != nil {
+			if _, err := e.api.AssumeSAMLRole(ctx, f.signed(t, f.idp)); err != nil {
 				t.Fatalf("AssumeRoleWithSAML once the provider committed: %v", err)
 			}
 			_, err = e.api.CreateSAMLProvider(ctx, proj, "one-more", quotaDoc, nil)
