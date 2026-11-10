@@ -37,9 +37,9 @@ func TestSimulateCustomPolicy(t *testing.T) {
 				CallerARN:       simARN + "user/alice",
 			}
 			want := []string{
-				"s3:GetObject * allowed [none:PolicyInputList.1]",
-				"s3:PutObject * explicitDeny [none:PolicyInputList.2]",
-				"s3:DeleteObject * allowed [none:PolicyInputList.1]",
+				"s3:GetObject arn:vws:s3:::${BucketName}/${ObjectName} allowed [none:PolicyInputList.1]",
+				"s3:PutObject arn:vws:s3:::${BucketName}/${ObjectName} explicitDeny [none:PolicyInputList.2]",
+				"s3:DeleteObject arn:vws:s3:::${BucketName}/${ObjectName} allowed [none:PolicyInputList.1]",
 				"ec2:RunInstances * implicitDeny []",
 			}
 			p := simulateCustom(t, e, in)
@@ -73,7 +73,10 @@ func TestSimulateCustomPolicyBoundaryAndResources(t *testing.T) {
 		ResourceARNs:           []string{"arn:vws:s3:::a", "arn:vws:s3:::b"},
 	}
 	p := simulateCustom(t, e, in)
-	want := []string{"s3:GetObject * implicitDeny []", "s3:ListBucket * implicitDeny []"}
+	want := []string{
+		"s3:GetObject arn:vws:s3:::${BucketName}/${ObjectName} implicitDeny []",
+		"s3:ListBucket arn:vws:s3:::${BucketName} implicitDeny []",
+	}
 	if got := summary(p); !slices.Equal(got, want) {
 		t.Fatalf("results %q, want %q", got, want)
 	}
@@ -119,8 +122,9 @@ func TestSimulateCustomPolicyPages(t *testing.T) {
 	last := simulateCustom(t, e, in)
 	got := append(summary(first), summary(last)...)
 	want := []string{
-		"s3:GetObject * allowed [none:PolicyInputList.1]", "iam:GetUser * implicitDeny []",
-		"s3:PutObject * allowed [none:PolicyInputList.1]",
+		"s3:GetObject arn:vws:s3:::${BucketName}/${ObjectName} allowed [none:PolicyInputList.1]",
+		"iam:GetUser arn:vws:iam::${Account}:user/${UserNameWithPath} implicitDeny []",
+		"s3:PutObject arn:vws:s3:::${BucketName}/${ObjectName} allowed [none:PolicyInputList.1]",
 	}
 	if !first.IsTruncated || last.IsTruncated || last.Marker != "" || !slices.Equal(got, want) {
 		t.Fatalf("pages %q (truncated %v, %v), want %q", got, first.IsTruncated, last.IsTruncated, want)

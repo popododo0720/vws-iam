@@ -102,11 +102,11 @@ func TestSimulatePrincipalPolicy(t *testing.T) {
 				PolicyInputList: []string{simDoc("s3:*")},
 			}))
 			want := []string{
-				"s3:GetObject * allowed [user-managed:S3Read none:PolicyInputList.1]",
-				"s3:PutObject * allowed [none:PolicyInputList.1]",
-				"s3:DeleteObject * explicitDeny [user:user_alice_nodelete]",
+				"s3:GetObject arn:vws:s3:::${BucketName}/${ObjectName} allowed [user-managed:S3Read none:PolicyInputList.1]",
+				"s3:PutObject arn:vws:s3:::${BucketName}/${ObjectName} allowed [none:PolicyInputList.1]",
+				"s3:DeleteObject arn:vws:s3:::${BucketName}/${ObjectName} explicitDeny [user:user_alice_nodelete]",
 				"ec2:RunInstances * allowed [group:group_devs_ec2]",
-				"iam:CreateUser * implicitDeny []",
+				"iam:CreateUser arn:vws:iam::${Account}:user/${UserNameWithPath} implicitDeny []",
 			}
 			if !slices.Equal(got, want) {
 				t.Fatalf("user results\n%q\nwant\n%q", got, want)
@@ -114,14 +114,20 @@ func TestSimulatePrincipalPolicy(t *testing.T) {
 			got = summary(simulate(t, e, grpcapi.SimulateInput{
 				PolicySourceARN: simARN + "group/DEVS", ActionNames: []string{"ec2:RunInstances", "s3:GetObject"},
 			}))
-			want = []string{"ec2:RunInstances * allowed [group:group_devs_ec2]", "s3:GetObject * implicitDeny []"}
+			want = []string{
+				"ec2:RunInstances * allowed [group:group_devs_ec2]",
+				"s3:GetObject arn:vws:s3:::${BucketName}/${ObjectName} implicitDeny []",
+			}
 			if !slices.Equal(got, want) {
 				t.Fatalf("group results %q, want %q", got, want)
 			}
 			got = summary(simulate(t, e, grpcapi.SimulateInput{
 				PolicySourceARN: simARN + "role/svc/app", ActionNames: []string{"s3:GetObject", "ec2:RunInstances"},
 			}))
-			want = []string{"s3:GetObject * allowed [user-managed:S3Read]", "ec2:RunInstances * implicitDeny []"}
+			want = []string{
+				"s3:GetObject arn:vws:s3:::${BucketName}/${ObjectName} allowed [user-managed:S3Read]",
+				"ec2:RunInstances * implicitDeny []",
+			}
 			if !slices.Equal(got, want) {
 				t.Fatalf("role results %q, want %q", got, want)
 			}
@@ -140,7 +146,10 @@ func TestSimulatePrincipalPolicyBoundary(t *testing.T) {
 		PolicySourceARN: simARN + "user/alice", ActionNames: []string{"s3:GetObject", "ec2:RunInstances"},
 	}
 	p := simulate(t, e, in)
-	want := []string{"s3:GetObject * allowed [user-managed:S3Read]", "ec2:RunInstances * implicitDeny []"}
+	want := []string{
+		"s3:GetObject arn:vws:s3:::${BucketName}/${ObjectName} allowed [user-managed:S3Read]",
+		"ec2:RunInstances * implicitDeny []",
+	}
 	if got := summary(p); !slices.Equal(got, want) {
 		t.Fatalf("stored boundary: %q, want %q", got, want)
 	}
@@ -151,7 +160,10 @@ func TestSimulatePrincipalPolicyBoundary(t *testing.T) {
 	}
 	in.PermissionsBoundaryInp = []string{simDoc("ec2:*")}
 	p = simulate(t, e, in)
-	want = []string{"s3:GetObject * implicitDeny []", "ec2:RunInstances * allowed [group:group_devs_ec2]"}
+	want = []string{
+		"s3:GetObject arn:vws:s3:::${BucketName}/${ObjectName} implicitDeny []",
+		"ec2:RunInstances * allowed [group:group_devs_ec2]",
+	}
 	if got := summary(p); !slices.Equal(got, want) {
 		t.Fatalf("input boundary: %q, want %q", got, want)
 	}
@@ -232,9 +244,9 @@ func TestSimulatePrincipalPolicyResources(t *testing.T) {
 				PolicyInputList: []string{denyB, allowC},
 			})
 			want := []string{
-				"s3:GetObject * explicitDeny [none:PolicyInputList.1]",
-				"s3:GetBucketPolicy * allowed [user-managed:S3Read]",
-				"iam:GetUser * implicitDeny []",
+				"s3:GetObject arn:vws:s3:::${BucketName}/${ObjectName} explicitDeny [none:PolicyInputList.1]",
+				"s3:GetBucketPolicy arn:vws:s3:::${BucketName} allowed [user-managed:S3Read]",
+				"iam:GetUser arn:vws:iam::${Account}:user/${UserNameWithPath} implicitDeny []",
 			}
 			if got := summary(p); !slices.Equal(got, want) || p.IsTruncated {
 				t.Fatalf("results %q truncated %v, want one per action %q", got, p.IsTruncated, want)
