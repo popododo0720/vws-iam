@@ -70,10 +70,6 @@ func TestUnservedRPCsAreUnimplemented(t *testing.T) {
 			_, err := e.token.GetFederationToken(ctx, &iamv1.GetFederationTokenRequest{})
 			return err
 		},
-		"ListInstanceProfiles": func() error {
-			_, err := e.profiles.ListInstanceProfiles(ctx, &iamv1.ListInstanceProfilesRequest{Parent: parentName})
-			return err
-		},
 		"ListInstanceProfilesForRole": func() error {
 			_, err := e.profiles.ListInstanceProfilesForRole(ctx, &iamv1.ListInstanceProfilesForRoleRequest{Parent: parentName})
 			return err

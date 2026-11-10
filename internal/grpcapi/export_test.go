@@ -151,8 +151,8 @@ func (s *Server) ProfilesForRole(
 // InstanceProfileListing is one page of ListInstanceProfiles.
 type InstanceProfileListing = instanceProfileListing
 
-// ListProfiles is IAM ListInstanceProfiles, which this server does not
-// serve over gRPC yet (#94).
+// ListProfiles is the service layer of IAM ListInstanceProfiles (#94),
+// which InstanceProfileService.ListInstanceProfiles serves.
 func (s *Server) ListProfiles(
 	ctx context.Context, project, pathPrefix, marker string, maxItems int,
 ) (InstanceProfileListing, error) {

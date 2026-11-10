@@ -263,13 +263,12 @@ func (s *Server) listInstanceProfilesForRole(
 
 // instanceProfileListing is one page of ListInstanceProfiles: the
 // profiles whose path starts with the PathPrefix, ordered by case-folded
-// name, each as stored. Roles holds, by case-folded name, the stored
-// roles the listed profiles name, so a caller can render each profile's
-// Roles; a name with no stored role (a role deleted while in the profile,
-// #234) is absent. When IsTruncated is set, Marker continues the listing.
+// name, each as GetInstanceProfile returns it (the version read, its ARN
+// and the stored roles it names; a name with no stored role, a role
+// deleted while in the profile, #234, is left out). When IsTruncated is
+// set, Marker continues the listing.
 type instanceProfileListing struct {
-	Profiles    []iam.InstanceProfile
-	Roles       map[string]iam.Role
+	Profiles    []instanceProfileView
 	IsTruncated bool
 	Marker      string
 }
@@ -291,11 +290,9 @@ type instanceProfileListing struct {
 // and a marker (the last name of the previous page) continues after that
 // name even when profiles are created or deleted in between: every
 // profile that exists for the whole listing is returned once. The call
-// only reads. Authorization (iam:ListInstanceProfiles) is console-api's,
+// only reads: one profile listing and, when the page names a role, one
+// role listing. Authorization (iam:ListInstanceProfiles) is console-api's,
 // as for the other IAM reads.
-//
-// TODO(#94): serve this as an RPC once vws-proto carries it
-// (popododo0720/vws-proto#121).
 func (s *Server) listInstanceProfiles(
 	ctx context.Context, pid, pathPrefix, marker string, maxItems int,
 ) (instanceProfileListing, error) {
@@ -322,23 +319,30 @@ func (s *Server) listInstanceProfiles(
 	if err != nil {
 		return instanceProfileListing{}, toStatus(ctx, err)
 	}
-	var match []iam.InstanceProfile
+	var match []store.Versioned[iam.InstanceProfile]
 	for _, v := range all {
 		if after != "" && store.Fold(v.Object.Name) <= after {
 			continue
 		}
-		path := v.Object.Path
-		if path == "" {
-			path = "/"
-		}
-		if strings.HasPrefix(path, pathPrefix) {
-			match = append(match, v.Object)
+		if strings.HasPrefix(defaultPath(v.Object.Path), pathPrefix) {
+			match = append(match, v)
 		}
 	}
-	var out instanceProfileListing
-	out.Profiles, out.IsTruncated, out.Marker = pageInstanceProfiles(match, maxItems)
-	if out.Roles, err = profileRoles(ctx, p.b, out.Profiles); err != nil {
+	page, truncated, next := pageByFoldedName(match,
+		func(v store.Versioned[iam.InstanceProfile]) string { return v.Object.Name }, maxItems)
+	roles, err := profileRoles(ctx, p.b, page)
+	if err != nil {
 		return instanceProfileListing{}, toStatus(ctx, err)
+	}
+	out := instanceProfileListing{IsTruncated: truncated, Marker: next}
+	for _, v := range page {
+		view := instanceProfileView{Profile: v.Object, Version: v.Version, ARN: iam.InstanceProfileARN(p.id, v.Object)}
+		for _, n := range v.Object.Roles {
+			if r, ok := roles[store.Fold(n)]; ok {
+				view.Roles = append(view.Roles, r)
+			}
+		}
+		out.Profiles = append(out.Profiles, view)
 	}
 	return out, nil
 }
@@ -347,14 +351,16 @@ func (s *Server) listInstanceProfiles(
 // the profiles ps name; empty, without a store read, when they name none.
 // Names with no stored role are left out. It lists the roles once rather
 // than reading each.
-func profileRoles(ctx context.Context, b store.Backend, ps []iam.InstanceProfile) (map[string]iam.Role, error) {
+func profileRoles(
+	ctx context.Context, b store.Backend, ps []store.Versioned[iam.InstanceProfile],
+) (map[string]store.Versioned[iam.Role], error) {
 	want := map[string]bool{}
 	for _, ip := range ps {
-		for _, n := range ip.Roles {
+		for _, n := range ip.Object.Roles {
 			want[store.Fold(n)] = true
 		}
 	}
-	out := make(map[string]iam.Role, len(want))
+	out := make(map[string]store.Versioned[iam.Role], len(want))
 	if len(want) == 0 {
 		return out, nil
 	}
@@ -364,7 +370,7 @@ func profileRoles(ctx context.Context, b store.Backend, ps []iam.InstanceProfile
 	}
 	for _, r := range roles {
 		if k := store.Fold(r.Object.Name); want[k] {
-			out[k] = r.Object
+			out[k] = r
 		}
 	}
 	return out, nil
@@ -573,6 +579,29 @@ func (s *Server) GetInstanceProfile(
 		return nil, err
 	}
 	return s.project(pid).instanceProfileProto(v), nil
+}
+
+// ListInstanceProfiles is IAM ListInstanceProfiles over gRPC (#94): the
+// instance profiles of parent whose path starts with path_prefix, through
+// listInstanceProfiles. page_size is MaxItems and page_token the Marker;
+// next_page_token is set exactly when the page is truncated.
+func (s *Server) ListInstanceProfiles(
+	ctx context.Context, req *iamv1.ListInstanceProfilesRequest,
+) (*iamv1.ListInstanceProfilesResponse, error) {
+	pid, err := parent(req.GetParent())
+	if err != nil {
+		return nil, err
+	}
+	pg, err := s.listInstanceProfiles(ctx, pid, req.GetPathPrefix(), req.GetPageToken(), int(req.GetPageSize()))
+	if err != nil {
+		return nil, err
+	}
+	p := s.project(pid)
+	out := &iamv1.ListInstanceProfilesResponse{NextPageToken: pg.Marker}
+	for _, v := range pg.Profiles {
+		out.InstanceProfiles = append(out.InstanceProfiles, p.instanceProfileProto(v))
+	}
+	return out, nil
 }
 
 // instanceProfileProto renders v. spec.roles and status.roles both list
