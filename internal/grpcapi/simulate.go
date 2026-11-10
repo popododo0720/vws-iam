@@ -22,11 +22,12 @@ import (
 
 // simulateInput is the request of IAM SimulatePrincipalPolicy. The
 // resource-policy inputs (ResourcePolicy, ResourceOwner,
-// ResourceHandlingOption) and PolicyExclusionList are not taken yet
+// ResourceHandlingOption) are not taken yet
 // (#253).
 type simulateInput struct {
-	PolicySourceARN string
-	ActionNames     []string
+	PolicyExclusionList []policyIdentifier
+	PolicySourceARN     string
+	ActionNames         []string
 	// ResourceARNs defaults to "*".
 	ResourceARNs           []string
 	PolicyInputList        []string
@@ -308,14 +309,19 @@ func (s *Server) simulatePrincipalPolicy(ctx context.Context, pid string, in sim
 	if account != pid {
 		return simulationPage{}, notFound("The entity " + quote(in.PolicySourceARN) + " cannot be found.")
 	}
+	if err := validateExclusions(in.PolicyExclusionList); err != nil {
+		return simulationPage{}, err
+	}
+	excluded := func(name, kind string) bool { return excludedPolicy(in.PolicyExclusionList, name, kind) }
 	p := s.project(pid)
+	p.authz = p.authz.ExcludingPolicies(excluded)
 	ids, stored, err := sourcePolicies(ctx, p, kind, path, name, in.PolicySourceARN)
 	if err != nil {
 		return simulationPage{}, err
 	}
 	if len(boundary) == 0 {
 		boundary = nil
-		if stored != "" {
+		if stored != "" && !excluded(stored, "permission-boundary") {
 			b, err := p.authz.ManagedPolicy(ctx, stored)
 			if err != nil {
 				return simulationPage{}, simulationError(ctx, err)

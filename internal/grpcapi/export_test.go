@@ -213,10 +213,12 @@ func (s *Server) DeleteAccountPasswordPolicy(ctx context.Context, project string
 // SimulateInput, ContextEntry and SimulationPage are the
 // SimulatePrincipalPolicy request and result types.
 type (
-	SimulateInput    = simulateInput
-	ContextEntry     = contextEntry
-	SimulationPage   = simulationPage
-	EvaluationResult = evaluationResult
+	PolicyIdentifier       = policyIdentifier
+	InlinePolicyIdentifier = inlinePolicyIdentifier
+	SimulateInput          = simulateInput
+	ContextEntry           = contextEntry
+	SimulationPage         = simulationPage
+	EvaluationResult       = evaluationResult
 )
 
 // SimulatePrincipalPolicy is IAM SimulatePrincipalPolicy, which vws-proto
