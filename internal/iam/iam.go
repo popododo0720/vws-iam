@@ -42,6 +42,8 @@ const (
 	KindSAMLProvider Kind = "IamSAMLProvider"
 	// KindOIDCProvider is an OpenID Connect identity provider (#208).
 	KindOIDCProvider Kind = "IamOIDCProvider"
+	// KindConsoleSession is a console session shared by console-api (#454).
+	KindConsoleSession Kind = "IamConsoleSession"
 )
 
 // Kinds lists every stored kind.
@@ -49,7 +51,7 @@ var Kinds = []Kind{
 	KindUser, KindGroup, KindRole, KindPolicy, KindAccessKey, KindMfaDevice,
 	KindKeyIndex, KindSession, KindOperation, KindReplay, KindAttempt, KindMemberLock, KindFidoDevice,
 	KindInstanceProfile, KindAccountAlias, KindAccountAliasClaim, KindPasswordPolicy, KindRootLogin,
-	KindSAMLProvider, KindOIDCProvider,
+	KindSAMLProvider, KindOIDCProvider, KindConsoleSession,
 }
 
 // Meta is the resource envelope every API resource carries.

@@ -74,6 +74,9 @@ func apiServerBackends(t *testing.T) func(*testing.T) store.Backend {
 	// suite does not spend its deadline on API discovery.
 	warm := kubestore.New(c, "default")
 	for _, k := range iam.Kinds {
+		if k == iam.KindConsoleSession { // no CRD: Kubernetes is retired (#454)
+			continue
+		}
 		if _, err := warm.List(t.Context(), k); err != nil {
 			t.Fatal(err)
 		}
