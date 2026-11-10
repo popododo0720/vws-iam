@@ -3,6 +3,7 @@ package grpcapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
@@ -146,11 +147,35 @@ var mapping = []struct {
 	{store.ErrUnavailable, codes.Unavailable, "", "ServiceUnavailable"},
 }
 
+// contextualError keeps diagnostic context separate from the client message.
+type contextualError struct {
+	operation string
+	cause     error
+}
+
+func (e *contextualError) Error() string { return fmt.Sprintf("%s: %v", e.operation, e.cause) }
+func (e *contextualError) Unwrap() error { return e.cause }
+
+func withErrorContext(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &contextualError{operation: operation, cause: err}
+}
+
 // toStatus maps any error to the wire. Unknown errors become INTERNAL with
 // no detail; the cause is logged without request data.
 func toStatus(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
+	}
+	diagnostic := err
+	for {
+		contextual, ok := err.(*contextualError) //nolint:errorlint // Only strip outer diagnostic wrappers.
+		if !ok {
+			break
+		}
+		err = contextual.cause
 	}
 	var ae *apiError
 	if errors.As(err, &ae) {
@@ -177,6 +202,6 @@ func toStatus(ctx context.Context, err error) error {
 			return (&apiError{code: m.code, reason: m.reason, aws: m.aws, msg: msg}).GRPCStatus().Err()
 		}
 	}
-	slog.Default().LogAttrs(ctx, slog.LevelError, "internal error", slog.String("error", err.Error()))
+	slog.Default().LogAttrs(ctx, slog.LevelError, "internal error", slog.String("error", diagnostic.Error()))
 	return (&apiError{code: codes.Internal, aws: "InternalFailure", msg: "internal error"}).GRPCStatus().Err()
 }
