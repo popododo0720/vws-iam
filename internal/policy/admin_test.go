@@ -66,9 +66,14 @@ func TestAdminActionsNeedAnExplicitGrant(t *testing.T) {
 		statementDoc("Action", "iam:*"),
 		statementDoc("Action", "*:List*"),
 		statementDoc("Action", "ec2:Admin*"),
+		statementDoc("Action", "vws:Get*"),
+		statementDoc("NotAction", "vws:Admin*"),
 	}
+	// A pattern that matches the action name grants it, as in AWS, and so does
+	// an Allow NotAction that does not name it.
 	explicit := []string{
 		statementDoc("Action", "*"), statementDoc("Action", "vws:*"), statementDoc("Action", "vws:Admin*"),
+		statementDoc("Action", "*:*"), statementDoc("Action", "*:Admin*"), statementDoc("NotAction", "ec2:*"),
 	}
 	for _, a := range adminActions {
 		for _, doc := range broad {
