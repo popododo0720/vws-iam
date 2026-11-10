@@ -171,3 +171,26 @@ func TestRoleTagValidation(t *testing.T) {
 		t.Fatal("51 tags accepted")
 	}
 }
+
+func TestUserTagValidation(t *testing.T) {
+	user := func(tags map[string]string) User {
+		return User{Name: "alice", ID: "AIDA1", Created: time.Now(), Tags: tags}
+	}
+	if err := user(map[string]string{"Team": "a / b", "empty": ""}).Validate(); err != nil {
+		t.Fatalf("valid tags rejected: %v", err)
+	}
+	if err := user(map[string]string{"aws:team": "v"}).Validate(); err == nil {
+		t.Fatal("reserved key prefix accepted")
+	}
+	most := make(map[string]string, MaxUserTags+1)
+	for i := range MaxUserTags {
+		most[strings.Repeat("k", i+1)] = "v"
+	}
+	if err := user(most).Validate(); err != nil {
+		t.Fatalf("50 tags rejected: %v", err)
+	}
+	most["one-more"] = "v"
+	if err := user(most).Validate(); err == nil {
+		t.Fatal("51 tags accepted")
+	}
+}

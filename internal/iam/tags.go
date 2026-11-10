@@ -15,6 +15,8 @@ const (
 	MaxMFADeviceTags = 50
 	// MaxRoleTags is the AWS limit of tags per IAM role.
 	MaxRoleTags = 50
+	// MaxUserTags is the AWS limit of tags per IAM user.
+	MaxUserTags = 50
 	// MaxTagKeyLen is the AWS limit of a tag key, in characters.
 	MaxTagKeyLen = 128
 	// MaxTagValueLen is the AWS limit of a tag value, in characters.
