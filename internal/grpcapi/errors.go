@@ -215,16 +215,8 @@ func toStatus(ctx context.Context, err error) error {
 	if timedOut && !errors.Is(err, store.ErrConflict) {
 		return status.Error(status.FromContextError(err).Code(), clientMessage(err))
 	}
-	if st, ok := status.FromError(err); ok && st.Code() != codes.Unknown {
-		// A wrapped status takes err.Error() as its message (grpc-go), so
-		// a contextual layer under the wrapper is removed here too.
-		if msg := clientMessage(err); msg != err.Error() {
-			p := st.Proto()
-			p.Message = msg
-			return status.ErrorProto(p)
-		}
-		return err
-	}
+	// A domain sentinel maps before any gRPC status it wraps: the etcd
+	// client's own status carries backend addresses and no AWS code.
 	for _, m := range mapping {
 		if errors.Is(err, m.err) {
 			msg := clientMessage(err)
@@ -236,6 +228,16 @@ func toStatus(ctx context.Context, err error) error {
 			}
 			return (&apiError{code: m.code, reason: m.reason, aws: m.aws, msg: msg}).GRPCStatus().Err()
 		}
+	}
+	if st, ok := status.FromError(err); ok && st.Code() != codes.Unknown {
+		// A wrapped status takes err.Error() as its message (grpc-go), so
+		// a contextual layer under the wrapper is removed here too.
+		if msg := clientMessage(err); msg != err.Error() {
+			p := st.Proto()
+			p.Message = msg
+			return status.ErrorProto(p)
+		}
+		return err
 	}
 	slog.Default().LogAttrs(ctx, slog.LevelError, "internal error", slog.String("error", diagnostic.Error()))
 	return (&apiError{code: codes.Internal, aws: "InternalFailure", msg: "internal error"}).GRPCStatus().Err()

@@ -36,6 +36,7 @@ Every row names its enforcer. `TestAgentsRulesNameAnEnforcer` (internal/archtest
 | etcd client packages stay in `internal/store/etcdstore`. | `TestArchitectureRules` |
 | gRPC stays in `internal/grpcapi` and `cmd/vws-iam` (and the etcd client's call options in `internal/store/etcdstore`); protobuf, genproto, vws-proto, and longrunning types stay in `internal/grpcapi`. | `TestArchitectureRules` |
 | `internal/grpcapi` uses the `store.Backend` contract, never `memstore` or `etcdstore` internals. | `TestArchitectureRules` |
+| An etcd that cannot be reached is `store.ErrUnavailable`, never a hang: `etcdstore` sends each request without waiting for a connection, so a refused connection or a `codes.Unavailable` status fails at once (the client still resends an unsent request, at most 3 times), while a permanent etcd answer and the caller's own cancellation keep their errors. The gRPC API answers it UNAVAILABLE/`ServiceUnavailable` with no backend detail, before the caller's deadline, and serves again once etcd is back (#397). | `TestTranslate`, `TestCallsAreBoundedWhenEtcdIsDown`, `TestHandlerAnswersUnavailableWhenEtcdIsDown` |
 | `GetSigningCredential` (plaintext secret) is referenced only from `internal/accesskey` and `internal/grpcapi`. | `TestArchitectureRules` |
 | Production packages do not import `testing`. `storetest` is the one exception. | `TestArchitectureRules` |
 | Logs are slog through vws-lib `obs`, wired at the edge; no `log`, no direct sentry-go. No SQL. | `TestArchitectureRules`, `.golangci.yml` depguard |
