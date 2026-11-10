@@ -112,6 +112,42 @@ func (s *Server) AssumeRoleWithWebIdentity(
 	return nil, status.Error(codes.Unimplemented, "AssumeRoleWithWebIdentity is not served yet")
 }
 
+// ListInstanceProfiles is not served yet.
+//
+// TODO(#94): serve it through listInstanceProfiles.
+func (s *Server) ListInstanceProfiles(
+	context.Context, *iamv1.ListInstanceProfilesRequest,
+) (*iamv1.ListInstanceProfilesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "ListInstanceProfiles is not served yet")
+}
+
+// ListInstanceProfilesForRole is not served yet.
+//
+// TODO(#95): serve it through listInstanceProfilesForRole.
+func (s *Server) ListInstanceProfilesForRole(
+	context.Context, *iamv1.ListInstanceProfilesForRoleRequest,
+) (*iamv1.ListInstanceProfilesForRoleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "ListInstanceProfilesForRole is not served yet")
+}
+
+// AddRoleToInstanceProfile is not served yet.
+//
+// TODO(#96): serve it through addRoleToInstanceProfile.
+func (s *Server) AddRoleToInstanceProfile(
+	context.Context, *iamv1.AddRoleToInstanceProfileRequest,
+) (*iamv1.AddRoleToInstanceProfileResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "AddRoleToInstanceProfile is not served yet")
+}
+
+// RemoveRoleFromInstanceProfile is not served yet.
+//
+// TODO(#97): serve it through removeRoleFromInstanceProfile.
+func (s *Server) RemoveRoleFromInstanceProfile(
+	context.Context, *iamv1.RemoveRoleFromInstanceProfileRequest,
+) (*iamv1.RemoveRoleFromInstanceProfileResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "RemoveRoleFromInstanceProfile is not served yet")
+}
+
 // unservedField answers UNIMPLEMENTED for a request field vws-proto
 // carries that this server does not honor yet, so the request is refused
 // before any write and never served as if the field were unset.

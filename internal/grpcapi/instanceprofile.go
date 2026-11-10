@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
+
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/store"
 )
@@ -388,14 +390,15 @@ func decodeMarker(marker string) (string, error) {
 }
 
 // instanceProfileView is the result of GetInstanceProfile: the profile as
-// stored, its ARN, and the stored roles it names, in the profile's order,
-// so a caller can render InstanceProfile.Roles with every role field. A
-// name with no stored role (a role deleted while in the profile, #234) is
-// left out.
+// stored at Version, its ARN, and the stored roles it names, in the
+// profile's order, so a caller can render InstanceProfile.Roles with every
+// role field. A name with no stored role (a role deleted while in the
+// profile, #234) is left out.
 type instanceProfileView struct {
 	Profile iam.InstanceProfile
+	Version string
 	ARN     string
-	Roles   []iam.Role
+	Roles   []store.Versioned[iam.Role]
 }
 
 // getInstanceProfile is IAM GetInstanceProfile: instance profile
@@ -409,9 +412,6 @@ type instanceProfileView struct {
 // most iam.MaxInstanceProfileRoles). Authorization (iam:GetInstanceProfile)
 // is console-api's, as for the other IAM reads. AWS also returns the
 // profile's Tags, which iam.InstanceProfile does not model yet (#239).
-//
-// TODO(#93): serve this as an RPC once vws-proto carries it
-// (popododo0720/vws-proto#122).
 func (s *Server) getInstanceProfile(ctx context.Context, pid, profileName string) (instanceProfileView, error) {
 	if !iam.ValidProject(pid) {
 		return instanceProfileView{}, invalidID("project " + quote(pid) + " is not a project id")
@@ -428,7 +428,7 @@ func (s *Server) getInstanceProfile(ctx context.Context, pid, profileName string
 		return instanceProfileView{}, toStatus(ctx, err)
 	}
 	ip := cur.Object
-	out := instanceProfileView{Profile: ip, ARN: iam.InstanceProfileARN(p.id, ip)}
+	out := instanceProfileView{Profile: ip, Version: cur.Version, ARN: iam.InstanceProfileARN(p.id, ip)}
 	for _, n := range ip.Roles {
 		r, err := store.Get[iam.Role](ctx, p.b, n)
 		if errors.Is(err, store.ErrNotFound) {
@@ -437,7 +437,7 @@ func (s *Server) getInstanceProfile(ctx context.Context, pid, profileName string
 		if err != nil {
 			return instanceProfileView{}, toStatus(ctx, err)
 		}
-		out.Roles = append(out.Roles, r.Object)
+		out.Roles = append(out.Roles, r)
 	}
 	return out, nil
 }
@@ -549,12 +549,47 @@ func (s *Server) createInstanceProfile(
 		Meta: iam.Meta{UID: iam.NewUID(), Generation: 1}, Name: profileName, Path: path,
 		ID: iam.NewUniqueID("AIPA"), Created: s.now().UTC(),
 	}
-	_, err := store.Create(ctx, p.b, ip)
+	version, err := store.Create(ctx, p.b, ip)
 	if errors.Is(err, store.ErrExists) {
 		return instanceProfileView{}, alreadyExists("Instance Profile " + profileName + " already exists.")
 	}
 	if err != nil {
 		return instanceProfileView{}, toStatus(ctx, err)
 	}
-	return instanceProfileView{Profile: ip, ARN: iam.InstanceProfileARN(p.id, ip)}, nil
+	return instanceProfileView{Profile: ip, Version: version, ARN: iam.InstanceProfileARN(p.id, ip)}, nil
+}
+
+// GetInstanceProfile is IAM GetInstanceProfile over gRPC (#93): the
+// instance profile name names, through getInstanceProfile.
+func (s *Server) GetInstanceProfile(
+	ctx context.Context, req *iamv1.GetInstanceProfileRequest,
+) (*iamv1.InstanceProfile, error) {
+	pid, id, err := child(req.GetName(), "instanceProfiles")
+	if err != nil {
+		return nil, err
+	}
+	v, err := s.getInstanceProfile(ctx, pid, id)
+	if err != nil {
+		return nil, err
+	}
+	return s.project(pid).instanceProfileProto(v), nil
+}
+
+// instanceProfileProto renders v. spec.roles and status.roles both list
+// the stored roles of v, so a stale name of a deleted role (#234) is in
+// neither.
+func (p project) instanceProfileProto(v instanceProfileView) *iamv1.InstanceProfile {
+	ip := v.Profile
+	out := &iamv1.InstanceProfile{
+		Name: name(p.id, "instanceProfiles", ip.Name), Uid: ip.UID, Generation: ip.Generation, Etag: v.Version,
+		Labels:     labels(ip.Labels),
+		Spec:       &iamv1.InstanceProfileSpec{Path: defaultPath(ip.Path)},
+		Status:     &iamv1.InstanceProfileStatus{Observed: ready(ip.Generation), Arn: v.ARN, UniqueId: ip.ID},
+		CreateTime: ts(ip.Created), UpdateTime: ts(ip.Updated),
+	}
+	for _, r := range v.Roles {
+		out.Spec.Roles = append(out.Spec.Roles, name(p.id, "roles", r.Object.Name))
+		out.Status.Roles = append(out.Status.Roles, p.roleProto(r))
+	}
+	return out
 }

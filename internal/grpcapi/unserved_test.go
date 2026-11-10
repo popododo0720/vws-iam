@@ -15,7 +15,7 @@ import (
 )
 
 // TestUnservedRPCsAreUnimplemented: the RPCs vws-proto v0.9.0 to v0.20.0
-// added that this server does not serve yet answer UNIMPLEMENTED (#98 to
+// added that this server does not serve yet answer UNIMPLEMENTED (#94 to
 // #108).
 func TestUnservedRPCsAreUnimplemented(t *testing.T) {
 	e := newEnv(t)
@@ -68,6 +68,22 @@ func TestUnservedRPCsAreUnimplemented(t *testing.T) {
 		},
 		"GetFederationToken": func() error {
 			_, err := e.token.GetFederationToken(ctx, &iamv1.GetFederationTokenRequest{})
+			return err
+		},
+		"ListInstanceProfiles": func() error {
+			_, err := e.profiles.ListInstanceProfiles(ctx, &iamv1.ListInstanceProfilesRequest{Parent: parentName})
+			return err
+		},
+		"ListInstanceProfilesForRole": func() error {
+			_, err := e.profiles.ListInstanceProfilesForRole(ctx, &iamv1.ListInstanceProfilesForRoleRequest{Parent: parentName})
+			return err
+		},
+		"AddRoleToInstanceProfile": func() error {
+			_, err := e.profiles.AddRoleToInstanceProfile(ctx, &iamv1.AddRoleToInstanceProfileRequest{})
+			return err
+		},
+		"RemoveRoleFromInstanceProfile": func() error {
+			_, err := e.profiles.RemoveRoleFromInstanceProfile(ctx, &iamv1.RemoveRoleFromInstanceProfileRequest{})
 			return err
 		},
 	} {

@@ -47,6 +47,7 @@ type Server struct {
 	iamv1.UnsafeMfaDeviceServiceServer
 	iamv1.UnsafeAuthServiceServer
 	iamv1.UnsafeTokenServiceServer
+	iamv1.UnsafeInstanceProfileServiceServer
 	longrunningpb.UnimplementedOperationsServer
 
 	b    store.Backend
@@ -128,6 +129,7 @@ func Register(g *grpc.Server, s *Server) {
 	iamv1.RegisterMfaDeviceServiceServer(g, s)
 	iamv1.RegisterAuthServiceServer(g, s)
 	iamv1.RegisterTokenServiceServer(g, s)
+	iamv1.RegisterInstanceProfileServiceServer(g, s)
 	longrunningpb.RegisterOperationsServer(g, s)
 }
 

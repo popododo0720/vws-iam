@@ -45,8 +45,8 @@ func TestGetInstanceProfile(t *testing.T) {
 					if want := "arn:vws:iam::" + proj + ":instance-profile/app/Webserver"; got.ARN != want {
 						t.Fatalf("Arn = %q, want %q", got.ARN, want)
 					}
-					if len(got.Roles) != 1 || got.Roles[0].Name != "S3Access" || got.Roles[0].UID == "" ||
-						got.Roles[0].AssumeRolePolicy == "" {
+					if len(got.Roles) != 1 || got.Roles[0].Object.Name != "S3Access" || got.Roles[0].Object.UID == "" ||
+						got.Roles[0].Object.AssumeRolePolicy == "" {
 						t.Fatalf("Roles = %+v, want the stored S3Access role", got.Roles)
 					}
 				}

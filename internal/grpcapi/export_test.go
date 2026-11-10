@@ -162,8 +162,8 @@ func (s *Server) ListProfiles(
 // InstanceProfileView is the result of GetInstanceProfile.
 type InstanceProfileView = instanceProfileView
 
-// GetProfile is IAM GetInstanceProfile, which this server does not
-// serve over gRPC yet (#93).
+// GetProfile is the service layer of IAM GetInstanceProfile (#93), which
+// InstanceProfileService.GetInstanceProfile serves.
 func (s *Server) GetProfile(ctx context.Context, project, profileName string) (InstanceProfileView, error) {
 	return s.getInstanceProfile(ctx, project, profileName)
 }
