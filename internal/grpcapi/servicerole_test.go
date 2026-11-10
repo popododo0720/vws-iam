@@ -81,7 +81,7 @@ func TestDeleteServiceLinkedRoleRefusesOtherRoles(t *testing.T) {
 	now := time.Now().UTC()
 	e := newEnvOn(t, b, &now)
 	ctx := t.Context()
-	plain := &iamv1.Role{Spec: &iamv1.RoleSpec{Path: iam.ServiceRolePath(slrService), AssumeRolePolicy: slrTrust}}
+	plain := &iamv1.Role{Spec: &iamv1.RoleSpec{Path: "/service-role/lex/", AssumeRolePolicy: slrTrust}}
 	req := &iamv1.CreateRoleRequest{Parent: parentName, RoleId: "plain", Role: plain}
 	if _, err := e.roles.CreateRole(ctx, req); err != nil {
 		t.Fatal(err)

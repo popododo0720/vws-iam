@@ -3,6 +3,7 @@ package grpcapi
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/longrunning/autogen/longrunningpb"
@@ -40,6 +41,9 @@ func maxSession(r iam.Role) time.Duration {
 
 func (p project) roleSpec(ctx context.Context, r *iam.Role, spec *iamv1.RoleSpec, set map[string]bool) error {
 	if set["spec.path"] {
+		if !r.ServiceLinked() && strings.HasPrefix(spec.GetPath(), iam.ServiceRolePathPrefix) {
+			return invalidInput("Path prefix '/aws-service-role/' can only be used for AWS Service linked Roles")
+		}
 		r.Path = spec.GetPath()
 	}
 	if set["spec.description"] {
@@ -152,6 +156,13 @@ func (s *Server) UpdateRole(ctx context.Context, req *iamv1.UpdateRoleRequest) (
 		return op, toStatus(ctx, err)
 	}
 	apply := func(g *iam.Role) error {
+		for path := range set {
+			if path != "spec.description" {
+				if err := g.CheckMutable(); err != nil {
+					return err
+				}
+			}
+		}
 		if err := p.roleSpec(ctx, g, req.GetRole().GetSpec(), set); err != nil {
 			return err
 		}

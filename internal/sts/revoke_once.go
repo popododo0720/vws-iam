@@ -46,6 +46,9 @@ func (s *Service) RevokeSessionsOnce(
 		})
 	case authz.Role:
 		_, err = store.MutateWhileAlive(ctx, s.b, name, func(r *iam.Role) error {
+			if err := r.CheckMutable(); err != nil {
+				return err
+			}
 			apply(&r.SessionsRevokedBefore, &r.SessionsRevokeGeneration, &r.SessionsRevokeRequests)
 			return nil
 		})

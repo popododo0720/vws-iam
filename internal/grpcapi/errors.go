@@ -112,6 +112,7 @@ var mapping = []struct {
 }{
 	{policy.ErrMalformed, codes.InvalidArgument, "INVALID_SPEC", "MalformedPolicyDocument"},
 	{iam.ErrInvalid, codes.InvalidArgument, "INVALID_SPEC", "ValidationError"},
+	{iam.ErrProtectedRole, codes.FailedPrecondition, "INVALID_SPEC", "UnmodifiableEntity"},
 	{sts.ErrInvalidRequest, codes.InvalidArgument, "INVALID_SPEC", "ValidationError"},
 	{sts.ErrInvalidAuthorizationMessage, codes.InvalidArgument, "INVALID_SPEC", "InvalidAuthorizationMessageException"},
 	{sts.ErrNoSuchAccessKey, codes.NotFound, "RESOURCE_NOT_FOUND", "InvalidClientTokenId"},
