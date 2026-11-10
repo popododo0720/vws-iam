@@ -325,7 +325,7 @@ func bootstrapRoot(ctx context.Context, b store.Backend, keys *secret.Keyring, c
 		project, id, sec = strings.TrimSpace(cfg.getenv(envRootProject)), strings.TrimSpace(cfg.getenv(envRootKeyID)), strings.TrimSpace(cfg.getenv(envRootSecret))
 		pw = cfg.getenv(envRootPassword)
 	}
-	if !iam.ValidProject(project) || !strings.HasPrefix(id, "AKIA") || len(sec) < 32 {
+	if !iam.ValidProject(project) || !iam.ValidRootAccessKeyID(id) || len(sec) < 32 {
 		return "", errors.New("root credentials: invalid project, access key id or secret")
 	}
 	svc := accesskey.New(store.Scoped(b, project), b, project, keys, nil)

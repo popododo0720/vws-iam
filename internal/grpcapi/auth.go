@@ -45,7 +45,7 @@ func badCredentials() error {
 
 // Authenticate verifies a SigV4 signature for the gateway. The gateway
 // sends the canonical request and string to sign; the secret never leaves
-// vws-iam. Long-term keys (AKIA) are found through the global key index,
+// vws-iam. Long-term keys (AKIA and imported VWS root keys) use the global key index,
 // temporary ones (ASIA) are opened from the session token.
 func (s *Server) Authenticate(ctx context.Context, req *iamv1.AuthenticateRequest) (resp *iamv1.AuthenticateResponse, err error) {
 	defer func() { s.m.add(ctx, s.m.authn, attribute.String("result", result(err))) }()
@@ -69,7 +69,7 @@ func (s *Server) authenticate(
 	switch {
 	case strings.HasPrefix(id, "ASIA"):
 		return s.authTemporary(ctx, req, sr, gateway)
-	case !accessKeyID.MatchString(id) || req.GetSessionToken() != "":
+	case !iam.ValidRootAccessKeyID(id) || req.GetSessionToken() != "":
 		return nil, "", badCredentials()
 	}
 	pid, err := accesskey.ProjectOf(ctx, s.b, id)

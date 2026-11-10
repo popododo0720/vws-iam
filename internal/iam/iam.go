@@ -498,7 +498,17 @@ type Sealed struct {
 	Ciphertext []byte `json:"ciphertext"`
 }
 
-var accessKeyRE = regexp.MustCompile(`^(AKIA|ASIA)[A-Z2-7]{16}$`)
+var (
+	accessKeyRE     = regexp.MustCompile(`^(AKIA|ASIA)[A-Z2-7]{16}$`)
+	legacyRootKeyRE = regexp.MustCompile(`^VWS[A-Z0-9]{17}$`)
+)
+
+// ValidRootAccessKeyID accepts generated AKIA ids and the legacy console-api
+// VWS[A-Z0-9]{17} format. Only imported root credentials may use VWS ids;
+// IAM user keys remain AKIA and temporary session keys remain ASIA.
+func ValidRootAccessKeyID(id string) bool {
+	return strings.HasPrefix(id, "AKIA") && accessKeyRE.MatchString(id) || legacyRootKeyRE.MatchString(id)
+}
 
 // AccessKey is a long-term access key of a user.
 type AccessKey struct {
@@ -525,7 +535,7 @@ func (k AccessKey) Validate() error {
 	if err := k.validRequests(); err != nil {
 		return err
 	}
-	if !accessKeyRE.MatchString(k.ID) {
+	if !accessKeyRE.MatchString(k.ID) && (!k.Root || !legacyRootKeyRE.MatchString(k.ID)) {
 		return invalid("access key id %q", k.ID)
 	}
 	if k.Root != (k.UserName == "") || (!k.Root && !ValidName(k.UserName)) {
