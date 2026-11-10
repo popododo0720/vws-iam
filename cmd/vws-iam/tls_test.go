@@ -62,7 +62,8 @@ func (ca testCA) leaf(t *testing.T, name string, usage x509.ExtKeyUsage) (certPE
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: name},
-		DNSNames: []string{name}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		DNSNames: []string{name}, IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1)},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{usage},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, &key.PublicKey, ca.key)
@@ -272,9 +273,9 @@ func TestTLSFlags(t *testing.T) {
 	}
 
 	// bootstrap serves nothing, so the chart's listen flag needs no TLS there.
-	kek := map[string]string{envRootProject: "acme"}
-	boot := []string{"bootstrap", "-store=kube", "-namespace", "ns", "-kek-dir", "/k", "-listen", "0.0.0.0:1"}
-	if _, err := parseConfig(boot, io.Discard, envOf(kek)); err != nil {
+	env := map[string]string{envRootProject: "acme", envCredentials: "/c"}
+	boot := []string{"bootstrap", "-etcd-endpoints", "https://10.0.0.1:2379", "-listen", "0.0.0.0:1"}
+	if _, err := parseConfig(boot, io.Discard, envOf(env)); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 }

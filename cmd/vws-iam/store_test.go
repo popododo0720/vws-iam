@@ -6,8 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"os"
-	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -15,70 +14,57 @@ import (
 	"github.com/popododo0720/vws-iam/internal/secret"
 )
 
-func TestResolveStore(t *testing.T) {
-	kek := map[string]string{secret.EnvKEK: base64.StdEncoding.EncodeToString(make([]byte, 32)), secret.EnvKEKID: "k1"}
-	with := func(extra map[string]string) func(string) string {
-		m := map[string]string{}
-		for k, v := range kek {
-			m[k] = v
-		}
-		for k, v := range extra {
-			m[k] = v
-		}
-		return envOf(m)
+func TestStoreFlags(t *testing.T) {
+	const credDir = "/run/credentials/vws-iam.service"
+	creds := envOf(map[string]string{envCredentials: credDir})
+	envKEK := envOf(map[string]string{
+		envCredentials: credDir, secret.EnvKEK: base64.StdEncoding.EncodeToString(make([]byte, 32)), secret.EnvKEKID: "k1",
+	})
+	etcd := []string{"-etcd-endpoints", "https://10.0.0.1:2379, https://etcd-2.vws:2379"}
+	c, err := parseConfig(etcd, io.Discard, creds)
+	if err != nil || c.storeMode != storeEtcd || c.credDir != credDir || c.etcdPrefix != "/vws/iam" ||
+		!slices.Equal(c.etcdEndpoints, []string{"https://10.0.0.1:2379", "https://etcd-2.vws:2379"}) {
+		t.Fatalf("default etcd store: %+v %v", c, err)
 	}
-	nsFile := filepath.Join(t.TempDir(), "namespace")
-	if err := os.WriteFile(nsFile, []byte("vws-from-file\n"), 0o600); err != nil {
-		t.Fatal(err)
+	c, err = parseConfig(append(etcd, "-etcd-prefix", "/iam/a-1"), io.Discard, creds)
+	if err != nil || c.etcdPrefix != "/iam/a-1" {
+		t.Fatalf("prefix: %+v %v", c, err)
 	}
-	missing := filepath.Join(t.TempDir(), "absent")
-	inPod := map[string]string{envServiceHost: "10.96.0.1"}
-	podNS := func(ns string) map[string]string { return map[string]string{envServiceHost: "h", envPodNamespace: ns} }
-	kubeArgs := []string{"-store", "kube"}
-	podOnlyNS := map[string]string{envPodNamespace: "vws-env"}
-	for _, tc := range []struct {
-		name   string
-		args   []string
-		env    func(string) string
-		nsFile string
-		mode   string
-		ns     string
-	}{
-		{"outside a pod without namespace is memory", nil, noEnv, missing, storeMemory, ""},
-		{"explicit namespace is kube", []string{"-namespace", "vws"}, with(nil), missing, storeKube, "vws"},
-		{"pod env namespace", nil, with(podNS("vws-env")), missing, storeKube, "vws-env"},
-		{"service account namespace file", nil, with(inPod), nsFile, storeKube, "vws-from-file"},
-		{"flag beats pod env", []string{"-namespace", "vws"}, with(podNS("other")), nsFile, storeKube, "vws"},
-		{"explicit memory in a pod", []string{"-store", "memory"}, with(inPod), nsFile, storeMemory, ""},
-		{"explicit kube outside a pod", kubeArgs, with(podOnlyNS), missing, storeKube, "vws-env"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			c, err := parseConfigNS(tc.args, io.Discard, tc.env, tc.nsFile)
-			if err != nil || c.storeMode != tc.mode || c.namespace != tc.ns {
-				t.Fatalf("got mode %q namespace %q err %v, want %q %q", c.storeMode, c.namespace, err, tc.mode, tc.ns)
-			}
-		})
+	if c, err := parseConfig([]string{"-store", "memory"}, io.Discard, noEnv); err != nil || c.storeMode != storeMemory {
+		t.Fatalf("memory store: %+v %v", c, err)
 	}
+	endpoint := func(e string) []string { return []string{"-etcd-endpoints", e} }
 	for _, tc := range []struct {
 		name, want string
 		args       []string
 		env        func(string) string
 	}{
-		{"in a pod with no namespace never falls back to memory", "needs a namespace", nil, with(inPod)},
-		{"kube with no namespace", "needs a namespace", kubeArgs, with(nil)},
-		{"memory with namespace", "conflicts", []string{"-store", "memory", "-namespace", "vws"}, with(nil)},
-		{"unknown mode", "-store must be", []string{"-store", "etcd"}, with(nil)},
-		{"hostile namespace", "not a Kubernetes namespace", []string{"-namespace", "../x"}, with(nil)},
-		{"hostile pod namespace", "not a Kubernetes namespace", nil, with(podNS(strings.Repeat("a", 64)))},
-		{"pod without KEK", "KEK", nil, envOf(map[string]string{envServiceHost: "h", envPodNamespace: "vws"})},
+		{"kube is gone", "-store must be etcd or memory", []string{"-store", "kube"}, creds},
+		{"auto is gone", "-store must be etcd or memory", []string{"-store", "auto"}, creds},
+		{"kubeconfig is gone", "-kubeconfig", append([]string{"-kubeconfig", "/k"}, etcd...), creds},
+		{"namespace is gone", "-namespace", []string{"-store", "memory", "-namespace", "vws"}, noEnv},
+		{"etcd without endpoints", "needs -etcd-endpoints", nil, creds},
+		{"plaintext endpoint", "not an https", endpoint("http://10.0.0.1:2379"), creds},
+		{"endpoint without scheme", "not an https", endpoint("10.0.0.1:2379"), creds},
+		{"endpoint without port", "not an https", endpoint("https://10.0.0.1"), creds},
+		{"endpoint with user info", "not an https", endpoint("https://u:p@10.0.0.1:2379"), creds},
+		{"endpoint with path", "not an https", endpoint("https://10.0.0.1:2379/v3"), creds},
+		{"empty endpoint in list", "not an https", endpoint("https://10.0.0.1:2379,"), creds},
+		{"relative prefix", "-etcd-prefix", append(etcd, "-etcd-prefix", "vws"), creds},
+		{"prefix with trailing slash", "-etcd-prefix", append(etcd, "-etcd-prefix", "/vws/"), creds},
+		{"prefix with space", "-etcd-prefix", append(etcd, "-etcd-prefix", "/vws iam"), creds},
+		{"no credentials directory", "$CREDENTIALS_DIRECTORY", etcd, noEnv},
+		{"env KEK with etcd", "reads the KEK", etcd, envKEK},
+		{"kek-dir with etcd", "reads the KEK", append(etcd, "-kek-dir", "/k"), creds},
+		{"memory with endpoints", "conflicts", []string{"-store", "memory", "-etcd-endpoints", "https://h:1"}, noEnv},
 		{
-			"bootstrap on memory", "bootstrap needs the kube store",
+			"bootstrap on memory", "bootstrap needs -store=etcd",
 			[]string{"bootstrap", "-store", "memory"},
-			with(map[string]string{envRootProject: "acme"}),
+			envOf(map[string]string{envRootProject: "acme"}),
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := parseConfigNS(tc.args, io.Discard, tc.env, missing)
+			_, err := parseConfig(tc.args, io.Discard, tc.env)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want an error containing %q", err, tc.want)
 			}
