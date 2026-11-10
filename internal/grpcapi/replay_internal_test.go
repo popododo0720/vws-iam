@@ -1,6 +1,8 @@
 package grpcapi
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -124,5 +126,55 @@ func TestGCPaginates(t *testing.T) {
 	}
 	if vs, err := store.List[iam.ReplayEntry](ctx, b); err != nil || len(vs) != 1 {
 		t.Fatalf("left %d, %v; want the 1 live entry", len(vs), err)
+	}
+}
+
+// flakyPager counts ListPage calls and fails those for which fail holds
+// with ErrUnavailable, as a store leader change does.
+type flakyPager struct {
+	*memstore.Store
+	calls int
+	fail  func(call int) bool
+}
+
+func (p *flakyPager) ListPage(
+	ctx context.Context, kind iam.Kind, limit int64, cont string,
+) ([]store.Entry, string, error) {
+	p.calls++
+	if p.fail(p.calls) {
+		return nil, "", store.ErrUnavailable
+	}
+	return p.Store.ListPage(ctx, kind, limit, cont)
+}
+
+// TestGCPaginatesThroughRetry runs GC on the store wrapped as production
+// wraps it (store.WithRetry, #352): it still lists in pages, a page that
+// fails transiently is retried alone, a re-run finds nothing left, and a
+// page unavailable past the retries ends the pass with ErrUnavailable.
+func TestGCPaginatesThroughRetry(t *testing.T) {
+	ctx := t.Context()
+	now := time.Now().UTC()
+	p := &flakyPager{Store: memstore.New(), fail: func(call int) bool { return call == 2 }}
+	s := New(store.WithRetry(p, 3, 0), testRing(t, "a", "a"), WithClock(func() time.Time { return now }))
+	s.gcPage = 2
+	for i := range 7 {
+		h := s.replayKeys(&iamv1.AuthenticateRequest{AccessKeyId: "AKIA", Signature: string(rune('a' + i))})[0]
+		if _, err := store.Create(ctx, p, iam.ReplayEntry{Hash: h, Expires: now.Add(-time.Minute)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := s.GCReplayEntries(ctx); err != nil || n != 7 {
+		t.Fatalf("GC = %d, %v; want 7", n, err)
+	}
+	// 7 entries in pages of 2 are 4 pages, plus the one retried call.
+	if p.calls != 5 {
+		t.Fatalf("ListPage calls = %d, want 5", p.calls)
+	}
+	if n, err := s.GCReplayEntries(ctx); err != nil || n != 0 {
+		t.Fatalf("re-run GC = %d, %v; want 0", n, err)
+	}
+	p.fail = func(int) bool { return true }
+	if _, err := s.GCReplayEntries(ctx); !errors.Is(err, store.ErrUnavailable) {
+		t.Fatalf("GC on an unavailable store = %v, want ErrUnavailable", err)
 	}
 }
