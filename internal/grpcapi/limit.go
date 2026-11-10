@@ -201,7 +201,8 @@ func (s *Server) checkAttempts(ctx context.Context, cs callers) error {
 // lockedOut reports a running lockout, or a window that already holds
 // the limit, so the next attempt is refused before any credential check.
 func lockedOut(c iam.AttemptCounter, now time.Time) bool {
-	return now.Before(c.LockedUntil) || (now.Before(c.WindowStart.Add(AttemptWindow)) && c.Failures >= attemptLimit(c.Scope))
+	return now.Before(c.LockedUntil) ||
+		(now.Before(c.WindowStart.Add(AttemptWindow)) && c.Failures >= attemptLimit(c.Scope))
 }
 
 // reserveAttempts counts one attempt on every counter of cs before the

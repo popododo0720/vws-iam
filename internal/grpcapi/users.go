@@ -66,7 +66,11 @@ func (p project) userProto(v store.Versioned[iam.User], x userExtras, partner st
 	u := v.Object
 	return &iamv1.User{
 		Name: name(p.id, "users", u.Name), Uid: u.UID, Generation: u.Generation, Etag: v.Version, Labels: labels(u.Labels),
-		Spec: &iamv1.UserSpec{Path: defaultPath(u.Path), AttachedPolicies: p.policyNames(u.AttachedPolicies), InlinePolicies: u.InlinePolicies},
+		Spec: &iamv1.UserSpec{
+			Path:             defaultPath(u.Path),
+			AttachedPolicies: p.policyNames(u.AttachedPolicies),
+			InlinePolicies:   u.InlinePolicies,
+		},
 		Status: &iamv1.UserStatus{
 			Observed: ready(u.Generation), Arn: iam.UserARN(p.id, u), UniqueId: u.ID,
 			Groups: of(x.groups, u, partner), LoginProfile: u.PasswordHash != "", PasswordResetRequired: u.PasswordResetRequired,
@@ -122,7 +126,12 @@ func (s *Server) ListUsers(ctx context.Context, req *iamv1.ListUsersRequest) (*i
 		byName[store.Fold(v.Object.Name)] = v.Object
 	}
 	all = store.Visible(all)
-	items, next, err := page(all, func(v store.Versioned[iam.User]) string { return v.Object.Name }, req.GetPageSize(), req.GetPageToken())
+	items, next, err := page(
+		all,
+		func(v store.Versioned[iam.User]) string { return v.Object.Name },
+		req.GetPageSize(),
+		req.GetPageToken(),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +194,12 @@ func (s *Server) CreateUser(ctx context.Context, req *iamv1.CreateUserRequest) (
 		return op, toStatus(ctx, err)
 	}
 	now := s.now().UTC()
-	u := iam.User{Meta: iam.Meta{UID: iam.NewUID(), Generation: 1, Labels: req.GetUser().GetLabels(), RequestID: req.GetRequestId()}, Name: req.GetUserId(), ID: iam.NewUniqueID("AIDA"), Created: now}
+	u := iam.User{
+		Meta:    iam.Meta{UID: iam.NewUID(), Generation: 1, Labels: req.GetUser().GetLabels(), RequestID: req.GetRequestId()},
+		Name:    req.GetUserId(),
+		ID:      iam.NewUniqueID("AIDA"),
+		Created: now,
+	}
 	if err := p.userSpec(ctx, &u, req.GetUser().GetSpec(), allPaths(userPaths)); err != nil {
 		return nil, toStatus(ctx, err)
 	}
@@ -210,7 +224,20 @@ func (s *Server) CreateUser(ctx context.Context, req *iamv1.CreateUserRequest) (
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
-	op, err := s.done(ctx, opArgs{project: pid, method: "CreateUser", requestID: req.GetRequestId(), req: req, resource: resp.Name, verb: commonv1.OperationVerb_OPERATION_VERB_CREATE, generation: u.Generation, response: resp, validateOnly: req.GetValidateOnly()})
+	op, err := s.done(
+		ctx,
+		opArgs{
+			project:      pid,
+			method:       "CreateUser",
+			requestID:    req.GetRequestId(),
+			req:          req,
+			resource:     resp.Name,
+			verb:         commonv1.OperationVerb_OPERATION_VERB_CREATE,
+			generation:   u.Generation,
+			response:     resp,
+			validateOnly: req.GetValidateOnly(),
+		},
+	)
 	return op, toStatus(ctx, err)
 }
 
@@ -264,7 +291,9 @@ func (s *Server) updateUser(
 		o := newOnce(pid, "UpdateUser", req.GetRequestId(), req)
 		etag := req.GetUser().GetEtag()
 		v, _, err = update(ctx, p.b, id, etag, o, req.GetAllowMissing(), bumpUser, apply, func() (iam.User, error) {
-			u := iam.User{Meta: iam.Meta{UID: iam.NewUID(), Generation: 1}, Name: id, ID: iam.NewUniqueID("AIDA"), Created: s.now().UTC()}
+			u := iam.User{
+				Meta: iam.Meta{UID: iam.NewUID(), Generation: 1}, Name: id, ID: iam.NewUniqueID("AIDA"), Created: s.now().UTC(),
+			}
 			if err := checkID(id, "user"); err != nil {
 				return u, err
 			}
@@ -403,7 +432,19 @@ func (s *Server) DeleteUser(ctx context.Context, req *iamv1.DeleteUserRequest) (
 		resp = p.userProto(v, x, "")
 		resp.DeleteTime = timestamppb.New(s.now())
 	}
-	op, err := s.done(ctx, opArgs{project: pid, method: "DeleteUser", requestID: req.GetRequestId(), req: req, resource: req.GetName(), verb: commonv1.OperationVerb_OPERATION_VERB_DELETE, generation: v.Object.Generation, response: resp})
+	op, err := s.done(
+		ctx,
+		opArgs{
+			project:    pid,
+			method:     "DeleteUser",
+			requestID:  req.GetRequestId(),
+			req:        req,
+			resource:   req.GetName(),
+			verb:       commonv1.OperationVerb_OPERATION_VERB_DELETE,
+			generation: v.Object.Generation,
+			response:   resp,
+		},
+	)
 	return op, toStatus(ctx, err)
 }
 
@@ -420,7 +461,10 @@ func checkPassword(pw string) error {
 // upsert mode is served; CREATE_ONLY and MUST_EXIST are UNIMPLEMENTED and
 // write nothing, never an upsert (TODO(#326)), as do the expected_user_arn
 // and user_etag preconditions (loginProfilePreconditions).
-func (s *Server) SetLoginProfile(ctx context.Context, req *iamv1.SetLoginProfileRequest) (*iamv1.SetLoginProfileResponse, error) {
+func (s *Server) SetLoginProfile(
+	ctx context.Context,
+	req *iamv1.SetLoginProfileRequest,
+) (*iamv1.SetLoginProfileResponse, error) {
 	pid, id, err := child(req.GetName(), "users")
 	if err != nil {
 		return nil, err
@@ -454,7 +498,10 @@ func (s *Server) SetLoginProfile(ctx context.Context, req *iamv1.SetLoginProfile
 // DeleteLoginProfile removes the console password and ends nothing else.
 // The expected_user_arn and user_etag preconditions are UNIMPLEMENTED and
 // delete nothing (loginProfilePreconditions).
-func (s *Server) DeleteLoginProfile(ctx context.Context, req *iamv1.DeleteLoginProfileRequest) (*iamv1.DeleteLoginProfileResponse, error) {
+func (s *Server) DeleteLoginProfile(
+	ctx context.Context,
+	req *iamv1.DeleteLoginProfileRequest,
+) (*iamv1.DeleteLoginProfileResponse, error) {
 	pid, id, err := child(req.GetName(), "users")
 	if err != nil {
 		return nil, err
@@ -489,7 +536,10 @@ func loginProfilePreconditions(arn, etag string) error {
 }
 
 // ChangePassword is the user's own change; old_password must verify.
-func (s *Server) ChangePassword(ctx context.Context, req *iamv1.ChangePasswordRequest) (*iamv1.ChangePasswordResponse, error) {
+func (s *Server) ChangePassword(
+	ctx context.Context,
+	req *iamv1.ChangePasswordRequest,
+) (*iamv1.ChangePasswordResponse, error) {
 	pid, id, err := child(req.GetName(), "users")
 	if err != nil {
 		return nil, err

@@ -63,7 +63,19 @@ func result(err error) string {
 	return strings.ToLower(status.Code(err).String())
 }
 
-var mutating = []string{"Create", "Update", "Delete", "Set", "Change", "Enable", "Deactivate", "Login", "Logout", "Assume", "GetSessionToken"}
+var mutating = []string{
+	"Create",
+	"Update",
+	"Delete",
+	"Set",
+	"Change",
+	"Enable",
+	"Deactivate",
+	"Login",
+	"Logout",
+	"Assume",
+	"GetSessionToken",
+}
 
 func isMutating(method string) bool {
 	for _, p := range mutating {

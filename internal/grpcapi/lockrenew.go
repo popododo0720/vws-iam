@@ -19,12 +19,14 @@ func renewLoginLock(ctx context.Context, p project, user string, err error) {
 	ctx = context.WithoutCancel(ctx)
 	devices, err := p.mfa.List(ctx, user)
 	if err != nil {
-		slog.Default().LogAttrs(ctx, slog.LevelWarn, "mfa lock renewal on login throttle failed", slog.String("error", err.Error()))
+		slog.Default().
+			LogAttrs(ctx, slog.LevelWarn, "mfa lock renewal on login throttle failed", slog.String("error", err.Error()))
 		return
 	}
 	for _, d := range devices {
 		if _, err := p.mfa.RenewLock(ctx, d.UserName, d.Name); err != nil {
-			slog.Default().LogAttrs(ctx, slog.LevelWarn, "mfa lock renewal on login throttle failed", slog.String("error", err.Error()))
+			slog.Default().
+				LogAttrs(ctx, slog.LevelWarn, "mfa lock renewal on login throttle failed", slog.String("error", err.Error()))
 		}
 	}
 }

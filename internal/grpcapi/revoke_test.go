@@ -36,7 +36,10 @@ func TestRevokeSessionsOnAPIServer(t *testing.T) {
 	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
 		t.Skip("KUBEBUILDER_ASSETS is not set")
 	}
-	te := &envtest.Environment{CRDDirectoryPaths: []string{filepath.Join("..", "..", "deploy", "crds")}, ErrorIfCRDPathMissing: true}
+	te := &envtest.Environment{
+		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "deploy", "crds")},
+		ErrorIfCRDPathMissing: true,
+	}
 	cfg, err := te.Start()
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +69,12 @@ func testRevokeSessions(t *testing.T, b store.Backend) {
 	a, rb, kid, secret := replicas(t, b)
 	ctx := t.Context()
 	// alice may assume deployer.
-	pol := a.createPolicy(t, ctx, "assume", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sts:AssumeRole","Resource":"*"}]}`)
+	pol := a.createPolicy(
+		t,
+		ctx,
+		"assume",
+		`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sts:AssumeRole","Resource":"*"}]}`,
+	)
 	if _, err := a.users.UpdateUser(ctx, &iamv1.UpdateUserRequest{
 		User: &iamv1.User{
 			Name: parentName + "/users/alice",
@@ -76,18 +84,36 @@ func testRevokeSessions(t *testing.T, b store.Backend) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:vws:iam::acme:user/alice"},"Action":"sts:AssumeRole"}]}`
-	op, err := a.roles.CreateRole(ctx, &iamv1.CreateRoleRequest{Parent: parentName, RoleId: "deployer", Role: &iamv1.Role{Spec: &iamv1.RoleSpec{AssumeRolePolicy: trust}}})
+	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:vws:iam::acme:user/alice"},` +
+		`"Action":"sts:AssumeRole"}]}`
+	op, err := a.roles.CreateRole(
+		ctx,
+		&iamv1.CreateRoleRequest{
+			Parent: parentName,
+			RoleId: "deployer",
+			Role:   &iamv1.Role{Spec: &iamv1.RoleSpec{AssumeRolePolicy: trust}},
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	role := unpack(t, op, &iamv1.Role{})
 
-	userSess, err := a.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{Authentication: gstSig(a.stsSign(kid, secret, "", "GetSessionToken"))})
+	userSess, err := a.token.GetSessionToken(
+		ctx,
+		&iamv1.GetSessionTokenRequest{Authentication: gstSig(a.stsSign(kid, secret, "", "GetSessionToken"))},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	roleSess, err := a.token.AssumeRole(ctx, &iamv1.AssumeRoleRequest{Authentication: arSig(a.stsSign(kid, secret, "", "AssumeRole")), Role: role.GetName(), RoleSessionName: "s1"})
+	roleSess, err := a.token.AssumeRole(
+		ctx,
+		&iamv1.AssumeRoleRequest{
+			Authentication:  arSig(a.stsSign(kid, secret, "", "AssumeRole")),
+			Role:            role.GetName(),
+			RoleSessionName: "s1",
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +131,10 @@ func testRevokeSessions(t *testing.T, b store.Backend) {
 	*a.now = a.now.Add(time.Second)
 	revokedAt := *a.now
 	const rid = "6f1c0a3e-8f7b-4b8e-9c55-2a7e4d0f1b23"
-	op, err = rb.users.RevokeUserSessions(ctx, &iamv1.RevokeUserSessionsRequest{Name: parentName + "/users/alice", RequestId: rid})
+	op, err = rb.users.RevokeUserSessions(
+		ctx,
+		&iamv1.RevokeUserSessionsRequest{Name: parentName + "/users/alice", RequestId: rid},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +152,10 @@ func testRevokeSessions(t *testing.T, b store.Backend) {
 	// A request_id replay returns the original operation and does not move
 	// the revocation time.
 	*a.now = a.now.Add(time.Minute)
-	again, err := a.users.RevokeUserSessions(ctx, &iamv1.RevokeUserSessionsRequest{Name: parentName + "/users/alice", RequestId: rid})
+	again, err := a.users.RevokeUserSessions(
+		ctx,
+		&iamv1.RevokeUserSessionsRequest{Name: parentName + "/users/alice", RequestId: rid},
+	)
 	if err != nil || again.GetName() != op.GetName() {
 		t.Fatalf("replay %v %v, want operation %s", again.GetName(), err, op.GetName())
 	}
@@ -132,7 +164,10 @@ func testRevokeSessions(t *testing.T, b store.Backend) {
 		t.Fatalf("after replay %v %v", got.GetStatus().GetSessionsRevokeTime(), err)
 	}
 	// Sessions issued after the revocation work.
-	fresh, err := rb.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{Authentication: gstSig(rb.stsSign(kid, secret, "", "GetSessionToken"))})
+	fresh, err := rb.token.GetSessionToken(
+		ctx,
+		&iamv1.GetSessionTokenRequest{Authentication: gstSig(rb.stsSign(kid, secret, "", "GetSessionToken"))},
+	)
 	if err != nil || use(a, fresh.GetCredentials()) != nil {
 		t.Fatalf("fresh session %v", err)
 	}
@@ -174,7 +209,13 @@ func TestRevokeSessionsAuthz(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	pr := &iamv1.Principal{Type: iamv1.PrincipalType_PRINCIPAL_TYPE_USER, Arn: admin.GetStatus().GetArn(), Project: proj, UniqueId: admin.GetStatus().GetUniqueId(), Resource: admin.GetName()}
+	pr := &iamv1.Principal{
+		Type:     iamv1.PrincipalType_PRINCIPAL_TYPE_USER,
+		Arn:      admin.GetStatus().GetArn(),
+		Project:  proj,
+		UniqueId: admin.GetStatus().GetUniqueId(),
+		Resource: admin.GetName(),
+	}
 	for _, c := range []struct {
 		action, res string
 		want        iamv1.Decision

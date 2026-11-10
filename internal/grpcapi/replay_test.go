@@ -136,7 +136,8 @@ func testSharedReplay(t *testing.T, backend func(*testing.T) store.Backend) {
 			t.Fatalf("replay entries = %d, want 2", len(es))
 		}
 		for _, e := range es {
-			if s := string(e.Spec); strings.Contains(s, signed.GetSignature()) || strings.Contains(s, secret) || strings.Contains(s, kid) {
+			if s := string(e.Spec); strings.Contains(s, signed.GetSignature()) || strings.Contains(s, secret) ||
+				strings.Contains(s, kid) {
 				t.Fatalf("replay entry holds plaintext: %s", s)
 			}
 		}
