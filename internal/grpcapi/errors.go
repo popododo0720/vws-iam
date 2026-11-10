@@ -127,6 +127,7 @@ var mapping = []struct {
 	{mfa.ErrEntityInUse, codes.AlreadyExists, "ALREADY_EXISTS", "EntityAlreadyExists"},
 	{store.ErrConflict, codes.Aborted, "GENERATION_CONFLICT", "ConcurrentModification"},
 	{store.ErrRenaming, codes.Aborted, "GENERATION_CONFLICT", "ConcurrentModification"},
+	{mfa.ErrLimitExceeded, codes.ResourceExhausted, "QUOTA_EXCEEDED", "LimitExceeded"},
 	{accesskey.ErrLimitExceeded, codes.ResourceExhausted, "QUOTA_EXCEEDED", "LimitExceeded"},
 	{accesskey.ErrInactive, codes.Unauthenticated, "INVALID_CREDENTIALS", "InvalidClientTokenId"},
 	{sts.ErrInvalidToken, codes.Unauthenticated, "INVALID_CREDENTIALS", "InvalidToken"},

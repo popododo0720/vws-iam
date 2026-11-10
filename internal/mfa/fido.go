@@ -41,18 +41,19 @@ func (s *Service) RegisterFido(
 ) (_ iam.FidoDevice, err error) {
 	ctx, end := start(ctx, "RegisterFido")
 	defer end(&err)
-	u, err := store.Get[iam.User](ctx, s.b, user)
+	u, unlock, err := s.lockMFA(ctx, user)
 	if errors.Is(err, store.ErrNotFound) {
 		return iam.FidoDevice{}, fmt.Errorf("user %q: %w", user, ErrNotAssociated)
 	}
 	if err != nil {
 		return iam.FidoDevice{}, fmt.Errorf("register fido device: %w", err)
 	}
+	defer unlock()
 	if u.Object.UID == "" {
 		return iam.FidoDevice{}, fmt.Errorf("register fido device: user %q has no uid", user)
 	}
 	d := iam.FidoDevice{
-		ID: iam.FidoID(c.ID), UserName: u.Object.Name, UserUID: u.Object.UID, Label: label,
+		Pending: true, ID: iam.FidoID(c.ID), UserName: u.Object.Name, UserUID: u.Object.UID, Label: label,
 		CredentialID: c.ID, PublicKey: c.PublicKey, AAGUID: c.AAGUID, SignCount: c.SignCount,
 		EnableTime: s.now().UTC(), Certifications: maps.Clone(c.Certifications),
 	}
@@ -68,12 +69,13 @@ func (s *Service) RegisterFido(
 	// keys before the create deletes at the version it read, so it either
 	// deletes first (claim sees the user gone and the create is undone)
 	// or loses its versioned delete to this write.
-	if err := s.claimUser(ctx, d, u); err != nil {
+	if err := s.claimUser(ctx, d, v, u, u.Object.MFARegistrationLease.Holder); err != nil {
 		if derr := store.Delete[iam.FidoDevice](ctx, s.b, d.ID, v); derr != nil && !errors.Is(derr, store.ErrNotFound) {
-			return iam.FidoDevice{}, fmt.Errorf("register fido device: undo: %w", derr)
+			return iam.FidoDevice{}, errors.Join(err, fmt.Errorf("register fido device: undo: %w", derr))
 		}
 		return iam.FidoDevice{}, err
 	}
+	d.Pending = false
 	return d, nil
 }
 
@@ -85,15 +87,30 @@ const maxClaimAttempts = 8
 // u, the version read before d was created. The user must still exist
 // with d's UID, else ErrNotAssociated. A write that loses to an unrelated
 // update of the user reads it again and retries.
-func (s *Service) claimUser(ctx context.Context, d iam.FidoDevice, u store.Versioned[iam.User]) error {
+func (s *Service) claimUser(
+	ctx context.Context, d iam.FidoDevice, version string, u store.Versioned[iam.User], holder string,
+) error {
 	for attempt := 1; ; attempt++ {
 		if u.Object.UID != d.UserUID {
 			return fmt.Errorf("user %q: %w", d.UserName, ErrNotAssociated)
 		}
-		u.Object.FidoRegistrations++
-		_, err := store.Update(ctx, s.b, u.Object, u.Version)
+		pre, err := s.claimMFASlot(ctx, u, holder, true)
 		if err == nil {
-			return nil
+			d.Pending = false
+			_, err = store.UpdateIf(ctx, s.b, d, version, pre)
+			if err == nil {
+				return nil
+			}
+			cur, readErr := store.Get[iam.FidoDevice](ctx, s.b, d.ID)
+			if readErr == nil && cur.Object.UID == d.UID && !cur.Object.Pending {
+				return nil
+			}
+			if errors.Is(readErr, store.ErrNotFound) || (readErr == nil && cur.Object.UID != d.UID) {
+				return fmt.Errorf("register fido device: %w", ErrEntityInUse)
+			}
+			if readErr != nil {
+				return fmt.Errorf("register fido device: confirm activation: %w", errors.Join(err, readErr))
+			}
 		}
 		if errors.Is(err, store.ErrNotFound) {
 			return fmt.Errorf("user %q: %w", d.UserName, ErrNotAssociated)
@@ -130,6 +147,19 @@ func (s *Service) createFido(ctx context.Context, d iam.FidoDevice) (string, err
 		if err != nil {
 			return "", fmt.Errorf("register fido device: %w", err)
 		}
+		if cur.Object.Pending {
+			owner, err := store.Get[iam.User](ctx, s.b, cur.Object.UserName)
+			if err == nil && owner.Object.UID == cur.Object.UserUID {
+				owner.Object.Generation++
+				if _, err := store.Update(ctx, s.b, owner.Object, owner.Version); errors.Is(err, store.ErrConflict) {
+					continue
+				} else if err != nil {
+					return "", fmt.Errorf("replace pending fido device: %w", err)
+				}
+			} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+				return "", fmt.Errorf("replace pending fido device: %w", err)
+			}
+		}
 		ok, err := s.owned(ctx, cur.Object)
 		if err != nil {
 			return "", fmt.Errorf("register fido device: %w", err)
@@ -150,6 +180,9 @@ func (s *Service) createFido(ctx context.Context, d iam.FidoDevice) (string, err
 // absent: a user deleted and created again under the same name does not
 // inherit it.
 func (s *Service) owned(ctx context.Context, d iam.FidoDevice) (bool, error) {
+	if d.Pending {
+		return false, nil
+	}
 	u, err := store.Get[iam.User](ctx, s.b, d.UserName)
 	if errors.Is(err, store.ErrNotFound) {
 		return false, nil
@@ -214,7 +247,7 @@ func (s *Service) ListFido(ctx context.Context, user string) (_ []iam.FidoDevice
 			}
 			owners[store.Fold(d.UserName)] = uid
 		}
-		if uid != "" && uid == d.UserUID {
+		if !d.Pending && uid != "" && uid == d.UserUID {
 			out = append(out, d)
 		}
 	}

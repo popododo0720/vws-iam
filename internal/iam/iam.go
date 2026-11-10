@@ -251,6 +251,8 @@ type User struct {
 	// writes it, so a DeleteUser that checked for keys before the
 	// registration fails its versioned delete (#133).
 	FidoRegistrations uint64 `json:"fidoRegistrations,omitempty"`
+	// MFARegistrationLease serializes virtual and FIDO quota checks.
+	MFARegistrationLease MFARegistrationLease `json:"mfaRegistrationLease,omitzero"`
 	// PermissionsBoundary is the ARN of the managed policy that is the
 	// user's permissions boundary (PutUserPermissionsBoundary, #98);
 	// empty when the user has none (DeleteUserPermissionsBoundary, #99).

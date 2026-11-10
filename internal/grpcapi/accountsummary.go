@@ -112,7 +112,7 @@ func (s *Server) getAccountSummary(ctx context.Context, pid string) (map[string]
 	}
 	owned := 0
 	for _, d := range fido {
-		if uid := uids[store.Fold(d.Object.UserName)]; uid != "" && uid == d.Object.UserUID {
+		if uid := uids[store.Fold(d.Object.UserName)]; !d.Object.Pending && uid != "" && uid == d.Object.UserUID {
 			owned++
 		}
 	}
