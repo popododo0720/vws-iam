@@ -94,6 +94,7 @@ type Authorizer struct {
 	b       store.Backend
 	account string
 	now     func() time.Time
+	exclude func(name, kind string) bool
 }
 
 // New returns an Authorizer for account. now may be nil.
@@ -102,6 +103,16 @@ func New(b store.Backend, account string, now func() time.Time) *Authorizer {
 		now = time.Now
 	}
 	return &Authorizer{b: b, account: account, now: now}
+}
+
+// ExcludingPolicies returns a separate policy reader for simulations. The
+// predicate sees the managed ARN or "<entity ARN>:inline/<policy name>" and
+// the simulator source type, before any excluded document is read or parsed.
+// Authorization on the original Authorizer is unchanged.
+func (a *Authorizer) ExcludingPolicies(exclude func(name, kind string) bool) *Authorizer {
+	copy := *a
+	copy.exclude = exclude
+	return &copy
 }
 
 // ErrNoSuchEntity is an unknown principal or policy.
@@ -141,6 +152,9 @@ func (a *Authorizer) collect(
 	ctx context.Context, src source, attached []string, inline map[string]string, out []policy.Named,
 ) ([]policy.Named, error) {
 	for _, arn := range attached {
+		if a.exclude != nil && a.exclude(arn, "user-managed") {
+			continue
+		}
 		n, err := a.managed(ctx, arn)
 		if err != nil {
 			return nil, err
@@ -149,6 +163,9 @@ func (a *Authorizer) collect(
 		out = append(out, n)
 	}
 	for _, name := range slices.Sorted(maps.Keys(inline)) {
+		if a.exclude != nil && a.exclude(src.arn+":inline/"+name, src.kind) {
+			continue
+		}
 		// Inline documents are held to the aggregate size quota on write,
 		// not to policy.MaxSize, so parse them the way the write path did.
 		d, err := policy.ParseInline(inline[name])
