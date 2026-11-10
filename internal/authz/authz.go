@@ -291,6 +291,13 @@ func (a *Authorizer) authorize(
 	}
 	c := a.context(p, arn, reqCtx)
 	r := policy.Request{Principal: arn, Account: a.account, Action: action, Resource: resource, Context: c}
+	if p.Kind == User {
+		boundary, err := a.userBoundary(ctx, p)
+		if err != nil {
+			return policy.Decision{}, err
+		}
+		return policy.EvaluateBounded(r, ids, session, boundary), nil
+	}
 	return policy.Evaluate(r, ids, session), nil
 }
 
