@@ -201,24 +201,24 @@ func checkPolicyName(name, path string) error {
 	return checkPath("policy", path)
 }
 
-func checkAttached(arns []string) error {
+func checkAttached(what, name string, arns []string) error {
 	seen := map[string]bool{}
 	for _, a := range arns {
 		if !strings.HasPrefix(a, "arn:vws:iam::") {
-			return invalid("policy arn %q", a)
+			return invalid("%s %q attached policy arn %q", what, name, a)
 		}
 		if seen[a] {
-			return invalid("policy %q attached twice", a)
+			return invalid("%s %q attached policy %q twice", what, name, a)
 		}
 		seen[a] = true
 	}
 	return nil
 }
 
-func checkInline(m map[string]string) error {
+func checkInline(what, name string, m map[string]string) error {
 	for k := range m {
 		if !ValidPolicyName(k) {
-			return invalid("inline policy name %q", k)
+			return invalid("%s %q inline policy name %q", what, name, k)
 		}
 	}
 	return nil
@@ -269,7 +269,7 @@ const MaxRevokeRequests = 32
 func (User) Kind() Kind    { return KindUser }
 func (u User) Key() string { return u.Name }
 func (u User) Validate() error {
-	if err := u.validRequests(); err != nil {
+	if err := u.validRequests("user", u.Name); err != nil {
 		return err
 	}
 	if err := checkName("user", u.Name, u.Path); err != nil {
@@ -279,7 +279,7 @@ func (u User) Validate() error {
 		return err
 	}
 	if u.PasswordHash != "" && !strings.HasPrefix(u.PasswordHash, "$argon2id$") {
-		return invalid("password hash is not argon2id")
+		return invalid("user %q password hash is not argon2id", u.Name)
 	}
 	if b := u.PermissionsBoundary; b != "" && !ValidPolicyARN(b) {
 		return invalid("user %q permissions boundary %q is not a policy ARN", u.Name, b)
@@ -290,10 +290,10 @@ func (u User) Validate() error {
 	if err := CheckTags(u.Tags); err != nil {
 		return invalid("user %q tag: %v", u.Name, err)
 	}
-	if err := checkAttached(u.AttachedPolicies); err != nil {
+	if err := checkAttached("user", u.Name, u.AttachedPolicies); err != nil {
 		return err
 	}
-	return checkInline(u.InlinePolicies)
+	return checkInline("user", u.Name, u.InlinePolicies)
 }
 
 // Group is an IAM group. Membership is stored on the user.
@@ -313,7 +313,7 @@ type Group struct {
 func (Group) Kind() Kind    { return KindGroup }
 func (g Group) Key() string { return g.Name }
 func (g Group) Validate() error {
-	if err := g.validRequests(); err != nil {
+	if err := g.validRequests("group", g.Name); err != nil {
 		return err
 	}
 	if !ValidGroupName(g.Name) {
@@ -332,10 +332,10 @@ func (g Group) Validate() error {
 		}
 		seen[strings.ToLower(m)] = true
 	}
-	if err := checkAttached(g.AttachedPolicies); err != nil {
+	if err := checkAttached("group", g.Name, g.AttachedPolicies); err != nil {
 		return err
 	}
-	return checkInline(g.InlinePolicies)
+	return checkInline("group", g.Name, g.InlinePolicies)
 }
 
 // Session duration bounds for roles.
@@ -383,7 +383,7 @@ type Role struct {
 func (Role) Kind() Kind    { return KindRole }
 func (r Role) Key() string { return r.Name }
 func (r Role) Validate() error {
-	if err := r.validRequests(); err != nil {
+	if err := r.validRequests("role", r.Name); err != nil {
 		return err
 	}
 	if err := checkName("role", r.Name, r.Path); err != nil {
@@ -407,10 +407,10 @@ func (r Role) Validate() error {
 	if err := CheckTags(r.Tags); err != nil {
 		return invalid("role %q tag: %v", r.Name, err)
 	}
-	if err := checkAttached(r.AttachedPolicies); err != nil {
+	if err := checkAttached("role", r.Name, r.AttachedPolicies); err != nil {
 		return err
 	}
-	return checkInline(r.InlinePolicies)
+	return checkInline("role", r.Name, r.InlinePolicies)
 }
 
 // PolicyVersion is one immutable document of a managed policy.
@@ -447,7 +447,7 @@ type Policy struct {
 func (Policy) Kind() Kind    { return KindPolicy }
 func (p Policy) Key() string { return p.Name }
 func (p Policy) Validate() error {
-	if err := p.validRequests(); err != nil {
+	if err := p.validRequests("policy", p.Name); err != nil {
 		return err
 	}
 	if err := checkPolicyName(p.Name, p.Path); err != nil {
@@ -466,16 +466,16 @@ func (p Policy) Validate() error {
 	seen := map[string]bool{}
 	for _, v := range p.Versions {
 		if seen[v.ID] || v.ID == "" {
-			return invalid("policy version id %q", v.ID)
+			return invalid("policy %q version id %q", p.Name, v.ID)
 		}
 		if v.Request != "" && !requestTokenRE.MatchString(v.Request) {
-			return invalid("policy version %q request token %q", v.ID, v.Request)
+			return invalid("policy %q version %q request token %q", p.Name, v.ID, v.Request)
 		}
 		seen[v.ID] = true
 		found = found || v.ID == p.DefaultVersion
 	}
 	if !found {
-		return invalid("default version %q not stored", p.DefaultVersion)
+		return invalid("policy %q default version %q not stored", p.Name, p.DefaultVersion)
 	}
 	return nil
 }
@@ -543,17 +543,17 @@ type AccessKey struct {
 func (AccessKey) Kind() Kind    { return KindAccessKey }
 func (k AccessKey) Key() string { return k.ID }
 func (k AccessKey) Validate() error {
-	if err := k.validRequests(); err != nil {
+	if err := k.validRequests("access key", k.ID); err != nil {
 		return err
 	}
 	if !accessKeyRE.MatchString(k.ID) && (!k.Root || !legacyRootKeyRE.MatchString(k.ID)) {
 		return invalid("access key id %q", k.ID)
 	}
 	if k.Root != (k.UserName == "") || (!k.Root && !ValidName(k.UserName)) {
-		return invalid("user name %q (root %v)", k.UserName, k.Root)
+		return invalid("access key %q user name %q (root %v)", k.ID, k.UserName, k.Root)
 	}
 	if k.Status != KeyActive && k.Status != KeyInactive && k.Status != KeyPending {
-		return invalid("status %q", k.Status)
+		return invalid("access key %q status %q", k.ID, k.Status)
 	}
 	if k.Reserved && k.Status != KeyPending {
 		return invalid("access key %s is reserved but not pending", k.ID)
@@ -602,7 +602,7 @@ type MfaDevice struct {
 func (MfaDevice) Kind() Kind    { return KindMfaDevice }
 func (d MfaDevice) Key() string { return d.Name }
 func (d MfaDevice) Validate() error {
-	if err := d.validRequests(); err != nil {
+	if err := d.validRequests("mfa device", d.Name); err != nil {
 		return err
 	}
 	if !ValidMFADeviceName(d.Name) {

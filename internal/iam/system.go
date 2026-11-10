@@ -33,9 +33,13 @@ func (k KeyIndex) Session() bool { return !k.Expires.IsZero() }
 func (KeyIndex) Kind() Kind    { return KindKeyIndex }
 func (k KeyIndex) Key() string { return k.ID }
 func (k KeyIndex) Validate() error {
-	validID := accessKeyRE.MatchString(k.ID) || legacyRootKeyRE.MatchString(k.ID)
-	if !validID || !ValidProject(k.Project) || (k.Session() && !strings.HasPrefix(k.ID, "ASIA")) {
-		return invalid("key index %q -> %q", k.ID, k.Project)
+	switch {
+	case !accessKeyRE.MatchString(k.ID) && !legacyRootKeyRE.MatchString(k.ID):
+		return invalid("key index id %q", k.ID)
+	case !ValidProject(k.Project):
+		return invalid("key index %q project %q", k.ID, k.Project)
+	case k.Session() && !strings.HasPrefix(k.ID, "ASIA"):
+		return invalid("key index %q is a session entry without an ASIA key id", k.ID)
 	}
 	return nil
 }
@@ -63,8 +67,15 @@ func (s Session) Root() bool { return s.UserName == "" }
 func (Session) Kind() Kind    { return KindSession }
 func (s Session) Key() string { return s.Hash }
 func (s Session) Validate() error {
-	if !hashRE.MatchString(s.Hash) || !ValidProject(s.Project) || (s.UserName != "" && !ValidName(s.UserName)) || s.Expires.IsZero() {
-		return invalid("session")
+	switch {
+	case !hashRE.MatchString(s.Hash):
+		return invalid("session hash is not SHA-256 hex")
+	case !ValidProject(s.Project):
+		return invalid("session project %q", s.Project)
+	case s.UserName != "" && !ValidName(s.UserName):
+		return invalid("session user name %q", s.UserName)
+	case s.Expires.IsZero():
+		return invalid("session has no expiry")
 	}
 	return nil
 }
@@ -87,8 +98,11 @@ var opIDRE = regexp.MustCompile(`^[a-z0-9-]{1,80}$`)
 func (Operation) Kind() Kind    { return KindOperation }
 func (o Operation) Key() string { return o.ID }
 func (o Operation) Validate() error {
-	if !opIDRE.MatchString(o.ID) || len(o.Response) == 0 {
-		return invalid("operation %q", o.ID)
+	if !opIDRE.MatchString(o.ID) {
+		return invalid("operation id %q", o.ID)
+	}
+	if len(o.Response) == 0 {
+		return invalid("operation %q has no response", o.ID)
 	}
 	return nil
 }
@@ -107,8 +121,11 @@ type ReplayEntry struct {
 func (ReplayEntry) Kind() Kind    { return KindReplay }
 func (r ReplayEntry) Key() string { return r.Hash }
 func (r ReplayEntry) Validate() error {
-	if !hashRE.MatchString(r.Hash) || r.Expires.IsZero() {
-		return invalid("replay entry")
+	if !hashRE.MatchString(r.Hash) {
+		return invalid("replay entry hash is not SHA-256 hex")
+	}
+	if r.Expires.IsZero() {
+		return invalid("replay entry has no expiry")
 	}
 	return nil
 }
@@ -143,8 +160,13 @@ func (a AttemptCounter) Validate() error {
 	default:
 		return invalid("attempt counter scope %q", a.Scope)
 	}
-	if !hashRE.MatchString(a.Hash) || a.Failures < 0 || a.WindowStart.IsZero() {
-		return invalid("attempt counter")
+	switch {
+	case !hashRE.MatchString(a.Hash):
+		return invalid("attempt counter hash is not SHA-256 hex")
+	case a.Failures < 0:
+		return invalid("attempt counter failures %d", a.Failures)
+	case a.WindowStart.IsZero():
+		return invalid("attempt counter has no window start")
 	}
 	return nil
 }
@@ -175,8 +197,15 @@ type MembershipLock struct {
 func (MembershipLock) Kind() Kind    { return KindMemberLock }
 func (l MembershipLock) Key() string { return l.Name }
 func (l MembershipLock) Validate() error {
-	if l.Name != MembershipLockKey || (l.Holder != "" && (!hashRE.MatchString(l.Holder) || l.Expires.IsZero())) {
-		return invalid("membership lock %q", l.Name)
+	switch {
+	case l.Name != MembershipLockKey:
+		return invalid("membership lock name %q", l.Name)
+	case l.Holder == "":
+		return nil
+	case !hashRE.MatchString(l.Holder):
+		return invalid("membership lock holder is not SHA-256 hex")
+	case l.Expires.IsZero():
+		return invalid("membership lock holder has no expiry")
 	}
 	return nil
 }
