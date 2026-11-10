@@ -156,11 +156,9 @@ func (s *Server) UpdateRole(ctx context.Context, req *iamv1.UpdateRoleRequest) (
 		return op, toStatus(ctx, err)
 	}
 	apply := func(g *iam.Role) error {
-		for path := range set {
-			if path != "spec.description" {
-				if err := g.CheckMutable(); err != nil {
-					return err
-				}
+		if len(set) > 1 || !set["spec.description"] {
+			if err := g.CheckMutable(); err != nil {
+				return err
 			}
 		}
 		if err := p.roleSpec(ctx, g, req.GetRole().GetSpec(), set); err != nil {

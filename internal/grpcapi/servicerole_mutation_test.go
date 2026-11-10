@@ -57,6 +57,15 @@ func TestServiceLinkedRoleMutations(t *testing.T) {
 					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.description", "spec.inline_policies"}},
 				})
 				wantAWS(t, err, codes.FailedPrecondition, "UnmodifiableEntity")
+				_, err = e.roles.UpdateRole(t.Context(), &iamv1.UpdateRoleRequest{
+					Role: &iamv1.Role{
+						Name:   name,
+						Labels: map[string]string{"bad": "change"},
+						Spec:   &iamv1.RoleSpec{Description: "not atomic", InlinePolicies: map[string]string{"new": slrInline}},
+					},
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.description", "spec.inline_policies"}},
+				})
+				wantAWS(t, err, codes.FailedPrecondition, "UnmodifiableEntity")
 				_, err = e.roles.RevokeRoleSessions(t.Context(), &iamv1.RevokeRoleSessionsRequest{Name: name})
 				wantAWS(t, err, codes.FailedPrecondition, "UnmodifiableEntity")
 				err = e.api.DeleteRoleBoundary(t.Context(), proj, r.Name)
