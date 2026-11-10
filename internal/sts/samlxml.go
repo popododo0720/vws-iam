@@ -61,13 +61,13 @@ func verifySAMLResponse(b64 string, prov SAMLProvider, sp SAMLServiceProvider, n
 		return samlClaims{}, invalidSAML("SAMLAssertion is not base64")
 	}
 	doc := etree.NewDocument()
+	// Kept so checkTokens sees them: etree otherwise keeps the last copy.
+	doc.ReadSettings.PreserveDuplicateAttrs = true
 	if err := doc.ReadFromBytes(raw); err != nil {
 		return samlClaims{}, invalidSAML("SAMLAssertion is not XML")
 	}
-	for _, t := range doc.Child {
-		if _, ok := t.(*etree.Directive); ok {
-			return samlClaims{}, invalidSAML("SAMLAssertion has a DTD")
-		}
+	if err := checkTokens(doc.Child); err != nil {
+		return samlClaims{}, err
 	}
 	root := doc.Root()
 	if root == nil || root.Tag != "Response" || root.NamespaceURI() != nsSAMLProtocol {
@@ -118,6 +118,35 @@ func verifySAMLResponse(b64 string, prov SAMLProvider, sp SAMLServiceProvider, n
 		return samlClaims{}, invalidSAML("neither the response nor the assertion is signed")
 	}
 	return assertionClaims(a, prov.EntityID, sp, now)
+}
+
+// checkTokens refuses a DTD, a comment or an element with a repeated
+// attribute anywhere in tokens. Exclusive canonicalization drops comments
+// before the digest, so a comment can split a signed NameID or value into
+// text a reader may join differently (CVE-2017-11427 class); XML 1.0 (Unique
+// Att Spec) forbids a repeated attribute, and the signature check and the
+// claim reader could each pick another copy of it.
+func checkTokens(tokens []etree.Token) error {
+	for _, t := range tokens {
+		switch t := t.(type) {
+		case *etree.Directive:
+			return invalidSAML("SAMLAssertion has a DTD")
+		case *etree.Comment:
+			return invalidSAML("SAMLAssertion has a comment")
+		case *etree.Element:
+			seen := make(map[[2]string]bool, len(t.Attr))
+			for _, a := range t.Attr {
+				if seen[[2]string{a.Space, a.Key}] {
+					return invalidSAML("an element repeats an attribute")
+				}
+				seen[[2]string{a.Space, a.Key}] = true
+			}
+			if err := checkTokens(t.Child); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // assertionClaims checks a verified assertion's issuer, validity window,
@@ -263,6 +292,10 @@ func (c *samlClaims) readAttributes(a *etree.Element) error {
 	for _, st := range children(a, nsSAMLAssertion, "AttributeStatement") {
 		for _, at := range children(st, nsSAMLAssertion, "Attribute") {
 			name := at.SelectAttrValue("Name", "")
+			if _, dup := vals[name]; dup {
+				return invalidSAML("an Attribute Name appears more than once")
+			}
+			vals[name] = nil
 			for _, v := range children(at, nsSAMLAssertion, "AttributeValue") {
 				vals[name] = append(vals[name], strings.TrimSpace(v.Text()))
 			}
