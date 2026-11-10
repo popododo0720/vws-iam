@@ -1,7 +1,7 @@
 // Package store defines the IAM repository. A Backend stores opaque specs
 // per kind with optimistic concurrency; the typed helpers encode domain
-// objects. memstore and kubestore are the two backends, and storetest is
-// the suite both pass.
+// objects. memstore, kubestore and etcdstore are the backends, and
+// storetest is the suite they all pass.
 package store
 
 import (
