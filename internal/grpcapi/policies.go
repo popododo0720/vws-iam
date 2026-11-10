@@ -3,6 +3,7 @@ package grpcapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -52,6 +53,30 @@ func (p project) attachments(ctx context.Context, arn string) (int, error) {
 		count(r.Object.AttachedPolicies)
 	}
 	return n, nil
+}
+
+// permissionsBoundaryUses counts boundary references separately from attachments.
+func (p project) permissionsBoundaryUses(ctx context.Context, arn string) (int, error) {
+	users, err := store.List[iam.User](ctx, p.b)
+	if err != nil {
+		return 0, fmt.Errorf("list user boundaries: %w", err)
+	}
+	roles, err := store.List[iam.Role](ctx, p.b)
+	if err != nil {
+		return 0, fmt.Errorf("list role boundaries: %w", err)
+	}
+	count := 0
+	for _, u := range store.Visible(users) {
+		if u.Object.PermissionsBoundary == arn {
+			count++
+		}
+	}
+	for _, r := range roles {
+		if r.Object.PermissionsBoundary == arn {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func (p project) policyProto(ctx context.Context, v store.Versioned[iam.Policy]) (*iamv1.Policy, error) {
@@ -251,6 +276,13 @@ func (s *Server) DeletePolicy(ctx context.Context, req *iamv1.DeletePolicyReques
 		}
 		if n > 0 {
 			return deleteConflict("policy is attached to " + strconv.Itoa(n) + " entities")
+		}
+		boundaries, err := p.permissionsBoundaryUses(ctx, iam.PolicyARN(p.id, pol))
+		if err != nil {
+			return err
+		}
+		if boundaries > 0 {
+			return deleteConflict("policy is used as a permissions boundary by " + strconv.Itoa(boundaries) + " entities")
 		}
 		return nil
 	})
