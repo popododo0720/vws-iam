@@ -4,8 +4,13 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"maps"
 	"slices"
+	"strconv"
 
+	"cloud.google.com/go/longrunning/autogen/longrunningpb"
+
+	commonv1 "github.com/popododo0720/vws-proto/gen/go/vws/common/v1"
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
@@ -131,4 +136,75 @@ func decodeTagMarker(marker string) (string, error) {
 		return "", invalidInput("marker is not valid")
 	}
 	return string(raw), nil
+}
+
+// TagRole is IAM TagRole (#71): it adds tags to the role name names (any
+// case), overwriting the value of a key the role already has. The role's
+// other fields and its timestamps stay, as for TagPolicy.
+//
+// A bad name, project or RoleName, and no tag or more than 50 are
+// ValidationError; a tag outside the AWS tag rules is InvalidInput, and of
+// a key repeated in the request the last value is kept and counts once; all
+// before any store access. An unknown role is NoSuchEntity. A role that
+// would keep more than 50 tags is LimitExceeded and is not written. Tags the
+// role already has write nothing; a request_id answers its first operation.
+// Authorization (iam:TagRole) is console-api's; its Query dispatch is
+// popododo0720/vws-console-api (#71 box 2).
+func (s *Server) TagRole(ctx context.Context, req *iamv1.TagRoleRequest) (*longrunningpb.Operation, error) {
+	pid, id, err := child(req.GetName(), "roles")
+	if err != nil {
+		return nil, err
+	}
+	if !iam.ValidName(id) {
+		return nil, invalidSpec("roleName must be 1 to 64 characters of [\\w+=,.@-]")
+	}
+	tags := req.GetTags()
+	if err := checkTagRequestTags(len(tags), iam.MaxRoleTags); err != nil {
+		return nil, err
+	}
+	for _, tag := range tags {
+		if err := iam.CheckTag(tag.GetKey(), tag.GetValue()); err != nil {
+			return nil, invalidInput(err.Error())
+		}
+	}
+	p := s.project(pid)
+	if op, err := s.replay(ctx, pid, "TagRole", req.GetRequestId(), req); op != nil || err != nil {
+		return op, toStatus(ctx, err)
+	}
+	o := newOnce(pid, "TagRole", req.GetRequestId(), req)
+	v, err := mutateOrValidate(ctx, p.b, id, "", o, req.GetValidateOnly(), false, bumpRole, func(r *iam.Role) error {
+		merged := make(map[string]string, len(r.Tags)+len(tags))
+		maps.Copy(merged, r.Tags)
+		for _, tag := range tags {
+			merged[tag.GetKey()] = tag.GetValue()
+		}
+		if len(merged) > iam.MaxRoleTags {
+			return quota("Cannot exceed quota for TagsPerRole: " + strconv.Itoa(iam.MaxRoleTags))
+		}
+		if maps.Equal(merged, r.Tags) {
+			return errNoop
+		}
+		r.Tags = merged
+		return nil
+	}, nil)
+	if errors.Is(err, errApplied) {
+		if op, err := s.applied(ctx, pid, "TagRole", req.GetRequestId(), req); op != nil || err != nil {
+			return op, toStatus(ctx, err)
+		}
+		err = nil
+	}
+	switch {
+	case err == nil, errors.Is(err, errNoop):
+	case errors.Is(err, store.ErrNotFound):
+		return nil, notFound("The role with name " + id + " cannot be found.")
+	default:
+		return nil, toStatus(ctx, err)
+	}
+	resp := p.roleProto(v)
+	op, err := s.done(ctx, opArgs{
+		project: pid, method: "TagRole", requestID: req.GetRequestId(), req: req, resource: resp.Name,
+		verb: commonv1.OperationVerb_OPERATION_VERB_UPDATE, generation: v.Object.Generation,
+		response: resp, validateOnly: req.GetValidateOnly(),
+	})
+	return op, toStatus(ctx, err)
 }

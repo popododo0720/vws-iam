@@ -143,10 +143,6 @@ func (s *Server) DeleteInstanceProfile(
 	return nil, status.Error(codes.Unimplemented, "DeleteInstanceProfile is not served yet")
 }
 
-func (s *Server) TagRole(context.Context, *iamv1.TagRoleRequest) (*longrunningpb.Operation, error) {
-	return nil, status.Error(codes.Unimplemented, "TagRole is not served yet")
-}
-
 func (s *Server) UntagRole(context.Context, *iamv1.UntagRoleRequest) (*longrunningpb.Operation, error) {
 	return nil, status.Error(codes.Unimplemented, "UntagRole is not served yet")
 }
