@@ -2,8 +2,6 @@ package grpcapi
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"time"
 
@@ -33,14 +31,6 @@ func (s *Server) replayKeys(r *iamv1.AuthenticateRequest) []string {
 	return s.keys.Digests("replay", r.GetAccessKeyId()+"\n"+r.GetSignature())
 }
 
-// legacyReplayHash is the unkeyed key of releases before #41. It is only
-// read, so a request claimed by such a release is still refused.
-// TODO(#310): remove after the HMAC release.
-func legacyReplayHash(r *iamv1.AuthenticateRequest) string {
-	h := sha256.Sum256([]byte(r.GetAccessKeyId() + "\n" + r.GetSignature()))
-	return hex.EncodeToString(h[:])
-}
-
 // claimReplay records r as used, once across every replica sharing the
 // backend: it must create the IamReplayEntry under every key of its ring,
 // and each create is atomic. Any two replicas' rings share a KEK, so two
@@ -64,14 +54,6 @@ func (s *Server) claimReplay(ctx context.Context, r *iamv1.AuthenticateRequest) 
 				return replayed()
 			}
 		}
-	}
-	v, err := store.Get[iam.ReplayEntry](ctx, s.b, legacyReplayHash(r))
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-	case err != nil:
-		return toStatus(ctx, withErrorContext("read legacy replay entry", err))
-	case !now.After(v.Object.Expires):
-		return replayed()
 	}
 	for _, h := range keys {
 		if err := s.claimReplayKey(ctx, h, now); err != nil {
