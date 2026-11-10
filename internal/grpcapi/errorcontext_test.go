@@ -3,6 +3,7 @@ package grpcapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/store"
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
+	"github.com/popododo0720/vws-iam/internal/sts"
 )
 
 func TestErrorContextKeepsWireMessages(t *testing.T) {
@@ -32,10 +34,16 @@ func TestErrorContextKeepsWireMessages(t *testing.T) {
 				!strings.Contains(wrapped.Error(), "reserve attempt counter: read attempt counter:") {
 				t.Fatalf("context or cause lost: %v", wrapped)
 			}
-			before := status.Convert(toStatus(t.Context(), cause)).Proto()
-			after := status.Convert(toStatus(t.Context(), wrapped)).Proto()
-			if !proto.Equal(before, after) {
-				t.Fatalf("wire changed: before %v, after %v", before, after)
+			// Outermost, and under a caller's wrapper as mfaVerifier adds.
+			for _, outer := range []func(error) error{
+				func(e error) error { return e },
+				func(e error) error { return fmt.Errorf("%w: %w", sts.ErrThrottling, e) },
+			} {
+				before := status.Convert(toStatus(t.Context(), outer(cause))).Proto()
+				after := status.Convert(toStatus(t.Context(), outer(wrapped))).Proto()
+				if !proto.Equal(before, after) {
+					t.Fatalf("wire changed: before %v, after %v", before, after)
+				}
 			}
 		})
 	}
