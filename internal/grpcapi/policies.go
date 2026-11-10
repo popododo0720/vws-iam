@@ -242,6 +242,9 @@ func (s *Server) DeletePolicy(ctx context.Context, req *iamv1.DeletePolicyReques
 		return op, toStatus(ctx, err)
 	}
 	v, _, err := remove(ctx, p.b, id, req.GetEtag(), req.GetAllowMissing(), func(pol iam.Policy) error {
+		if len(pol.Versions) > 1 {
+			return deleteConflict("policy has non-default versions; delete them with DeletePolicyVersion first")
+		}
 		n, err := p.attachments(ctx, iam.PolicyARN(p.id, pol))
 		if err != nil {
 			return err
