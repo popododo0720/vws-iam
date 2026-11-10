@@ -49,6 +49,7 @@ func (s *Service) GetAccessKeyInfo(
 ) (_ string, err error) {
 	ctx, end := start(ctx, "GetAccessKeyInfo")
 	defer end(&err)
+	defer wrapOperationError("GetAccessKeyInfo", &err)
 	if c.principalID == "" {
 		return "", fmt.Errorf("%w: unresolved caller", ErrAccessDenied)
 	}

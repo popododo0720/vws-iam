@@ -63,7 +63,7 @@ func New(b, index store.Backend, project string, keys *secret.Keyring, now func(
 func ProjectOf(ctx context.Context, index store.Backend, id string) (string, error) {
 	x, err := store.Get[iam.KeyIndex](ctx, index, id)
 	if err != nil {
-		return "", fmt.Errorf("access key index %s: %w", id, err)
+		return "", fmt.Errorf("access key index: %w", err)
 	}
 	return x.Object.Project, nil
 }
@@ -80,7 +80,7 @@ func ProjectOf(ctx context.Context, index store.Backend, id string) (string, err
 func AccountOf(ctx context.Context, index store.Backend, id string, now time.Time) (string, error) {
 	x, err := store.Get[iam.KeyIndex](ctx, index, id)
 	if err != nil {
-		return "", fmt.Errorf("access key index %s: %w", id, err)
+		return "", fmt.Errorf("access key index: %w", err)
 	}
 	pid := x.Object.Project
 	if x.Object.Session() {

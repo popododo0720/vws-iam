@@ -125,6 +125,7 @@ func (s *Service) MintSessionRef(accessKeyID, token string) (string, error) {
 func (s *Service) CheckSessionRef(ctx context.Context, ref string) (_ SessionRef, err error) {
 	ctx, end := start(ctx, "CheckSessionRef")
 	defer end(&err)
+	defer wrapOperationError("CheckSessionRef", &err)
 	p, err := s.openRef(ref)
 	if err != nil {
 		return SessionRef{}, err
