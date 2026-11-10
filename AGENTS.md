@@ -34,7 +34,7 @@ Every row names its enforcer. `TestAgentsRulesNameAnEnforcer` (internal/archtest
 | Domain services (`internal/accesskey`, `internal/authz`, `internal/sts`, `internal/mfa`) import no transport. | `TestArchitectureRules` |
 | Kubernetes imports are forbidden in production code. | `TestArchitectureRules` |
 | etcd client packages stay in `internal/store/etcdstore`. | `TestArchitectureRules` |
-| gRPC stays in `internal/grpcapi` and `cmd/vws-iam`; protobuf, genproto, vws-proto, and longrunning types stay in `internal/grpcapi`. | `TestArchitectureRules` |
+| gRPC stays in `internal/grpcapi` and `cmd/vws-iam` (and the etcd client's call options in `internal/store/etcdstore`); protobuf, genproto, vws-proto, and longrunning types stay in `internal/grpcapi`. | `TestArchitectureRules` |
 | `internal/grpcapi` uses the `store.Backend` contract, never `memstore` or `etcdstore` internals. | `TestArchitectureRules` |
 | `GetSigningCredential` (plaintext secret) is referenced only from `internal/accesskey` and `internal/grpcapi`. | `TestArchitectureRules` |
 | Production packages do not import `testing`. `storetest` is the one exception. | `TestArchitectureRules` |

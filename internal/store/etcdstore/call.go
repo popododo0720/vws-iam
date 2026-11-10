@@ -7,7 +7,9 @@ import (
 	"math/rand/v2"
 	"time"
 
+	pb "go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
+	"google.golang.org/grpc"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/store"
@@ -26,6 +28,35 @@ const (
 	clientRetries = 3
 	dialTimeout   = 5 * time.Second
 )
+
+// failFast sends each KV request without waiting for a connection. The
+// etcd client waits for one by default, so a call to an etcd that refuses
+// connections would block until the caller's deadline and end as the
+// caller's DEADLINE_EXCEEDED instead of ErrUnavailable. A request that
+// fails this way never reached the server, so a write stays unsent. Its
+// errors stay unwrapped: the etcd client converts the raw gRPC status, and
+// translate wraps the result.
+type failFast struct{ pb.KVClient }
+
+var noWait = grpc.WaitForReady(false)
+
+func (f failFast) Range(ctx context.Context, in *pb.RangeRequest, opts ...grpc.CallOption) (*pb.RangeResponse, error) {
+	return f.KVClient.Range(ctx, in, append(opts, noWait)...) //nolint:wrapcheck // the client reads the raw status
+}
+
+func (f failFast) Put(ctx context.Context, in *pb.PutRequest, opts ...grpc.CallOption) (*pb.PutResponse, error) {
+	return f.KVClient.Put(ctx, in, append(opts, noWait)...) //nolint:wrapcheck // the client reads the raw status
+}
+
+func (f failFast) DeleteRange(
+	ctx context.Context, in *pb.DeleteRangeRequest, opts ...grpc.CallOption,
+) (*pb.DeleteRangeResponse, error) {
+	return f.KVClient.DeleteRange(ctx, in, append(opts, noWait)...) //nolint:wrapcheck // the client reads the raw status
+}
+
+func (f failFast) Txn(ctx context.Context, in *pb.TxnRequest, opts ...grpc.CallOption) (*pb.TxnResponse, error) {
+	return f.KVClient.Txn(ctx, in, append(opts, noWait)...) //nolint:wrapcheck // the client reads the raw status
+}
 
 // permanent etcd answers are not retried and are not ErrUnavailable.
 var permanent = []error{
