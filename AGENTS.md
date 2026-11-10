@@ -150,7 +150,7 @@ Write everything in this repo in English: README, code comments, docs, AGENTS.md
 2. Every few days vws-verify runs a gardener pass. It groups open incidents by cause and promotes repeated ones to a check (test, lint, guard rule, archtest), not a sentence. The check must actually fail on an input that contains the mistake.
 3. When the promoting PR is merged, close the incident with its link. An incident that will not be promoted is closed with the reason.
 4. The milestone report (to tmp) lists the number of incidents in the period and the checks promoted.
-5. The `incident` label is defined in `.github/labels.yml`, copied from vws-deploy. That file is only a definition and does not create the label on GitHub. `scripts/guard.sh correct` runs `scripts/guard-agents.sh correct`, which checks this section and its body, the required fields of the form and the label definition; `repo-guard.yml` runs it on every pull request and `scripts/guard_test.sh` shows it fails on an empty section.
+5. The `incident` label is defined in `.github/labels.yml`, copied from vws-deploy. That file is only a definition and does not create the label on GitHub. `scripts/guard.sh correct` runs `scripts/guard-agents.sh correct`, which checks this section and its body, the required fields of the form and the label definition; the `ci` workflow's `lint` job runs it on every pull request and `scripts/guard_test.sh` shows it fails on an empty section.
 
 ## Insider-risk guardrails
 
@@ -171,7 +171,7 @@ Repository items:
 - Hostile input. Invalid names, paths, unsealed secrets, and non-argon2id hashes are rejected before any write (`TestValidateRejectsHostileInput`, `InvalidObjectIsNotStored`).
 - RBAC. `deploy/rbac/role.yaml` lists only the verbs `kubestore` calls.
 - No AWS account ID digits anywhere in the repository.
-- Checks: `.github/workflows/repo-guard.yml` runs `scripts/guard-agents.sh` on every pull request. `.github/workflows/direct-push-watch.yml` reports a commit that reached `main` without a pull request. Both files are byte-identical across VWS repos; change them only in all repos at once. The Judgment count lives in `TestAgentsRulesNameAnEnforcer`, not in the shared script.
+- Checks: `.github/workflows/repo-guard.yml` runs `scripts/guard-agents.sh` on every pull request (base is `main`, body has `Part of #N` and no closing keyword, this section has items 1 to 7). It is a caller of the vws-deploy `repo-guard-<job>.yml` workflows, every `uses:` pinned to one 40-hex vws-deploy main SHA (vws-deploy `docs/design/repo-guard-reusable.md`); a pin bump changes only those SHAs. `.github/workflows/direct-push-watch.yml` reports a commit that reached `main` without a pull request. Detection, not a block. That file and the script are copied as-is from `vws-deploy`. The Judgment count lives in `TestAgentsRulesNameAnEnforcer`, not in the shared script.
 
 ### Script push, PR and merge
 
