@@ -208,3 +208,69 @@ func (s *Server) TagRole(ctx context.Context, req *iamv1.TagRoleRequest) (*longr
 	})
 	return op, toStatus(ctx, err)
 }
+
+// UntagRole is IAM UntagRole (#72): it removes the named keys from the
+// role name names (any case); key case is significant and a key the role
+// does not have is ignored. The role's other fields and its timestamps
+// stay, as for UntagPolicy.
+//
+// A bad name, project or RoleName, and no key or more than 50 are
+// ValidationError; a key outside the AWS tag rules is InvalidInput; all
+// before any store access. An unknown role is NoSuchEntity. Keys the role
+// does not have write nothing; a request_id answers its first operation.
+// Authorization (iam:UntagRole) is console-api's; its Query dispatch is
+// popododo0720/vws-console-api (#72 box 2).
+func (s *Server) UntagRole(ctx context.Context, req *iamv1.UntagRoleRequest) (*longrunningpb.Operation, error) {
+	pid, id, err := child(req.GetName(), "roles")
+	if err != nil {
+		return nil, err
+	}
+	if !iam.ValidName(id) {
+		return nil, invalidSpec("roleName must be 1 to 64 characters of [\\w+=,.@-]")
+	}
+	keys := req.GetTagKeys()
+	if err := checkTagRequestTags(len(keys), iam.MaxRoleTags); err != nil {
+		return nil, err
+	}
+	for _, key := range keys {
+		if err := iam.CheckTagKey(key); err != nil {
+			return nil, invalidInput(err.Error())
+		}
+	}
+	p := s.project(pid)
+	if op, err := s.replay(ctx, pid, "UntagRole", req.GetRequestId(), req); op != nil || err != nil {
+		return op, toStatus(ctx, err)
+	}
+	o := newOnce(pid, "UntagRole", req.GetRequestId(), req)
+	v, err := mutateOrValidate(ctx, p.b, id, "", o, req.GetValidateOnly(), false, bumpRole, func(r *iam.Role) error {
+		kept := maps.Clone(r.Tags)
+		for _, key := range keys {
+			delete(kept, key)
+		}
+		if len(kept) == len(r.Tags) {
+			return errNoop
+		}
+		r.Tags = kept
+		return nil
+	}, nil)
+	if errors.Is(err, errApplied) {
+		if op, err := s.applied(ctx, pid, "UntagRole", req.GetRequestId(), req); op != nil || err != nil {
+			return op, toStatus(ctx, err)
+		}
+		err = nil
+	}
+	switch {
+	case err == nil, errors.Is(err, errNoop):
+	case errors.Is(err, store.ErrNotFound):
+		return nil, notFound("The role with name " + id + " cannot be found.")
+	default:
+		return nil, toStatus(ctx, err)
+	}
+	resp := p.roleProto(v)
+	op, err := s.done(ctx, opArgs{
+		project: pid, method: "UntagRole", requestID: req.GetRequestId(), req: req, resource: resp.Name,
+		verb: commonv1.OperationVerb_OPERATION_VERB_UPDATE, generation: v.Object.Generation,
+		response: resp, validateOnly: req.GetValidateOnly(),
+	})
+	return op, toStatus(ctx, err)
+}
