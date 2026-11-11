@@ -156,14 +156,14 @@ func withAttempts(ctx context.Context, cs callers) context.Context {
 // Every store error fails closed.
 func (s *Server) limitedVerify(ctx context.Context, cs callers, verify func() error) error {
 	if err := s.checkAttempts(ctx, cs); err != nil {
-		return err
+		return withErrorContext("check authentication attempts", err)
 	}
 	held, err := s.reserveAttempts(ctx, cs)
 	if err != nil {
-		return err
+		return withErrorContext("reserve authentication attempts", err)
 	}
 	if err := verify(); err != nil {
-		return err
+		return withErrorContext("verify credentials", err)
 	}
 	// A failed release only leaves the attempt counted until the window
 	// ends; the caller's credentials were right, so do not fail the call.
@@ -187,7 +187,7 @@ func (s *Server) checkAttempts(ctx context.Context, cs callers) error {
 		switch {
 		case errors.Is(err, store.ErrNotFound):
 		case err != nil:
-			return err
+			return withErrorContext("read attempt counter", err)
 		case lockedOut(v.Object, now) && !slices.Contains(scopes, c.scope):
 			scopes = append(scopes, c.scope)
 		}
@@ -215,7 +215,7 @@ func (s *Server) reserveAttempts(ctx context.Context, cs callers) ([]counter, er
 	for _, c := range s.counters(cs) {
 		locked, err := s.bump(ctx, c, 1)
 		if err != nil {
-			return held, err
+			return held, withErrorContext("reserve attempt counter", err)
 		}
 		if locked {
 			return held, throttled(c.scope)
@@ -229,7 +229,7 @@ func (s *Server) releaseAttempts(ctx context.Context, held []counter) error {
 	var errs []error
 	for _, c := range held {
 		if _, err := s.bump(ctx, c, -1); err != nil {
-			errs = append(errs, err)
+			errs = append(errs, withErrorContext("release attempt counter", err))
 		}
 	}
 	return errors.Join(errs...)
@@ -242,7 +242,7 @@ func (s *Server) bump(ctx context.Context, c counter, delta int) (bool, error) {
 	if delta > 0 {
 		_, err := store.Create(ctx, s.b, iam.AttemptCounter{Hash: c.key, Scope: c.scope, WindowStart: now})
 		if err != nil && !errors.Is(err, store.ErrExists) {
-			return false, err
+			return false, withErrorContext("create attempt counter", err)
 		}
 	}
 	var locked bool
@@ -280,7 +280,7 @@ func (s *Server) bump(ctx context.Context, c counter, delta int) (bool, error) {
 			return false, nil // collected
 		}
 		if !errors.Is(err, store.ErrConflict) || ctx.Err() != nil {
-			return locked, err
+			return locked, withErrorContext("mutate attempt counter", err)
 		}
 	}
 }

@@ -69,13 +69,13 @@ func (s *Server) claimReplay(ctx context.Context, r *iamv1.AuthenticateRequest) 
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 	case err != nil:
-		return toStatus(ctx, err)
+		return toStatus(ctx, withErrorContext("read legacy replay entry", err))
 	case !now.After(v.Object.Expires):
 		return replayed()
 	}
 	for _, h := range keys {
 		if err := s.claimReplayKey(ctx, h, now); err != nil {
-			return err
+			return withErrorContext("claim replay entry", err)
 		}
 	}
 	return nil
@@ -96,7 +96,7 @@ func (s *Server) claimReplayKey(ctx context.Context, h string, now time.Time) er
 			return nil
 		}
 		if !errors.Is(err, store.ErrExists) {
-			return toStatus(ctx, err)
+			return toStatus(ctx, withErrorContext("create replay entry", err))
 		}
 		if attempt > 0 {
 			return replayed() // another claimer replaced the stale entry first
@@ -106,7 +106,7 @@ func (s *Server) claimReplayKey(ctx context.Context, h string, now time.Time) er
 		case errors.Is(err, store.ErrNotFound):
 			continue // collected between create and get
 		case err != nil:
-			return toStatus(ctx, err)
+			return toStatus(ctx, withErrorContext("read replay entry", err))
 		case !now.After(v.Object.Expires):
 			s.stsSeen.Store(h, v.Object.Expires)
 			return replayed()
@@ -117,7 +117,7 @@ func (s *Server) claimReplayKey(ctx context.Context, h string, now time.Time) er
 			if errors.Is(err, store.ErrConflict) {
 				return replayed()
 			}
-			return toStatus(ctx, err)
+			return toStatus(ctx, withErrorContext("delete expired replay entry", err))
 		}
 	}
 }
@@ -150,7 +150,7 @@ func gcPaged[T iam.Object](ctx context.Context, s *Server, done func(T) bool) (i
 	for {
 		vs, next, err := store.ListPage[T](ctx, s.b, int64(s.gcPage), cont)
 		if err != nil {
-			return n, err
+			return n, withErrorContext("list garbage collection page", err)
 		}
 		for _, v := range vs {
 			if !done(v.Object) {
@@ -162,7 +162,7 @@ func gcPaged[T iam.Object](ctx context.Context, s *Server, done func(T) bool) (i
 				n++
 			case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrConflict):
 			default:
-				return n, err
+				return n, withErrorContext("delete garbage collection entry", err)
 			}
 		}
 		if cont = next; cont == "" {

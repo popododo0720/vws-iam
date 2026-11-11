@@ -3,7 +3,9 @@ package grpcapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"strings"
 
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
@@ -146,11 +148,60 @@ var mapping = []struct {
 	{store.ErrUnavailable, codes.Unavailable, "", "ServiceUnavailable"},
 }
 
+// contextualError keeps diagnostic context separate from the client message.
+type contextualError struct {
+	operation string
+	cause     error
+}
+
+func (e *contextualError) Error() string { return fmt.Sprintf("%s: %v", e.operation, e.cause) }
+func (e *contextualError) Unwrap() error { return e.cause }
+
+func withErrorContext(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &contextualError{operation: operation, cause: err}
+}
+
+// clientMessage is err.Error() with the text of every contextualError in
+// err's tree removed, wherever a caller wrapped it (sts.ErrThrottling
+// around a limiter error, #305): the client sees the message err had
+// without diagnostic context. Outer layers come first, so each layer's
+// text is still whole when it is replaced by its cause's.
+func clientMessage(err error) string {
+	msg := err.Error()
+	var walk func(error)
+	walk = func(e error) {
+		if c, ok := e.(*contextualError); ok { //nolint:errorlint // Visits each node of the tree once.
+			msg = strings.Replace(msg, c.Error(), c.cause.Error(), 1)
+		}
+		switch u := e.(type) { //nolint:errorlint // Walks the wrap tree itself.
+		case interface{ Unwrap() error }:
+			walk(u.Unwrap())
+		case interface{ Unwrap() []error }:
+			for _, x := range u.Unwrap() {
+				walk(x)
+			}
+		}
+	}
+	walk(err)
+	return msg
+}
+
 // toStatus maps any error to the wire. Unknown errors become INTERNAL with
 // no detail; the cause is logged without request data.
 func toStatus(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
+	}
+	diagnostic := err
+	for {
+		contextual, ok := err.(*contextualError) //nolint:errorlint // Only strip outer diagnostic wrappers.
+		if !ok {
+			break
+		}
+		err = contextual.cause
 	}
 	var ae *apiError
 	if errors.As(err, &ae) {
@@ -160,14 +211,21 @@ func toStatus(ctx context.Context, err error) error {
 	// timeout: ConcurrentModification tells the client to retry (#51).
 	timedOut := errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 	if timedOut && !errors.Is(err, store.ErrConflict) {
-		return status.FromContextError(err).Err()
+		return status.Error(status.FromContextError(err).Code(), clientMessage(err))
 	}
 	if st, ok := status.FromError(err); ok && st.Code() != codes.Unknown {
+		// A wrapped status takes err.Error() as its message (grpc-go), so
+		// a contextual layer under the wrapper is removed here too.
+		if msg := clientMessage(err); msg != err.Error() {
+			p := st.Proto()
+			p.Message = msg
+			return status.ErrorProto(p)
+		}
 		return err
 	}
 	for _, m := range mapping {
 		if errors.Is(err, m.err) {
-			msg := err.Error()
+			msg := clientMessage(err)
 			switch {
 			case errors.Is(m.err, mfa.ErrLocked):
 				msg = lockedMsg
@@ -177,6 +235,6 @@ func toStatus(ctx context.Context, err error) error {
 			return (&apiError{code: m.code, reason: m.reason, aws: m.aws, msg: msg}).GRPCStatus().Err()
 		}
 	}
-	slog.Default().LogAttrs(ctx, slog.LevelError, "internal error", slog.String("error", err.Error()))
+	slog.Default().LogAttrs(ctx, slog.LevelError, "internal error", slog.String("error", diagnostic.Error()))
 	return (&apiError{code: codes.Internal, aws: "InternalFailure", msg: "internal error"}).GRPCStatus().Err()
 }
