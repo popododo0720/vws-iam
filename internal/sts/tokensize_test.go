@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -149,5 +150,48 @@ func TestMinimumSessionTokenSizeValidation(t *testing.T) {
 	}
 	if s := fmt.Sprint(c); len(s) > 200 {
 		t.Fatalf("String carries the padded token: %d bytes", len(s))
+	}
+}
+
+// TestSessionTokenOverMaxIsAccepted pins the #364 decision: VWS never
+// refuses a request AWS accepts, so a valid 2,048-character session policy
+// whose JSON escapes ("&" seals as \u0026) make the token pass
+// MaxSessionTokenSize is issued, SessionTokenUtilization passes 100, and
+// PackedPolicySize stays the plaintext share (#192). The token opens on a
+// restarted service, and a repeated call issues new credentials alike.
+func TestSessionTokenOverMaxIsAccepted(t *testing.T) {
+	e := samlSetup(t)
+	ctx := context.Background()
+	broker := e.caller(t, "broker")
+	restarted := sts.New(e.b, e.keys, e.az, acct, e.clk.now)
+	policy := func(n int) string {
+		head := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:PutObject","Resource":"arn:vws:s3:::`
+		tail := `"}}`
+		return head + strings.Repeat("&", n-len(head)-len(tail)) + tail
+	}
+	req := sts.FederationRequest{Name: "bob", Policy: policy(sts.MaxPackedPolicyChars)}
+	var keys []string
+	for range 2 {
+		tok, err := e.svc.GetFederationToken(ctx, broker, nil, req)
+		if err != nil {
+			t.Fatalf("token over %d bytes refused: %v", sts.MaxSessionTokenSize, err)
+		}
+		c := tok.Credentials
+		checkSizeFields(t, c)
+		if c.SessionTokenSize <= sts.MaxSessionTokenSize || c.SessionTokenUtilization <= 100 {
+			t.Fatalf("token %d bytes, utilization %d: not over the limit", c.SessionTokenSize, c.SessionTokenUtilization)
+		}
+		if tok.PackedPolicySize != 100 {
+			t.Fatalf("PackedPolicySize %d, want 100", tok.PackedPolicySize)
+		}
+		for _, svc := range []*sts.Service{e.svc, restarted} {
+			if sess, err := svc.Validate(ctx, c.AccessKeyID, c.SessionToken); err != nil || sess.Secret != c.Secret {
+				t.Fatalf("token over the limit does not open: %v", err)
+			}
+		}
+		keys = append(keys, c.AccessKeyID)
+	}
+	if keys[0] == keys[1] {
+		t.Fatal("credentials reused on a repeated call")
 	}
 }

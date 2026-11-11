@@ -8,7 +8,9 @@ import (
 
 // MaxSessionTokenSize is the AWS session token size limit in bytes (#199):
 // the most MinimumSessionTokenSize may ask for, and the base of
-// SessionTokenUtilization. VWS does not refuse a token over it (AGENTS.md).
+// SessionTokenUtilization. VWS never refuses a token over it (#364): a VWS
+// token is sealed JSON, not AWS's compressed token, so a request AWS
+// accepts can make it longer, and refusing it would refuse that request.
 const MaxSessionTokenSize = 4096
 
 // The gRPC fields wait for vws-proto#168 (TODO(#199)): no RPC passes an
