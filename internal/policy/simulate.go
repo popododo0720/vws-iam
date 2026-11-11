@@ -89,7 +89,7 @@ func matches(set []Named, r Request, missing *[]string) (deny, allow []MatchedSt
 				continue
 			}
 			for _, p := range s.Resources {
-				if pat, keys := r.unresolved(p); vars && len(keys) > 0 && Match(pat, r.Resource, false) {
+				if pat, keys := r.unresolved(p); vars && len(keys) > 0 && resourceMatch(pat, r.Resource) {
 					add(keys...)
 				}
 			}

@@ -313,3 +313,88 @@ func TestInline(t *testing.T) {
 		t.Errorf("ParseInline with principal: %v", err)
 	}
 }
+
+// TestAWSPartitionARNs: a document copied from AWS names ARNs in the aws
+// partition; evaluation reads them as the same ARN in the vws partition in
+// Principal, NotPrincipal, Resource and NotResource, so a copied Deny never
+// fails open. Other partitions and near spellings match nothing, and the
+// parsed document keeps the spelling it was given.
+func TestAWSPartitionARNs(t *testing.T) {
+	doc := func(stmts ...string) string {
+		return `{"Version":"2012-10-17","Statement":[` + strings.Join(stmts, ",") + `]}`
+	}
+	res := func(effect, elem, arn string) string {
+		return `{"Effect":"` + effect + `","Action":"s3:GetObject","` + elem + `":"` + arn + `"}`
+	}
+	vwsDenyAWS := doc(res("Allow", "Resource", "arn:vws:s3:::b/*"), res("Deny", "Resource", "arn:aws:s3:::b/k"))
+	awsDenyVWS := doc(res("Allow", "Resource", "arn:aws:s3:::b/*"), res("Deny", "Resource", "arn:vws:s3:::b/k"))
+	identity := []struct {
+		name    string
+		doc     string
+		allowed bool
+	}{
+		{"Resource aws", doc(res("Allow", "Resource", "arn:aws:s3:::b/*")), true},
+		{"Resource aws exact", doc(res("Allow", "Resource", "arn:aws:s3:::b/k")), true},
+		{"Resource vws", doc(res("Allow", "Resource", "arn:vws:s3:::b/*")), true},
+		{"NotResource aws excludes", doc(res("Allow", "NotResource", "arn:aws:s3:::b/*")), false},
+		{"NotResource aws includes others", doc(res("Allow", "NotResource", "arn:aws:s3:::c/*")), true},
+		{"Allow vws Deny aws", vwsDenyAWS, false},
+		{"Allow aws Deny vws", awsDenyVWS, false},
+		{"Deny NotResource aws", doc(res("Allow", "Resource", "*"), res("Deny", "NotResource", "arn:aws:s3:::c/*")), false},
+		{"Resource aws-cn", doc(res("Allow", "Resource", "arn:aws-cn:s3:::b/*")), false},
+		{"Resource aws-us-gov", doc(res("Allow", "Resource", "arn:aws-us-gov:s3:::b/*")), false},
+		{"Deny aws-cn", doc(res("Allow", "Resource", "*"), res("Deny", "Resource", "arn:aws-cn:s3:::b/k")), true},
+		{"Deny aws-us-gov", doc(res("Allow", "Resource", "*"), res("Deny", "Resource", "arn:aws-us-gov:s3:::b/k")), true},
+		{"partition case is significant", doc(res("Allow", "Resource", "arn:AWS:s3:::b/*")), false},
+		{"partition prefix only", doc(res("Allow", "Resource", "arn:awsx:s3:::b/*")), false},
+	}
+	for _, tc := range identity {
+		d := policy.Evaluate(req("s3:GetObject", "arn:vws:s3:::b/k", nil), []policy.Named{must(t, tc.doc)}, nil)
+		if d.Allowed != tc.allowed {
+			t.Errorf("%s: allowed = %v, want %v (%s)", tc.name, d.Allowed, tc.allowed, d.Reason)
+		}
+	}
+
+	iamARN := func(partition, name string) string { return "arn:" + partition + ":iam::" + acct + ":" + name }
+	pr := func(effect, elem, typ, arn string) string {
+		return `{"Effect":"` + effect + `","Action":"sts:AssumeRole","` + elem + `":{"` + typ + `":"` + arn + `"}}`
+	}
+	awsAlice := iamARN("aws", "user/alice")
+	user := policy.Request{Principal: iamARN("vws", "user/alice"), Account: acct, Action: "sts:AssumeRole"}
+	bob := policy.Request{Principal: iamARN("vws", "user/bob"), Account: acct, Action: "sts:AssumeRole"}
+	fed := policy.Request{Federated: iamARN("vws", "saml-provider/corp"), Action: "sts:AssumeRole"}
+	awsIdP := iamARN("aws", "saml-provider/corp")
+	trustDenyAWS := doc(pr("Allow", "Principal", "AWS", user.Principal), pr("Deny", "Principal", "AWS", awsAlice))
+	spareAlice := doc(pr("Allow", "Principal", "AWS", acct), pr("Deny", "NotPrincipal", "AWS", awsAlice))
+	trust := []struct {
+		name    string
+		doc     string
+		r       policy.Request
+		allowed bool
+	}{
+		{"Principal aws user", doc(pr("Allow", "Principal", "AWS", awsAlice)), user, true},
+		{"Principal aws root", doc(pr("Allow", "Principal", "AWS", iamARN("aws", "root"))), user, true},
+		{"Principal aws other user", doc(pr("Allow", "Principal", "AWS", awsAlice)), bob, false},
+		{"Principal aws federated", doc(pr("Allow", "Principal", "Federated", awsIdP)), fed, true},
+		{"NotPrincipal aws spares", spareAlice, user, true},
+		{"NotPrincipal aws denies others", spareAlice, bob, false},
+		{"Allow vws Deny aws", trustDenyAWS, user, false},
+		{"Principal aws-cn root", doc(pr("Allow", "Principal", "AWS", iamARN("aws-cn", "root"))), user, false},
+		{"Principal aws-us-gov user", doc(pr("Allow", "Principal", "AWS", iamARN("aws-us-gov", "user/alice"))), user, false},
+		{"Federated aws-cn", doc(pr("Allow", "Principal", "Federated", iamARN("aws-cn", "saml-provider/corp"))), fed, false},
+	}
+	for _, tc := range trust {
+		d, err := policy.ParseTrust(tc.doc)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got := policy.Evaluate(tc.r, []policy.Named{{Name: "trust", Doc: d}}, nil); got.Allowed != tc.allowed {
+			t.Errorf("%s: allowed = %v, want %v (%s)", tc.name, got.Allowed, tc.allowed, got.Reason)
+		}
+	}
+
+	d := must(t, doc(res("Allow", "Resource", "arn:aws:s3:::b/*")))
+	if got := d.Doc.Statements[0].Resources; len(got) != 1 || got[0] != "arn:aws:s3:::b/*" {
+		t.Errorf("parsed Resource = %q, want the document's spelling", got)
+	}
+}
