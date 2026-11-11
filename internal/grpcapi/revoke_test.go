@@ -1,26 +1,16 @@
 package grpcapi_test
 
 import (
-	"context"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
 	"github.com/popododo0720/vws-iam/internal/store"
-	"github.com/popododo0720/vws-iam/internal/store/kubestore"
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
 )
 
@@ -30,39 +20,8 @@ func TestRevokeSessionsMemstore(t *testing.T) {
 	testRevokeSessions(t, memstore.New())
 }
 
-// TestRevokeSessionsOnAPIServer runs it on kubestore against a real
-// kube-apiserver with deploy/crds. It skips without KUBEBUILDER_ASSETS.
-func TestRevokeSessionsOnAPIServer(t *testing.T) {
-	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
-		t.Skip("KUBEBUILDER_ASSETS is not set")
-	}
-	te := &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "deploy", "crds")},
-		ErrorIfCRDPathMissing: true,
-	}
-	cfg, err := te.Start()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := te.Stop(); err != nil {
-			t.Error(err)
-		}
-	})
-	cfg.QPS, cfg.Burst = 1000, 2000
-	scheme := runtime.NewScheme()
-	if err := clientgoscheme.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
-	c, err := client.New(cfg, client.Options{Scheme: scheme})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{GenerateName: "vws-iam-"}}
-	if err := c.Create(context.Background(), ns); err != nil {
-		t.Fatal(err)
-	}
-	testRevokeSessions(t, kubestore.New(c, ns.Name))
+func TestRevokeSessionsEtcd(t *testing.T) {
+	testRevokeSessions(t, etcdBackend(t))
 }
 
 func testRevokeSessions(t *testing.T, b store.Backend) {

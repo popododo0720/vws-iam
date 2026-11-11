@@ -1,25 +1,16 @@
 package sts_test
 
 import (
-	"context"
 	"errors"
 	"math/rand/v2"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
-
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
 	"github.com/popododo0720/vws-iam/internal/accesskey"
 	"github.com/popododo0720/vws-iam/internal/authz"
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/secret"
 	"github.com/popododo0720/vws-iam/internal/store"
-	"github.com/popododo0720/vws-iam/internal/store/kubestore"
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
 	"github.com/popododo0720/vws-iam/internal/sts"
 )
@@ -32,46 +23,6 @@ var skews = []time.Duration{-time.Hour, -10 * time.Minute, -time.Second, 0, time
 // in-memory backend.
 func TestRevokeWithSkewedClocksMemstore(t *testing.T) {
 	testRevokeSkew(t, func(testing.TB) store.Backend { return memstore.New() })
-}
-
-// TestRevokeWithSkewedClocksOnAPIServer runs it on kubestore against a
-// real kube-apiserver with deploy/crds. It skips without KUBEBUILDER_ASSETS.
-func TestRevokeWithSkewedClocksOnAPIServer(t *testing.T) {
-	testRevokeSkew(t, apiServer(t))
-}
-
-// apiServer starts a kube-apiserver with deploy/crds and returns a
-// constructor of kubestores on it, each in a new namespace. It skips tb
-// without KUBEBUILDER_ASSETS.
-func apiServer(tb testing.TB) func(testing.TB) store.Backend {
-	tb.Helper()
-	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
-		tb.Skip("KUBEBUILDER_ASSETS is not set")
-	}
-	te := &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "deploy", "crds")},
-		ErrorIfCRDPathMissing: true,
-	}
-	cfg, err := te.Start()
-	if err != nil {
-		tb.Fatal(err)
-	}
-	tb.Cleanup(func() {
-		if err := te.Stop(); err != nil {
-			tb.Error(err)
-		}
-	})
-	c, err := client.New(cfg, client.Options{})
-	if err != nil {
-		tb.Fatal(err)
-	}
-	return func(tb testing.TB) store.Backend {
-		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{GenerateName: "vws-iam-"}}
-		if err := c.Create(context.Background(), ns); err != nil {
-			tb.Fatal(err)
-		}
-		return kubestore.New(c, ns.Name)
-	}
 }
 
 type replica struct {

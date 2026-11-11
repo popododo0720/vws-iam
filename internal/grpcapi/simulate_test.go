@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/popododo0720/vws-iam/internal/store/memstore"
+
 	"google.golang.org/grpc/codes"
 
 	"github.com/popododo0720/vws-iam/internal/grpcapi"
@@ -138,7 +140,7 @@ func TestSimulatePrincipalPolicy(t *testing.T) {
 // TestSimulatePrincipalPolicyBoundary: the stored boundary of the source
 // narrows it, and an input boundary replaces the stored one.
 func TestSimulatePrincipalPolicyBoundary(t *testing.T) {
-	b := fakeKube()
+	b := memstore.New()
 	now := time.Now().UTC()
 	e := newEnvOn(t, b, &now)
 	seedSim(t, b, func(u *iam.User) { u.PermissionsBoundary = simARN + "policy/S3Read" })
@@ -178,7 +180,7 @@ func TestSimulatePrincipalPolicyBoundary(t *testing.T) {
 // ContextEntries, a missing one is reported, and with ResourceArns it is
 // reported in the resource-specific result and in the aggregate.
 func TestSimulatePrincipalPolicyContext(t *testing.T) {
-	b := fakeKube()
+	b := memstore.New()
 	now := time.Now().UTC()
 	e := newEnvOn(t, b, &now)
 	ipOnly := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"sqs:*","Resource":"*",` +
@@ -280,7 +282,7 @@ func TestSimulatePrincipalPolicyResources(t *testing.T) {
 // TestSimulatePrincipalPolicyResourcesBoundary: the aggregate is allowed
 // by the boundary only when every resource is.
 func TestSimulatePrincipalPolicyResourcesBoundary(t *testing.T) {
-	b := fakeKube()
+	b := memstore.New()
 	now := time.Now().UTC()
 	e := newEnvOn(t, b, &now)
 	seedSim(t, b, nil)
@@ -308,7 +310,7 @@ func TestSimulatePrincipalPolicyResourcesBoundary(t *testing.T) {
 // TestSimulatePrincipalPolicyPages: pages hold whole actions, each over
 // every resource, and continue where the last ended.
 func TestSimulatePrincipalPolicyPages(t *testing.T) {
-	b := fakeKube()
+	b := memstore.New()
 	now := time.Now().UTC()
 	e := newEnvOn(t, b, &now)
 	seedSim(t, b, nil)
@@ -357,7 +359,7 @@ func TestSimulatePrincipalPolicyPages(t *testing.T) {
 // AWS error before any store access, an unknown entity is NoSuchEntity,
 // and a stored policy that cannot be parsed is PolicyEvaluation.
 func TestSimulatePrincipalPolicyErrors(t *testing.T) {
-	b := fakeKube()
+	b := memstore.New()
 	now := time.Now().UTC()
 	e := newEnvOn(t, b, &now)
 	seedSim(t, b, nil)

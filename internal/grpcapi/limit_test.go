@@ -29,11 +29,8 @@ func TestAttemptLimitsMemstore(t *testing.T) {
 	testAttemptLimits(t, func(*testing.T) store.Backend { return memstore.New() })
 }
 
-// TestAttemptLimitsOnAPIServer runs it on kubestore against a real
-// kube-apiserver with deploy/crds (IamAttemptCounter). It skips without
-// KUBEBUILDER_ASSETS.
-func TestAttemptLimitsOnAPIServer(t *testing.T) {
-	testAttemptLimits(t, apiServerBackends(t))
+func TestAttemptLimitsEtcd(t *testing.T) {
+	testAttemptLimits(t, etcdBackend)
 }
 
 func wantThrottled(t *testing.T, err error) {
@@ -47,7 +44,7 @@ func wantBadLogin(t *testing.T, err error) {
 }
 
 // slowRPC is the deadline of a call that runs argon2id (64 MiB, t=3):
-// under -race next to envtest and other packages that alone can take
+// under -race next to other packages that alone can take
 // seconds, so it gets the server's MaxTimeout. Without a client deadline
 // the server's DefaultTimeout (10s) applies, which a loaded box can miss
 // (#43).

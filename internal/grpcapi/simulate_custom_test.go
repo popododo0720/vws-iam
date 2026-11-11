@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/popododo0720/vws-iam/internal/store/memstore"
+
 	"google.golang.org/grpc/codes"
 
 	"github.com/popododo0720/vws-iam/internal/grpcapi"
@@ -62,7 +64,7 @@ func TestSimulateCustomPolicy(t *testing.T) {
 // only from ContextEntries.
 func TestSimulateCustomPolicyBoundaryAndResources(t *testing.T) {
 	now := time.Now().UTC()
-	e := newEnvOn(t, fakeKube(), &now)
+	e := newEnvOn(t, memstore.New(), &now)
 	onlyA := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"arn:vws:s3:::a"}}`
 	mfa := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:ListBucket","Resource":"*",` +
 		`"Condition":{"Bool":{"aws:MultiFactorAuthPresent":"true"}}}}`
@@ -108,7 +110,7 @@ func TestSimulateCustomPolicyBoundaryAndResources(t *testing.T) {
 // page gives the same results.
 func TestSimulateCustomPolicyPages(t *testing.T) {
 	now := time.Now().UTC()
-	e := newEnvOn(t, fakeKube(), &now)
+	e := newEnvOn(t, memstore.New(), &now)
 	in := grpcapi.CustomSimulateInput{
 		PolicyInputList: []string{simDoc("s3:*")},
 		ActionNames:     []string{"s3:GetObject", "iam:GetUser", "s3:PutObject"},
@@ -136,7 +138,7 @@ func TestSimulateCustomPolicyPages(t *testing.T) {
 // never ignored.
 func TestSimulateCustomPolicyErrors(t *testing.T) {
 	now := time.Now().UTC()
-	e := newEnvOn(t, fakeKube(), &now)
+	e := newEnvOn(t, memstore.New(), &now)
 	type in = grpcapi.CustomSimulateInput
 	const vErr, iErr = "ValidationError", "InvalidInput"
 	ok := func(f func(*in)) in {

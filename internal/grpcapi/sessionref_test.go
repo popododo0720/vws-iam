@@ -162,10 +162,8 @@ func TestSessionRefMemstore(t *testing.T) {
 	testSessionRef(t, memstore.New())
 }
 
-// TestSessionRefOnAPIServer runs it on kubestore against a real
-// kube-apiserver with deploy/crds. It skips without KUBEBUILDER_ASSETS.
-func TestSessionRefOnAPIServer(t *testing.T) {
-	testSessionRef(t, apiServerBackends(t)(t))
+func TestSessionRefEtcd(t *testing.T) {
+	testSessionRef(t, etcdBackend(t))
 }
 
 func testSessionRef(t *testing.T, b store.Backend) {

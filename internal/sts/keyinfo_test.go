@@ -247,12 +247,6 @@ func TestGetAccessKeyInfoSessionKeys(t *testing.T) {
 	testSessionKeys(t, keyInfoSetup(t))
 }
 
-// TestGetAccessKeyInfoSessionKeysOnAPIServer is the same on kubestore
-// against a real kube-apiserver.
-func TestGetAccessKeyInfoSessionKeysOnAPIServer(t *testing.T) {
-	testSessionKeys(t, keyInfoSetupOn(t, apiServer(t)(t)))
-}
-
 func testSessionKeys(t *testing.T, e keyInfoEnv) {
 	ctx := context.Background()
 	svc := e.indexed()

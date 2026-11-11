@@ -51,9 +51,8 @@ func requestRepeated(id string) error {
 // only while the user is still at userEtag, so a change of the user that
 // lands before the activation commits makes the create ABORTED too. A
 // mismatch whose requestID already created a key is ALREADY_EXISTS, as
-// without an etag: a kubestore fence moves the user's version when a create
-// commits, so a retry after a lost response would otherwise be ABORTED on
-// kubestore and ALREADY_EXISTS on memstore. It writes nothing either way.
+// without an etag, so a retry after a lost response finds the existing key.
+// It writes nothing either way.
 func (p project) createKey(ctx context.Context, user, requestID, userEtag string) (accesskey.Credential, error) {
 	sweepFailures := 0
 	for attempt := 0; ; attempt++ {
@@ -132,8 +131,6 @@ func (p project) createKeyLocked(
 		}
 		return accesskey.Credential{}, fmt.Errorf("%w: %w", errSweepFailed, err)
 	}
-	// A conditional delete may advance the lock's version (kubestore
-	// fences); the hold is still ours while holder and epoch are.
 	if pre, err = p.stillHeld(ctx, hold); err != nil {
 		return accesskey.Credential{}, err
 	}

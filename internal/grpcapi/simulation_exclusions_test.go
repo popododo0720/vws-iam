@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/popododo0720/vws-iam/internal/store/memstore"
+
 	"google.golang.org/grpc/codes"
 
 	"github.com/popododo0720/vws-iam/internal/grpcapi"
@@ -112,7 +114,7 @@ func TestSimulationPolicyExclusionValidation(t *testing.T) {
 	type id = grpcapi.PolicyIdentifier
 	type inline = grpcapi.InlinePolicyIdentifier
 	now := time.Now().UTC()
-	e := newEnvOn(t, fakeKube(), &now)
+	e := newEnvOn(t, memstore.New(), &now)
 	for _, omit := range []id{
 		{},
 		{PolicyType: "resource"},

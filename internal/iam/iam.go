@@ -13,7 +13,7 @@ import (
 // Kind names one stored resource type.
 type Kind string
 
-// The stored kinds. Kinds added after Kubernetes was retired have no CRD.
+// The stored kinds.
 const (
 	KindUser       Kind = "IamUser"
 	KindGroup      Kind = "IamGroup"

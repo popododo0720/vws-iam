@@ -35,18 +35,10 @@ func (c *countingBackend) Get(ctx context.Context, kind iam.Kind, key string) (s
 	return c.Backend.Get(ctx, kind, key)
 }
 
-// BenchmarkGetSessionTokenKeyIndex measures what the session key index
-// entry (#188) adds to issuing: GetSessionToken with and without the
-// index, on memstore and on kubestore against a real kube-apiserver
-// (skipped without KUBEBUILDER_ASSETS), with the store writes and reads
-// each issue makes, and the index create alone as the baseline of what
-// one store write costs on that backend. On an otherwise idle
-// kube-apiserver the issue's List of groups after the previous issue's
-// write waits for the watch cache to reach the new etcd revision
-// (consistent list from cache), which a busy cluster pays anyway.
+// BenchmarkGetSessionTokenKeyIndex measures the session key index overhead
+// on memstore, including the store calls each issue makes.
 func BenchmarkGetSessionTokenKeyIndex(b *testing.B) {
 	benchIssue(b, "memstore", func(testing.TB) store.Backend { return memstore.New() })
-	b.Run("apiserver", func(b *testing.B) { benchIssue(b, "kubestore", apiServer(b)) })
 }
 
 func benchIssue(b *testing.B, name string, open func(testing.TB) store.Backend) {

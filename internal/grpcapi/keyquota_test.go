@@ -78,10 +78,8 @@ func TestConcurrentAccessKeysPerUserMemstore(t *testing.T) {
 	testConcurrentAccessKeysPerUser(t, func(*testing.T) store.Backend { return memstore.New() })
 }
 
-// TestConcurrentAccessKeysPerUserOnAPIServer runs it on kubestore against
-// a real kube-apiserver. It skips without KUBEBUILDER_ASSETS.
-func TestConcurrentAccessKeysPerUserOnAPIServer(t *testing.T) {
-	testConcurrentAccessKeysPerUser(t, apiServerBackends(t))
+func TestConcurrentAccessKeysPerUserEtcd(t *testing.T) {
+	testConcurrentAccessKeysPerUser(t, etcdBackend)
 }
 
 func testConcurrentAccessKeysPerUser(t *testing.T, backend func(*testing.T) store.Backend) {
@@ -369,7 +367,7 @@ func (d *deactivateOnActivate) UpdateIf(
 // committed and whose reply was lost, with the key made Inactive before
 // the create looks again, is committed. The create returns that key, keeps
 // it Inactive and makes no replacement (#165), with or without user_etag,
-// on memstore and kubestore. A second key is then allowed and a third is
+// on memstore. A second key is then allowed and a third is
 // LimitExceeded.
 func TestAccessKeyCreateLostReplyKeepsInactiveKey(t *testing.T) {
 	for _, tc := range []struct {
@@ -379,8 +377,6 @@ func TestAccessKeyCreateLostReplyKeepsInactiveKey(t *testing.T) {
 	}{
 		{"memstore/lock", func() store.Backend { return memstore.New() }, false},
 		{"memstore/user_etag", func() store.Backend { return memstore.New() }, true},
-		{"kubestore/lock", fakeKube, false},
-		{"kubestore/user_etag", fakeKube, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			inner := tc.backend()
