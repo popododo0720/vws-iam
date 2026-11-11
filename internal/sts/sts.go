@@ -297,7 +297,14 @@ type Option func(*Service)
 func WithMFA(v MFAVerifier) Option { return func(s *Service) { s.mfa = v } }
 
 // New returns a Service. now may be nil.
-func New(b store.Backend, keys *secret.Keyring, a *authz.Authorizer, account string, now func() time.Time, opts ...Option) *Service {
+func New(
+	b store.Backend,
+	keys *secret.Keyring,
+	a *authz.Authorizer,
+	account string,
+	now func() time.Time,
+	opts ...Option,
+) *Service {
 	if now == nil {
 		now = time.Now
 	}
@@ -554,7 +561,13 @@ func (s *Service) AssumeRole(
 		duration = min(DefaultAssumeDuration, maxDur)
 	}
 	if duration < MinDuration || duration > maxDur {
-		return Credentials{}, fmt.Errorf("%w: DurationSeconds %d outside [%d, %d]", ErrInvalidRequest, int(duration.Seconds()), int(MinDuration.Seconds()), int(maxDur.Seconds()))
+		return Credentials{}, fmt.Errorf(
+			"%w: DurationSeconds %d outside [%d, %d]",
+			ErrInvalidRequest,
+			int(duration.Seconds()),
+			int(MinDuration.Seconds()),
+			int(maxDur.Seconds()),
+		)
 	}
 	// The caller's own permissions must allow sts:AssumeRole on the role.
 	d, err := s.authz.Authorize(ctx, c.principal, "sts:AssumeRole", roleARN, s.callerContext(c, reqCtx))
@@ -582,7 +595,11 @@ func (s *Service) AssumeRole(
 	tctx := s.callerContext(c, reqCtx)
 	tctx["aws:PrincipalArn"] = []string{callerARN}
 	setTimeKeys(tctx, s.now())
-	td := policy.Evaluate(policy.Request{Principal: callerARN, Account: s.account, Action: "sts:AssumeRole", Resource: roleARN, Context: tctx}, []policy.Named{{Name: roleARN + " trust policy", Doc: trust}}, nil)
+	td := policy.Evaluate(
+		policy.Request{Principal: callerARN, Account: s.account, Action: "sts:AssumeRole", Resource: roleARN, Context: tctx},
+		[]policy.Named{{Name: roleARN + " trust policy", Doc: trust}},
+		nil,
+	)
 	if !td.Allowed {
 		return Credentials{}, fmt.Errorf("%w: %s does not trust %s", ErrAccessDenied, roleARN, callerARN)
 	}

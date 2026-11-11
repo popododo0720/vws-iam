@@ -25,7 +25,12 @@ func (p project) groupProto(v store.Versioned[iam.Group]) *iamv1.Group {
 	}
 	return &iamv1.Group{
 		Name: name(p.id, "groups", g.Name), Uid: g.UID, Generation: g.Generation, Etag: v.Version, Labels: labels(g.Labels),
-		Spec:       &iamv1.GroupSpec{Path: defaultPath(g.Path), Members: members, AttachedPolicies: p.policyNames(g.AttachedPolicies), InlinePolicies: g.InlinePolicies},
+		Spec: &iamv1.GroupSpec{
+			Path:             defaultPath(g.Path),
+			Members:          members,
+			AttachedPolicies: p.policyNames(g.AttachedPolicies),
+			InlinePolicies:   g.InlinePolicies,
+		},
 		Status:     &iamv1.GroupStatus{Observed: ready(g.Generation), Arn: iam.GroupARN(p.id, g), UniqueId: g.ID},
 		CreateTime: ts(g.Created), UpdateTime: ts(g.Updated),
 	}
@@ -102,7 +107,12 @@ func (s *Server) ListGroups(ctx context.Context, req *iamv1.ListGroupsRequest) (
 		return nil, toStatus(ctx, err)
 	}
 	all = store.Visible(all)
-	items, next, err := page(all, func(v store.Versioned[iam.Group]) string { return v.Object.Name }, req.GetPageSize(), req.GetPageToken())
+	items, next, err := page(
+		all,
+		func(v store.Versioned[iam.Group]) string { return v.Object.Name },
+		req.GetPageSize(),
+		req.GetPageToken(),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +136,17 @@ func (s *Server) CreateGroup(ctx context.Context, req *iamv1.CreateGroupRequest)
 	if op, err := s.replay(ctx, pid, "CreateGroup", req.GetRequestId(), req); op != nil || err != nil {
 		return op, toStatus(ctx, err)
 	}
-	g := iam.Group{Meta: iam.Meta{UID: iam.NewUID(), Generation: 1, Labels: req.GetGroup().GetLabels(), RequestID: req.GetRequestId()}, Name: req.GetGroupId(), ID: iam.NewUniqueID("AGPA"), Created: s.now().UTC()}
+	g := iam.Group{
+		Meta: iam.Meta{
+			UID:        iam.NewUID(),
+			Generation: 1,
+			Labels:     req.GetGroup().GetLabels(),
+			RequestID:  req.GetRequestId(),
+		},
+		Name:    req.GetGroupId(),
+		ID:      iam.NewUniqueID("AGPA"),
+		Created: s.now().UTC(),
+	}
 	if err := p.groupSpec(ctx, &g, req.GetGroup().GetSpec(), allPaths(groupPaths)); err != nil {
 		return nil, toStatus(ctx, err)
 	}
@@ -143,7 +163,20 @@ func (s *Server) CreateGroup(ctx context.Context, req *iamv1.CreateGroupRequest)
 		return nil, toStatus(ctx, err)
 	}
 	resp := p.groupProto(v)
-	op, err := s.done(ctx, opArgs{project: pid, method: "CreateGroup", requestID: req.GetRequestId(), req: req, resource: resp.Name, verb: commonv1.OperationVerb_OPERATION_VERB_CREATE, generation: v.Object.Generation, response: resp, validateOnly: req.GetValidateOnly()})
+	op, err := s.done(
+		ctx,
+		opArgs{
+			project:      pid,
+			method:       "CreateGroup",
+			requestID:    req.GetRequestId(),
+			req:          req,
+			resource:     resp.Name,
+			verb:         commonv1.OperationVerb_OPERATION_VERB_CREATE,
+			generation:   v.Object.Generation,
+			response:     resp,
+			validateOnly: req.GetValidateOnly(),
+		},
+	)
 	return op, toStatus(ctx, err)
 }
 
@@ -298,6 +331,18 @@ func (s *Server) DeleteGroup(ctx context.Context, req *iamv1.DeleteGroupRequest)
 		resp = p.groupProto(v)
 		resp.DeleteTime = timestamppb.New(s.now())
 	}
-	op, err := s.done(ctx, opArgs{project: pid, method: "DeleteGroup", requestID: req.GetRequestId(), req: req, resource: req.GetName(), verb: commonv1.OperationVerb_OPERATION_VERB_DELETE, generation: v.Object.Generation, response: resp})
+	op, err := s.done(
+		ctx,
+		opArgs{
+			project:    pid,
+			method:     "DeleteGroup",
+			requestID:  req.GetRequestId(),
+			req:        req,
+			resource:   req.GetName(),
+			verb:       commonv1.OperationVerb_OPERATION_VERB_DELETE,
+			generation: v.Object.Generation,
+			response:   resp,
+		},
+	)
 	return op, toStatus(ctx, err)
 }

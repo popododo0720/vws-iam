@@ -17,17 +17,31 @@ import (
 	"github.com/popododo0720/vws-iam/internal/store"
 )
 
-var rolePaths = []string{"spec.path", "spec.assume_role_policy", "spec.max_session_duration_seconds", "spec.attached_policies", "spec.inline_policies", "spec.description"}
+var rolePaths = []string{
+	"spec.path",
+	"spec.assume_role_policy",
+	"spec.max_session_duration_seconds",
+	"spec.attached_policies",
+	"spec.inline_policies",
+	"spec.description",
+}
 
 func (p project) roleProto(v store.Versioned[iam.Role]) *iamv1.Role {
 	r := v.Object
 	return &iamv1.Role{
 		Name: name(p.id, "roles", r.Name), Uid: r.UID, Generation: r.Generation, Etag: v.Version, Labels: labels(r.Labels),
 		Spec: &iamv1.RoleSpec{
-			Path: defaultPath(r.Path), AssumeRolePolicy: r.AssumeRolePolicy, MaxSessionDurationSeconds: int32(maxSession(r) / time.Second),
+			Path: defaultPath(
+				r.Path,
+			), AssumeRolePolicy: r.AssumeRolePolicy, MaxSessionDurationSeconds: int32(maxSession(r) / time.Second),
 			AttachedPolicies: p.policyNames(r.AttachedPolicies), InlinePolicies: r.InlinePolicies, Description: r.Description,
 		},
-		Status:     &iamv1.RoleStatus{Observed: ready(r.Generation), Arn: iam.RoleARN(p.id, r), UniqueId: r.ID, SessionsRevokeTime: ts(r.SessionsRevokedBefore)},
+		Status: &iamv1.RoleStatus{
+			Observed:           ready(r.Generation),
+			Arn:                iam.RoleARN(p.id, r),
+			UniqueId:           r.ID,
+			SessionsRevokeTime: ts(r.SessionsRevokedBefore),
+		},
 		CreateTime: ts(r.Created), UpdateTime: ts(r.Updated),
 	}
 }
@@ -104,7 +118,12 @@ func (s *Server) ListRoles(ctx context.Context, req *iamv1.ListRolesRequest) (*i
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
-	items, next, err := page(all, func(v store.Versioned[iam.Role]) string { return v.Object.Name }, req.GetPageSize(), req.GetPageToken())
+	items, next, err := page(
+		all,
+		func(v store.Versioned[iam.Role]) string { return v.Object.Name },
+		req.GetPageSize(),
+		req.GetPageToken(),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +147,12 @@ func (s *Server) CreateRole(ctx context.Context, req *iamv1.CreateRoleRequest) (
 	if op, err := s.replay(ctx, pid, "CreateRole", req.GetRequestId(), req); op != nil || err != nil {
 		return op, toStatus(ctx, err)
 	}
-	g := iam.Role{Meta: iam.Meta{UID: iam.NewUID(), Generation: 1, Labels: req.GetRole().GetLabels(), RequestID: req.GetRequestId()}, Name: req.GetRoleId(), ID: iam.NewUniqueID("AROA"), Created: s.now().UTC()}
+	g := iam.Role{
+		Meta:    iam.Meta{UID: iam.NewUID(), Generation: 1, Labels: req.GetRole().GetLabels(), RequestID: req.GetRequestId()},
+		Name:    req.GetRoleId(),
+		ID:      iam.NewUniqueID("AROA"),
+		Created: s.now().UTC(),
+	}
 	if err := p.roleSpec(ctx, &g, req.GetRole().GetSpec(), allPaths(rolePaths)); err != nil {
 		return nil, toStatus(ctx, err)
 	}
@@ -137,7 +161,20 @@ func (s *Server) CreateRole(ctx context.Context, req *iamv1.CreateRoleRequest) (
 		return nil, toStatus(ctx, err)
 	}
 	resp := p.roleProto(v)
-	op, err := s.done(ctx, opArgs{project: pid, method: "CreateRole", requestID: req.GetRequestId(), req: req, resource: resp.Name, verb: commonv1.OperationVerb_OPERATION_VERB_CREATE, generation: v.Object.Generation, response: resp, validateOnly: req.GetValidateOnly()})
+	op, err := s.done(
+		ctx,
+		opArgs{
+			project:      pid,
+			method:       "CreateRole",
+			requestID:    req.GetRequestId(),
+			req:          req,
+			resource:     resp.Name,
+			verb:         commonv1.OperationVerb_OPERATION_VERB_CREATE,
+			generation:   v.Object.Generation,
+			response:     resp,
+			validateOnly: req.GetValidateOnly(),
+		},
+	)
 	return op, toStatus(ctx, err)
 }
 
@@ -190,7 +227,20 @@ func (s *Server) UpdateRole(ctx context.Context, req *iamv1.UpdateRoleRequest) (
 		return nil, toStatus(ctx, err)
 	}
 	resp := p.roleProto(v)
-	op, err := s.done(ctx, opArgs{project: pid, method: "UpdateRole", requestID: req.GetRequestId(), req: req, resource: resp.Name, verb: commonv1.OperationVerb_OPERATION_VERB_UPDATE, generation: v.Object.Generation, response: resp, validateOnly: req.GetValidateOnly()})
+	op, err := s.done(
+		ctx,
+		opArgs{
+			project:      pid,
+			method:       "UpdateRole",
+			requestID:    req.GetRequestId(),
+			req:          req,
+			resource:     resp.Name,
+			verb:         commonv1.OperationVerb_OPERATION_VERB_UPDATE,
+			generation:   v.Object.Generation,
+			response:     resp,
+			validateOnly: req.GetValidateOnly(),
+		},
+	)
 	return op, toStatus(ctx, err)
 }
 
@@ -223,7 +273,19 @@ func (s *Server) DeleteRole(ctx context.Context, req *iamv1.DeleteRoleRequest) (
 		resp = p.roleProto(v)
 		resp.DeleteTime = timestamppb.New(s.now())
 	}
-	op, err := s.done(ctx, opArgs{project: pid, method: "DeleteRole", requestID: req.GetRequestId(), req: req, resource: req.GetName(), verb: commonv1.OperationVerb_OPERATION_VERB_DELETE, generation: v.Object.Generation, response: resp})
+	op, err := s.done(
+		ctx,
+		opArgs{
+			project:    pid,
+			method:     "DeleteRole",
+			requestID:  req.GetRequestId(),
+			req:        req,
+			resource:   req.GetName(),
+			verb:       commonv1.OperationVerb_OPERATION_VERB_DELETE,
+			generation: v.Object.Generation,
+			response:   resp,
+		},
+	)
 	return op, toStatus(ctx, err)
 }
 

@@ -57,21 +57,32 @@ func setup(t *testing.T) env {
 	put(t, b, iam.User{Name: "bob", ID: "3"})
 	put(t, b, iam.Role{
 		Name: "admin", ID: "4", MaxSessionDuration: 12 * time.Hour,
-		AssumeRolePolicy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":["arn:vws:iam::` + acct + `:user/alice","arn:vws:iam::` + acct + `:user/bob"]},"Action":"sts:AssumeRole"}]}`,
+		AssumeRolePolicy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow",` +
+			`"Principal":{"AWS":["arn:vws:iam::` + acct + `:user/alice","arn:vws:iam::` + acct + `:user/bob"]},` +
+			`"Action":"sts:AssumeRole"}]}`,
 		InlinePolicies: map[string]string{
 			"all": `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*"}}`,
 		},
 	})
 	put(t, b, iam.Role{
 		Name: "mfa-only", ID: "5",
-		AssumeRolePolicy: `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Principal":{"AWS":"` + acct + `"},"Action":"sts:AssumeRole","Condition":{"Bool":{"aws:MultiFactorAuthPresent":"true"}}}}`,
+		AssumeRolePolicy: `{"Version":"2012-10-17","Statement":{"Effect":"Allow",` +
+			`"Principal":{"AWS":"` + acct + `"},"Action":"sts:AssumeRole",` +
+			`"Condition":{"Bool":{"aws:MultiFactorAuthPresent":"true"}}}}`,
 		InlinePolicies: map[string]string{
 			"ec2": `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"ec2:*","Resource":"*"}}`,
 		},
 	})
 	clk := &clock{t: time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)}
 	az := authz.New(b, acct, clk.now)
-	return env{callers: map[string]sts.Caller{}, b: b, clk: clk, svc: sts.New(b, keys, az, acct, clk.now, sts.WithMFA(fakeMFA{})), az: az, keys: keys}
+	return env{
+		callers: map[string]sts.Caller{},
+		b:       b,
+		clk:     clk,
+		svc:     sts.New(b, keys, az, acct, clk.now, sts.WithMFA(fakeMFA{})),
+		az:      az,
+		keys:    keys,
+	}
 }
 
 // fakeMFA accepts code "123456" from serial "mfa/<user>". Replay guarding
@@ -117,7 +128,10 @@ func (e env) mfaCaller(t *testing.T, name string) sts.Caller {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := e.svc.Resolve(context.Background(), sts.Credential{AccessKeyID: st.AccessKeyID, SessionToken: st.SessionToken})
+	c, err := e.svc.Resolve(
+		context.Background(),
+		sts.Credential{AccessKeyID: st.AccessKeyID, SessionToken: st.SessionToken},
+	)
 	if err != nil || !c.MFA() || !c.Temporary() {
 		t.Fatalf("mfa caller: %v", err)
 	}
@@ -134,7 +148,8 @@ func TestAssumeRoleCredentialsWorkThenExpire(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(creds.AccessKeyID, "ASIA") || len(creds.Secret) != 40 || creds.AssumedRoleARN != "arn:vws:sts::"+acct+":assumed-role/admin/deploy-1" {
+	if !strings.HasPrefix(creds.AccessKeyID, "ASIA") || len(creds.Secret) != 40 ||
+		creds.AssumedRoleARN != "arn:vws:sts::"+acct+":assumed-role/admin/deploy-1" {
 		t.Fatalf("credentials %s %s", creds, creds.AssumedRoleARN)
 	}
 	if strings.Contains(fmt.Sprint(creds), creds.Secret) || strings.Contains(creds.SessionToken, creds.Secret) {
@@ -196,7 +211,10 @@ func TestUntrustedPrincipalIsDenied(t *testing.T) {
 		sts.MFA{}); !errors.Is(err, sts.ErrAccessDenied) {
 		t.Fatalf("bob: %v", err)
 	}
-	for _, arn := range []string{"arn:vws:iam::999999999999:role/admin", "arn:vws:iam::" + acct + ":role/missing", "arn:vws:iam::" + acct + ":role/dev/admin", "admin"} {
+	for _, arn := range []string{
+		"arn:vws:iam::999999999999:role/admin", "arn:vws:iam::" + acct + ":role/missing",
+		"arn:vws:iam::" + acct + ":role/dev/admin", "admin",
+	} {
 		if _, err := e.svc.AssumeRole(ctx, e.caller(t, "alice"), nil, arn, "x1", 0, sts.SessionPolicies{},
 			sts.MFA{}); !errors.Is(err, sts.ErrAccessDenied) {
 			t.Fatalf("%s: %v", arn, err)
@@ -294,7 +312,10 @@ func TestDurationAndNameBounds(t *testing.T) {
 		sts.MFA{}); !errors.Is(err, sts.ErrInvalidRequest) {
 		t.Fatalf("chained 2h: %v", err)
 	}
-	if _, err := e.svc.GetSessionToken(ctx, e.caller(t, "alice"), 37*time.Hour, sts.MFA{}); !errors.Is(err, sts.ErrInvalidRequest) {
+	if _, err := e.svc.GetSessionToken(ctx, e.caller(t, "alice"), 37*time.Hour, sts.MFA{}); !errors.Is(
+		err,
+		sts.ErrInvalidRequest,
+	) {
 		t.Fatalf("37h session token: %v", err)
 	}
 }
@@ -311,7 +332,11 @@ func TestCallerIsDerivedServerSide(t *testing.T) {
 		t.Fatalf("zero caller GetSessionToken: %v", err)
 	}
 	// Unknown, inactive and malformed credentials do not resolve.
-	for _, c := range []sts.Credential{{AccessKeyID: "AKIAAAAAAAAAAAAAAAAA"}, {AccessKeyID: "ASIAAAAAAAAAAAAAAAAA", SessionToken: "x.y"}, {AccessKeyID: "nope"}} {
+	for _, c := range []sts.Credential{
+		{AccessKeyID: "AKIAAAAAAAAAAAAAAAAA"},
+		{AccessKeyID: "ASIAAAAAAAAAAAAAAAAA", SessionToken: "x.y"},
+		{AccessKeyID: "nope"},
+	} {
 		if _, err := e.svc.Resolve(ctx, c); !errors.Is(err, sts.ErrInvalidToken) {
 			t.Fatalf("%v: %v", c.AccessKeyID, err)
 		}
@@ -404,7 +429,11 @@ func TestRevokeSessions(t *testing.T) {
 	if err := e.svc.RevokeSessions(ctx, authz.User, "alice"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.svc.Resolve(ctx, sts.Credential{AccessKeyID: us.AccessKeyID, SessionToken: us.SessionToken}); !errors.Is(err, sts.ErrInvalidToken) {
+	cred := sts.Credential{AccessKeyID: us.AccessKeyID, SessionToken: us.SessionToken}
+	if _, err := e.svc.Resolve(ctx, cred); !errors.Is(
+		err,
+		sts.ErrInvalidToken,
+	) {
 		t.Fatalf("revoked user session resolved: %v", err)
 	}
 	// Revocation survives a restart: it is stored on the principal.
@@ -419,7 +448,15 @@ func TestRevokeSessions(t *testing.T) {
 	if err := store.Delete[iam.Role](ctx, e.b, "admin", ""); err != nil {
 		t.Fatal(err)
 	}
-	put(t, e.b, iam.Role{Name: "admin", ID: "44", AssumeRolePolicy: `{"Version":"2012-10-17","Statement":{"Effect":"Deny","Principal":"*","Action":"sts:AssumeRole"}}`})
+	put(
+		t,
+		e.b,
+		iam.Role{
+			Name:             "admin",
+			ID:               "44",
+			AssumeRolePolicy: `{"Version":"2012-10-17","Statement":{"Effect":"Deny","Principal":"*","Action":"sts:AssumeRole"}}`,
+		},
+	)
 	if _, err := e.svc.Validate(ctx, fresh.AccessKeyID, fresh.SessionToken); !errors.Is(err, sts.ErrInvalidToken) {
 		t.Fatalf("session of a recreated role: %v", err)
 	}

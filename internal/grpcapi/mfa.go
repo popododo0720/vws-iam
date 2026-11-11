@@ -62,7 +62,10 @@ func (s *Server) GetMfaDevice(ctx context.Context, req *iamv1.GetMfaDeviceReques
 }
 
 // ListMfaDevices lists every device of a project, assigned or not.
-func (s *Server) ListMfaDevices(ctx context.Context, req *iamv1.ListMfaDevicesRequest) (*iamv1.ListMfaDevicesResponse, error) {
+func (s *Server) ListMfaDevices(
+	ctx context.Context,
+	req *iamv1.ListMfaDevicesRequest,
+) (*iamv1.ListMfaDevicesResponse, error) {
 	pid, err := parent(req.GetParent())
 	if err != nil {
 		return nil, err
@@ -72,7 +75,12 @@ func (s *Server) ListMfaDevices(ctx context.Context, req *iamv1.ListMfaDevicesRe
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
-	items, next, err := page(all, func(v store.Versioned[iam.MfaDevice]) string { return v.Object.Name }, req.GetPageSize(), req.GetPageToken())
+	items, next, err := page(
+		all,
+		func(v store.Versioned[iam.MfaDevice]) string { return v.Object.Name },
+		req.GetPageSize(),
+		req.GetPageToken(),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +92,10 @@ func (s *Server) ListMfaDevices(ctx context.Context, req *iamv1.ListMfaDevicesRe
 }
 
 // CreateVirtualMfaDevice returns the seed exactly once. Not an operation.
-func (s *Server) CreateVirtualMfaDevice(ctx context.Context, req *iamv1.CreateVirtualMfaDeviceRequest) (*iamv1.CreateVirtualMfaDeviceResponse, error) {
+func (s *Server) CreateVirtualMfaDevice(
+	ctx context.Context,
+	req *iamv1.CreateVirtualMfaDeviceRequest,
+) (*iamv1.CreateVirtualMfaDeviceResponse, error) {
 	pid, err := parent(req.GetParent())
 	if err != nil {
 		return nil, err
@@ -105,7 +116,11 @@ func (s *Server) CreateVirtualMfaDevice(ctx context.Context, req *iamv1.CreateVi
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
-	return &iamv1.CreateVirtualMfaDeviceResponse{MfaDevice: p.mfaProto(d, ""), Base32StringSeed: enr.Base32Seed, OtpauthUri: enr.URI}, nil
+	return &iamv1.CreateVirtualMfaDeviceResponse{
+		MfaDevice:        p.mfaProto(d, ""),
+		Base32StringSeed: enr.Base32Seed,
+		OtpauthUri:       enr.URI,
+	}, nil
 }
 
 func userRef(project, s string) (string, error) {
@@ -120,7 +135,10 @@ func userRef(project, s string) (string, error) {
 }
 
 // EnableMfaDevice assigns a device after two consecutive codes.
-func (s *Server) EnableMfaDevice(ctx context.Context, req *iamv1.EnableMfaDeviceRequest) (*iamv1.EnableMfaDeviceResponse, error) {
+func (s *Server) EnableMfaDevice(
+	ctx context.Context,
+	req *iamv1.EnableMfaDeviceRequest,
+) (*iamv1.EnableMfaDeviceResponse, error) {
 	pid, id, err := child(req.GetName(), "mfaDevices")
 	if err != nil {
 		return nil, err
@@ -155,7 +173,10 @@ func (s *Server) EnableMfaDevice(ctx context.Context, req *iamv1.EnableMfaDevice
 }
 
 // DeactivateMfaDevice unassigns a device from its user.
-func (s *Server) DeactivateMfaDevice(ctx context.Context, req *iamv1.DeactivateMfaDeviceRequest) (*iamv1.DeactivateMfaDeviceResponse, error) {
+func (s *Server) DeactivateMfaDevice(
+	ctx context.Context,
+	req *iamv1.DeactivateMfaDeviceRequest,
+) (*iamv1.DeactivateMfaDeviceResponse, error) {
 	pid, id, err := child(req.GetName(), "mfaDevices")
 	if err != nil {
 		return nil, err
@@ -173,7 +194,10 @@ func (s *Server) DeactivateMfaDevice(ctx context.Context, req *iamv1.DeactivateM
 }
 
 // DeleteMfaDevice deletes an unassigned device (AWS DeleteConflict otherwise).
-func (s *Server) DeleteMfaDevice(ctx context.Context, req *iamv1.DeleteMfaDeviceRequest) (*longrunningpb.Operation, error) {
+func (s *Server) DeleteMfaDevice(
+	ctx context.Context,
+	req *iamv1.DeleteMfaDeviceRequest,
+) (*longrunningpb.Operation, error) {
 	pid, id, err := child(req.GetName(), "mfaDevices")
 	if err != nil {
 		return nil, err
@@ -196,6 +220,18 @@ func (s *Server) DeleteMfaDevice(ctx context.Context, req *iamv1.DeleteMfaDevice
 		resp = p.mfaProto(v.Object, v.Version)
 		resp.DeleteTime = timestamppb.New(s.now())
 	}
-	op, err := s.done(ctx, opArgs{project: pid, method: "DeleteMfaDevice", requestID: req.GetRequestId(), req: req, resource: req.GetName(), verb: commonv1.OperationVerb_OPERATION_VERB_DELETE, generation: v.Object.Generation, response: resp})
+	op, err := s.done(
+		ctx,
+		opArgs{
+			project:    pid,
+			method:     "DeleteMfaDevice",
+			requestID:  req.GetRequestId(),
+			req:        req,
+			resource:   req.GetName(),
+			verb:       commonv1.OperationVerb_OPERATION_VERB_DELETE,
+			generation: v.Object.Generation,
+			response:   resp,
+		},
+	)
 	return op, toStatus(ctx, err)
 }

@@ -87,14 +87,23 @@ func (p project) policyProto(ctx context.Context, v store.Versioned[iam.Policy])
 		return nil, err
 	}
 	return &iamv1.Policy{
-		Name: name(p.id, "policies", pol.Name), Uid: pol.UID, Generation: pol.Generation, Etag: v.Version, Labels: labels(pol.Labels),
+		Name: name(
+			p.id,
+			"policies",
+			pol.Name,
+		), Uid: pol.UID, Generation: pol.Generation, Etag: v.Version, Labels: labels(pol.Labels),
 		Spec: &iamv1.PolicySpec{
 			Path:           defaultPath(pol.Path),
 			Description:    pol.Description,
 			Document:       pol.Default(),
 			DefaultVersion: pol.DefaultVersion,
 		},
-		Status:     &iamv1.PolicyStatus{Observed: ready(pol.Generation), Arn: arn, UniqueId: pol.ID, AttachmentCount: int32(n)}, //nolint:gosec // bounded by entity count
+		Status: &iamv1.PolicyStatus{
+			Observed:        ready(pol.Generation),
+			Arn:             arn,
+			UniqueId:        pol.ID,
+			AttachmentCount: int32(n), //nolint:gosec // bounded by entity count
+		},
 		CreateTime: ts(pol.Created), UpdateTime: ts(pol.Updated),
 	}, nil
 }
@@ -129,7 +138,10 @@ func (s *Server) GetPolicy(ctx context.Context, req *iamv1.GetPolicyRequest) (*i
 }
 
 // ListPolicies pages through a project's managed policies.
-func (s *Server) ListPolicies(ctx context.Context, req *iamv1.ListPoliciesRequest) (*iamv1.ListPoliciesResponse, error) {
+func (s *Server) ListPolicies(
+	ctx context.Context,
+	req *iamv1.ListPoliciesRequest,
+) (*iamv1.ListPoliciesResponse, error) {
 	pid, err := parent(req.GetParent())
 	if err != nil {
 		return nil, err
@@ -139,7 +151,12 @@ func (s *Server) ListPolicies(ctx context.Context, req *iamv1.ListPoliciesReques
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
-	items, next, err := page(all, func(v store.Versioned[iam.Policy]) string { return v.Object.Name }, req.GetPageSize(), req.GetPageToken())
+	items, next, err := page(
+		all,
+		func(v store.Versioned[iam.Policy]) string { return v.Object.Name },
+		req.GetPageSize(),
+		req.GetPageToken(),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -180,8 +197,9 @@ func (s *Server) CreatePolicy(ctx context.Context, req *iamv1.CreatePolicyReques
 	now := s.now().UTC()
 	pol := iam.Policy{
 		Meta: iam.Meta{UID: iam.NewUID(), Generation: 1, Labels: req.GetPolicy().GetLabels(), RequestID: req.GetRequestId()},
-		Name: req.GetPolicyId(), Path: spec.GetPath(), ID: iam.NewUniqueID("ANPA"), Created: now, Description: spec.GetDescription(),
-		DefaultVersion: "v1", NextVersion: 2, Versions: []iam.PolicyVersion{{ID: "v1", Document: spec.GetDocument(), Created: now}},
+		Name: req.GetPolicyId(), Path: spec.GetPath(), ID: iam.NewUniqueID("ANPA"), Created: now,
+		Description: spec.GetDescription(), DefaultVersion: "v1", NextVersion: 2,
+		Versions: []iam.PolicyVersion{{ID: "v1", Document: spec.GetDocument(), Created: now}},
 	}
 	v, err := create(ctx, p.b, pol, req.GetRequestId(), req.GetValidateOnly())
 	if err != nil {
@@ -191,7 +209,20 @@ func (s *Server) CreatePolicy(ctx context.Context, req *iamv1.CreatePolicyReques
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
-	op, err := s.done(ctx, opArgs{project: pid, method: "CreatePolicy", requestID: req.GetRequestId(), req: req, resource: resp.Name, verb: commonv1.OperationVerb_OPERATION_VERB_CREATE, generation: v.Object.Generation, response: resp, validateOnly: req.GetValidateOnly()})
+	op, err := s.done(
+		ctx,
+		opArgs{
+			project:      pid,
+			method:       "CreatePolicy",
+			requestID:    req.GetRequestId(),
+			req:          req,
+			resource:     resp.Name,
+			verb:         commonv1.OperationVerb_OPERATION_VERB_CREATE,
+			generation:   v.Object.Generation,
+			response:     resp,
+			validateOnly: req.GetValidateOnly(),
+		},
+	)
 	return op, toStatus(ctx, err)
 }
 
@@ -252,7 +283,20 @@ func (s *Server) UpdatePolicy(ctx context.Context, req *iamv1.UpdatePolicyReques
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
-	op, err := s.done(ctx, opArgs{project: pid, method: "UpdatePolicy", requestID: req.GetRequestId(), req: req, resource: resp.Name, verb: commonv1.OperationVerb_OPERATION_VERB_UPDATE, generation: v.Object.Generation, response: resp, validateOnly: req.GetValidateOnly()})
+	op, err := s.done(
+		ctx,
+		opArgs{
+			project:      pid,
+			method:       "UpdatePolicy",
+			requestID:    req.GetRequestId(),
+			req:          req,
+			resource:     resp.Name,
+			verb:         commonv1.OperationVerb_OPERATION_VERB_UPDATE,
+			generation:   v.Object.Generation,
+			response:     resp,
+			validateOnly: req.GetValidateOnly(),
+		},
+	)
 	return op, toStatus(ctx, err)
 }
 
@@ -346,12 +390,27 @@ func (s *Server) DeletePolicy(ctx context.Context, req *iamv1.DeletePolicyReques
 			DeleteTime: timestamppb.New(s.now()),
 		}
 	}
-	op, err := s.done(ctx, opArgs{project: pid, method: "DeletePolicy", requestID: req.GetRequestId(), req: req, resource: req.GetName(), verb: commonv1.OperationVerb_OPERATION_VERB_DELETE, generation: v.Object.Generation, response: resp})
+	op, err := s.done(
+		ctx,
+		opArgs{
+			project:    pid,
+			method:     "DeletePolicy",
+			requestID:  req.GetRequestId(),
+			req:        req,
+			resource:   req.GetName(),
+			verb:       commonv1.OperationVerb_OPERATION_VERB_DELETE,
+			generation: v.Object.Generation,
+			response:   resp,
+		},
+	)
 	return op, toStatus(ctx, err)
 }
 
 // GetPolicyVersion returns one stored version.
-func (s *Server) GetPolicyVersion(ctx context.Context, req *iamv1.GetPolicyVersionRequest) (*iamv1.PolicyVersion, error) {
+func (s *Server) GetPolicyVersion(
+	ctx context.Context,
+	req *iamv1.GetPolicyVersionRequest,
+) (*iamv1.PolicyVersion, error) {
 	pid, id, ver, err := grandchild(req.GetName(), "policies", "versions")
 	if err != nil {
 		return nil, err
@@ -370,7 +429,10 @@ func (s *Server) GetPolicyVersion(ctx context.Context, req *iamv1.GetPolicyVersi
 }
 
 // ListPolicyVersions lists a policy's versions (at most five).
-func (s *Server) ListPolicyVersions(ctx context.Context, req *iamv1.ListPolicyVersionsRequest) (*iamv1.ListPolicyVersionsResponse, error) {
+func (s *Server) ListPolicyVersions(
+	ctx context.Context,
+	req *iamv1.ListPolicyVersionsRequest,
+) (*iamv1.ListPolicyVersionsResponse, error) {
 	pid, id, err := child(req.GetParent(), "policies")
 	if err != nil {
 		return nil, err
@@ -380,7 +442,12 @@ func (s *Server) ListPolicyVersions(ctx context.Context, req *iamv1.ListPolicyVe
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
-	items, next, err := page(v.Object.Versions, func(pv iam.PolicyVersion) string { return pv.ID }, req.GetPageSize(), req.GetPageToken())
+	items, next, err := page(
+		v.Object.Versions,
+		func(pv iam.PolicyVersion) string { return pv.ID },
+		req.GetPageSize(),
+		req.GetPageToken(),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -393,7 +460,10 @@ func (s *Server) ListPolicyVersions(ctx context.Context, req *iamv1.ListPolicyVe
 
 // CreatePolicyVersion adds a version. Its id is assigned like AWS (v<n>);
 // a non-empty policy_version_id must equal the next id.
-func (s *Server) CreatePolicyVersion(ctx context.Context, req *iamv1.CreatePolicyVersionRequest) (*longrunningpb.Operation, error) {
+func (s *Server) CreatePolicyVersion(
+	ctx context.Context,
+	req *iamv1.CreatePolicyVersionRequest,
+) (*longrunningpb.Operation, error) {
 	pid, id, err := child(req.GetParent(), "policies")
 	if err != nil {
 		return nil, err
@@ -448,12 +518,28 @@ func (s *Server) CreatePolicyVersion(ctx context.Context, req *iamv1.CreatePolic
 		added = v.Object.Versions[i]
 	}
 	resp := p.versionProto(v, added)
-	op, err := s.done(ctx, opArgs{project: pid, method: "CreatePolicyVersion", requestID: req.GetRequestId(), req: req, resource: resp.Name, verb: commonv1.OperationVerb_OPERATION_VERB_CREATE, generation: v.Object.Generation, response: resp, validateOnly: req.GetValidateOnly()})
+	op, err := s.done(
+		ctx,
+		opArgs{
+			project:      pid,
+			method:       "CreatePolicyVersion",
+			requestID:    req.GetRequestId(),
+			req:          req,
+			resource:     resp.Name,
+			verb:         commonv1.OperationVerb_OPERATION_VERB_CREATE,
+			generation:   v.Object.Generation,
+			response:     resp,
+			validateOnly: req.GetValidateOnly(),
+		},
+	)
 	return op, toStatus(ctx, err)
 }
 
 // DeletePolicyVersion deletes a non-default version.
-func (s *Server) DeletePolicyVersion(ctx context.Context, req *iamv1.DeletePolicyVersionRequest) (*longrunningpb.Operation, error) {
+func (s *Server) DeletePolicyVersion(
+	ctx context.Context,
+	req *iamv1.DeletePolicyVersionRequest,
+) (*longrunningpb.Operation, error) {
 	pid, id, ver, err := grandchild(req.GetName(), "policies", "versions")
 	if err != nil {
 		return nil, err
@@ -501,6 +587,18 @@ func (s *Server) DeletePolicyVersion(ctx context.Context, req *iamv1.DeletePolic
 		resp.Status.DefaultVersion = false
 		resp.DeleteTime = timestamppb.New(s.now())
 	}
-	op, err := s.done(ctx, opArgs{project: pid, method: "DeletePolicyVersion", requestID: req.GetRequestId(), req: req, resource: req.GetName(), verb: commonv1.OperationVerb_OPERATION_VERB_DELETE, generation: v.Object.Generation, response: resp})
+	op, err := s.done(
+		ctx,
+		opArgs{
+			project:    pid,
+			method:     "DeletePolicyVersion",
+			requestID:  req.GetRequestId(),
+			req:        req,
+			resource:   req.GetName(),
+			verb:       commonv1.OperationVerb_OPERATION_VERB_DELETE,
+			generation: v.Object.Generation,
+			response:   resp,
+		},
+	)
 	return op, toStatus(ctx, err)
 }

@@ -33,7 +33,10 @@ func TestLoginLockRenewalOnAPIServer(t *testing.T) {
 func loginTOTP(ctx context.Context, e *env, user, pw, totpCode, ip string) error {
 	ctx, cancel := context.WithTimeout(ctx, grpcapi.MaxTimeout)
 	defer cancel()
-	_, err := e.auth.Login(ctx, &iamv1.LoginRequest{Project: proj, UserName: user, Password: pw, TotpCode: totpCode, SourceIp: ip})
+	_, err := e.auth.Login(
+		ctx,
+		&iamv1.LoginRequest{Project: proj, UserName: user, Password: pw, TotpCode: totpCode, SourceIp: ip},
+	)
 	return err
 }
 
@@ -57,7 +60,13 @@ func testLoginLockRenewal(t *testing.T, backend func(*testing.T) store.Backend) 
 	lockAlice := func(t *testing.T, e *env) time.Time {
 		t.Helper()
 		for range mfa.MaxFailedAttempts {
-			wantErr(t, loginTOTP(t.Context(), e, "alice", goodPW, "000000", "203.0.113.9"), codes.Unauthenticated, "INVALID_CREDENTIALS", "InvalidAuthenticationCode")
+			wantErr(
+				t,
+				loginTOTP(t.Context(), e, "alice", goodPW, "000000", "203.0.113.9"),
+				codes.Unauthenticated,
+				"INVALID_CREDENTIALS",
+				"InvalidAuthenticationCode",
+			)
 		}
 		_, until := deviceLock(t, e)
 		if until.IsZero() {

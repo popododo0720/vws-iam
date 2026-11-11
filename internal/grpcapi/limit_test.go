@@ -290,12 +290,21 @@ func testAttemptLimits(t *testing.T, backend func(*testing.T) store.Backend) {
 			}
 			kn := key.GetAccessKey().GetName()
 			pair := strings.SplitN(enableMFA(t, a, ctx, name), "|", 2)
-			return caller{kn[strings.LastIndex(kn, "/")+1:], key.GetSecretAccessKey(), pair[0], pair[1], parentName + "/mfaDevices/" + name + "-phone"}
+			return caller{
+				kn[strings.LastIndex(kn, "/")+1:],
+				key.GetSecretAccessKey(),
+				pair[0],
+				pair[1],
+				parentName + "/mfaDevices/" + name + "-phone",
+			}
 		}
 		gstMFA := func(e *env, c caller, ip, code string) error {
 			r := a.stsSign(c.kid, c.secret, "", "GetSessionToken")
 			r.SourceIp = ip
-			_, err := e.token.GetSessionToken(ctx, &iamv1.GetSessionTokenRequest{Authentication: gstSig(r), SerialNumber: c.serial, TokenCode: code})
+			_, err := e.token.GetSessionToken(
+				ctx,
+				&iamv1.GetSessionTokenRequest{Authentication: gstSig(r), SerialNumber: c.serial, TokenCode: code},
+			)
 			return err
 		}
 		status := func(e *env, c caller) (time.Time, int32) {

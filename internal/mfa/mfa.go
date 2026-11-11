@@ -203,7 +203,12 @@ func (s *Service) CreateVirtual(ctx context.Context, name, path string) (_ Enrol
 		return Enrollment{}, fmt.Errorf("create mfa device %s: %w", name, err)
 	}
 	enc := b32.EncodeToString(seed)
-	u := url.URL{Scheme: "otpauth", Host: "totp", Path: "/VWS:" + name, RawQuery: url.Values{"secret": {enc}, "issuer": {"VWS"}, "period": {"30"}, "digits": {"6"}}.Encode()}
+	u := url.URL{
+		Scheme:   "otpauth",
+		Host:     "totp",
+		Path:     "/VWS:" + name,
+		RawQuery: url.Values{"secret": {enc}, "issuer": {"VWS"}, "period": {"30"}, "digits": {"6"}}.Encode(),
+	}
 	return Enrollment{SerialNumber: s.Serial(d), Base32Seed: enc, URI: u.String()}, nil
 }
 

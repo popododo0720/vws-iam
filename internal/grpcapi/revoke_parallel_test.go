@@ -52,7 +52,10 @@ func testParallelRevoke(t *testing.T, backend func(*testing.T) store.Backend) {
 		rid := fmt.Sprintf("6f1c0a3e-8f7b-4b8e-9c55-%012d", i)
 		for range 2 { // each request_id twice: the replay must not bump again
 			wg.Go(func() {
-				_, err := e.users.RevokeUserSessions(ctx, &iamv1.RevokeUserSessionsRequest{Name: parentName + "/users/alice", RequestId: rid})
+				_, err := e.users.RevokeUserSessions(
+					ctx,
+					&iamv1.RevokeUserSessionsRequest{Name: parentName + "/users/alice", RequestId: rid},
+				)
 				errs <- err
 			})
 		}

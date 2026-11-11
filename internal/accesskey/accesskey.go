@@ -472,7 +472,12 @@ func (s *Service) GetSigningCredential(ctx context.Context, id string) (_ Creden
 			return Credential{}, err
 		}
 	}
-	return Credential{AccessKeyID: k.Object.ID, Secret: string(plain), UserName: k.Object.UserName, Root: k.Object.Root}, nil
+	return Credential{
+		AccessKeyID: k.Object.ID,
+		Secret:      string(plain),
+		UserName:    k.Object.UserName,
+		Root:        k.Object.Root,
+	}, nil
 }
 
 // rewrap stores k with its secret resealed under the active KEK. A lost

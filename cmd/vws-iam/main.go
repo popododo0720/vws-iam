@@ -271,7 +271,9 @@ func bootstrapRoot(ctx context.Context, b store.Backend, keys *secret.Keyring, c
 			return "", err
 		}
 	} else {
-		project, id, sec = strings.TrimSpace(cfg.getenv(envRootProject)), strings.TrimSpace(cfg.getenv(envRootKeyID)), strings.TrimSpace(cfg.getenv(envRootSecret))
+		project = strings.TrimSpace(cfg.getenv(envRootProject))
+		id = strings.TrimSpace(cfg.getenv(envRootKeyID))
+		sec = strings.TrimSpace(cfg.getenv(envRootSecret))
 		pw = cfg.getenv(envRootPassword)
 	}
 	if !iam.ValidProject(project) || !iam.ValidRootAccessKeyID(id) || len(sec) < 32 {

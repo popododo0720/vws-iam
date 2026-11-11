@@ -42,7 +42,9 @@ func (e *apiError) Error() string { return e.msg }
 // GRPCStatus lets status.FromError read an apiError.
 func (e *apiError) GRPCStatus() *status.Status {
 	st := status.New(e.code, e.msg)
-	d, err := st.WithDetails(&errdetails.ErrorInfo{Reason: e.reason, Domain: ErrorDomain, Metadata: map[string]string{AWSCodeKey: e.aws}})
+	d, err := st.WithDetails(
+		&errdetails.ErrorInfo{Reason: e.reason, Domain: ErrorDomain, Metadata: map[string]string{AWSCodeKey: e.aws}},
+	)
 	if err != nil {
 		return st
 	}

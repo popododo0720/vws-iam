@@ -99,7 +99,8 @@ func TestSplitUserARN(t *testing.T) {
 }
 
 func TestARNs(t *testing.T) {
-	if got := iam.UserARN("000000000000", iam.User{Name: "a", Path: "/dev/"}); got != "arn:vws:iam::000000000000:user/dev/a" {
+	if got, want := iam.UserARN("000000000000", iam.User{Name: "a", Path: "/dev/"}),
+		"arn:vws:iam::000000000000:user/dev/a"; got != want {
 		t.Fatal(got)
 	}
 	if got := iam.RoleARN("000000000000", iam.Role{Name: "r"}); got != "arn:vws:iam::000000000000:role/r" {
@@ -145,7 +146,9 @@ func TestPolicyNameLength(t *testing.T) {
 	policy := func(name string) iam.Policy {
 		return iam.Policy{Name: name, DefaultVersion: "v1", Versions: []iam.PolicyVersion{{ID: "v1"}}}
 	}
-	for _, name := range []string{"a", strings.Repeat("a", 64), strings.Repeat("a", 65), strings.Repeat("a", 128), "A.z+9=,_@-"} {
+	for _, name := range []string{
+		"a", strings.Repeat("a", 64), strings.Repeat("a", 65), strings.Repeat("a", 128), "A.z+9=,_@-",
+	} {
 		if err := policy(name).Validate(); err != nil {
 			t.Errorf("%d-character policy: %v", len(name), err)
 		}

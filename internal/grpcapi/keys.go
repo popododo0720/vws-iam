@@ -218,7 +218,10 @@ func (s *Server) GetAccessKey(ctx context.Context, req *iamv1.GetAccessKeyReques
 }
 
 // ListAccessKeys lists a user's keys.
-func (s *Server) ListAccessKeys(ctx context.Context, req *iamv1.ListAccessKeysRequest) (*iamv1.ListAccessKeysResponse, error) {
+func (s *Server) ListAccessKeys(
+	ctx context.Context,
+	req *iamv1.ListAccessKeysRequest,
+) (*iamv1.ListAccessKeysResponse, error) {
 	pid, user, err := child(req.GetParent(), "users")
 	if err != nil {
 		return nil, err
@@ -250,7 +253,10 @@ func (s *Server) ListAccessKeys(ctx context.Context, req *iamv1.ListAccessKeysRe
 // another). An empty request_id makes every call a new key. A user_etag
 // (#139), when set, creates the key only while the parent user is at that
 // version, else ABORTED and no key is created.
-func (s *Server) CreateAccessKey(ctx context.Context, req *iamv1.CreateAccessKeyRequest) (*iamv1.CreateAccessKeyResponse, error) {
+func (s *Server) CreateAccessKey(
+	ctx context.Context,
+	req *iamv1.CreateAccessKeyRequest,
+) (*iamv1.CreateAccessKeyResponse, error) {
 	userEtag := req.GetUserEtag()
 	pid, user, err := child(req.GetParent(), "users")
 	if err != nil {
@@ -276,7 +282,10 @@ func (s *Server) CreateAccessKey(ctx context.Context, req *iamv1.CreateAccessKey
 }
 
 // UpdateAccessKey changes the state (Active/Inactive) or labels.
-func (s *Server) UpdateAccessKey(ctx context.Context, req *iamv1.UpdateAccessKeyRequest) (*longrunningpb.Operation, error) {
+func (s *Server) UpdateAccessKey(
+	ctx context.Context,
+	req *iamv1.UpdateAccessKeyRequest,
+) (*longrunningpb.Operation, error) {
 	pid, user, id, err := keyRef(req.GetAccessKey().GetName())
 	if err != nil {
 		return nil, err
@@ -340,14 +349,30 @@ func (s *Server) UpdateAccessKey(ctx context.Context, req *iamv1.UpdateAccessKey
 		return nil, toStatus(ctx, err)
 	}
 	resp := p.keyProto(v.Object, v.Version)
-	op, err := s.done(ctx, opArgs{project: pid, method: "UpdateAccessKey", requestID: req.GetRequestId(), req: req, resource: resp.Name, verb: commonv1.OperationVerb_OPERATION_VERB_UPDATE, generation: v.Object.Generation, response: resp, validateOnly: req.GetValidateOnly()})
+	op, err := s.done(
+		ctx,
+		opArgs{
+			project:      pid,
+			method:       "UpdateAccessKey",
+			requestID:    req.GetRequestId(),
+			req:          req,
+			resource:     resp.Name,
+			verb:         commonv1.OperationVerb_OPERATION_VERB_UPDATE,
+			generation:   v.Object.Generation,
+			response:     resp,
+			validateOnly: req.GetValidateOnly(),
+		},
+	)
 	return op, toStatus(ctx, err)
 }
 
 // DeleteAccessKey deletes a key and its index entry. A user_etag (#139),
 // when set, deletes the key only while the parent user is at that version,
 // else ABORTED and the key stays.
-func (s *Server) DeleteAccessKey(ctx context.Context, req *iamv1.DeleteAccessKeyRequest) (*longrunningpb.Operation, error) {
+func (s *Server) DeleteAccessKey(
+	ctx context.Context,
+	req *iamv1.DeleteAccessKeyRequest,
+) (*longrunningpb.Operation, error) {
 	userEtag := req.GetUserEtag()
 	pid, user, id, err := keyRef(req.GetName())
 	if err != nil {
@@ -380,6 +405,18 @@ func (s *Server) DeleteAccessKey(ctx context.Context, req *iamv1.DeleteAccessKey
 		resp.DeleteTime = timestamppb.New(s.now())
 		gen = k.Object.Generation
 	}
-	op, err := s.done(ctx, opArgs{project: pid, method: "DeleteAccessKey", requestID: req.GetRequestId(), req: req, resource: req.GetName(), verb: commonv1.OperationVerb_OPERATION_VERB_DELETE, generation: gen, response: resp})
+	op, err := s.done(
+		ctx,
+		opArgs{
+			project:    pid,
+			method:     "DeleteAccessKey",
+			requestID:  req.GetRequestId(),
+			req:        req,
+			resource:   req.GetName(),
+			verb:       commonv1.OperationVerb_OPERATION_VERB_DELETE,
+			generation: gen,
+			response:   resp,
+		},
+	)
 	return op, toStatus(ctx, err)
 }

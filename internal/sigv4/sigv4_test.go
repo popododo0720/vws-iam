@@ -12,15 +12,24 @@ import (
 // The get-vanilla case of the AWS SigV4 test suite.
 const (
 	secret    = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
-	canonical = "GET\n/\n\nhost:example.amazonaws.com\nx-amz-date:20150830T123600Z\n\nhost;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-	sts       = "AWS4-HMAC-SHA256\n20150830T123600Z\n20150830/us-east-1/service/aws4_request\nbb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63"
+	canonical = "GET\n/\n\nhost:example.amazonaws.com\nx-amz-date:20150830T123600Z\n\nhost;x-amz-date\n" +
+		"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	sts = "AWS4-HMAC-SHA256\n20150830T123600Z\n20150830/us-east-1/service/aws4_request\n" +
+		"bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63"
 	signature = "5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31"
 )
 
 var at = time.Date(2015, 8, 30, 12, 36, 0, 0, time.UTC)
 
 func vanilla() sigv4.Request {
-	return sigv4.Request{Date: "20150830", Region: "us-east-1", Service: "service", CanonicalRequest: canonical, StringToSign: sts, Signature: signature}
+	return sigv4.Request{
+		Date:             "20150830",
+		Region:           "us-east-1",
+		Service:          "service",
+		CanonicalRequest: canonical,
+		StringToSign:     sts,
+		Signature:        signature,
+	}
 }
 
 func TestAWSSuiteGetVanilla(t *testing.T) {

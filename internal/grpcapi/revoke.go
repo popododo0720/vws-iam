@@ -20,7 +20,10 @@ import (
 // Authorization: like every UserService call, the caller is authorized
 // by console-api with Authorize(iam:RevokeUserSessions, user ARN) before
 // it calls here; this service has no caller of its own.
-func (s *Server) RevokeUserSessions(ctx context.Context, req *iamv1.RevokeUserSessionsRequest) (*longrunningpb.Operation, error) {
+func (s *Server) RevokeUserSessions(
+	ctx context.Context,
+	req *iamv1.RevokeUserSessionsRequest,
+) (*longrunningpb.Operation, error) {
 	const method = "RevokeUserSessions"
 	pid, id, err := child(req.GetName(), "users")
 	if err != nil {
@@ -56,7 +59,10 @@ func (s *Server) RevokeUserSessions(ctx context.Context, req *iamv1.RevokeUserSe
 // Authorization: like every RoleService call, the caller is authorized
 // by console-api with Authorize(iam:RevokeRoleSessions, role ARN) before
 // it calls here; this service has no caller of its own.
-func (s *Server) RevokeRoleSessions(ctx context.Context, req *iamv1.RevokeRoleSessionsRequest) (*longrunningpb.Operation, error) {
+func (s *Server) RevokeRoleSessions(
+	ctx context.Context,
+	req *iamv1.RevokeRoleSessionsRequest,
+) (*longrunningpb.Operation, error) {
 	const method = "RevokeRoleSessions"
 	pid, id, err := child(req.GetName(), "roles")
 	if err != nil {

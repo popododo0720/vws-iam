@@ -24,7 +24,12 @@ const (
 )
 
 func credsProto(c sts.Credentials) *iamv1.Credentials {
-	return &iamv1.Credentials{AccessKeyId: c.AccessKeyID, SecretAccessKey: c.Secret, SessionToken: c.SessionToken, ExpireTime: timestamppb.New(c.Expiration)}
+	return &iamv1.Credentials{
+		AccessKeyId:     c.AccessKeyID,
+		SecretAccessKey: c.Secret,
+		SessionToken:    c.SessionToken,
+		ExpireTime:      timestamppb.New(c.Expiration),
+	}
 }
 
 // authn is how the caller of AssumeRole or GetSessionToken authenticated:
@@ -111,7 +116,10 @@ func (s *Server) authenticatedCallerFrom(
 			return project{}, sts.Caller{}, origin{}, err
 		}
 		p := s.project(resp.GetAccount())
-		c, err := p.sts.Resolve(ctx, sts.Credential{AccessKeyID: a.sigv4.GetAccessKeyId(), SessionToken: a.sigv4.GetSessionToken()})
+		c, err := p.sts.Resolve(
+			ctx,
+			sts.Credential{AccessKeyID: a.sigv4.GetAccessKeyId(), SessionToken: a.sigv4.GetSessionToken()},
+		)
 		return p, c, origin{signed: true, ip: a.sigv4.GetSourceIp()}, err
 	case a.console != "":
 		v, err := s.consoleSession(ctx, a.console)
@@ -157,7 +165,10 @@ func (o origin) requestContext(consoleIP string) map[string][]string {
 // AssumeRole issues role credentials to the authenticated caller, of the
 // same project, after the caller's permission, trust policy and MFA checks
 // in internal/sts.
-func (s *Server) AssumeRole(ctx context.Context, req *iamv1.AssumeRoleRequest) (resp *iamv1.AssumeRoleResponse, err error) {
+func (s *Server) AssumeRole(
+	ctx context.Context,
+	req *iamv1.AssumeRoleRequest,
+) (resp *iamv1.AssumeRoleResponse, err error) {
 	defer func() {
 		s.m.add(ctx, s.m.issued, attribute.String("rpc", "AssumeRole"), attribute.String("result", result(err)))
 	}()
@@ -168,7 +179,11 @@ func (s *Server) AssumeRole(ctx context.Context, req *iamv1.AssumeRoleRequest) (
 	return s.assumeRole(ctx, req, a)
 }
 
-func (s *Server) assumeRole(ctx context.Context, req *iamv1.AssumeRoleRequest, a authn) (*iamv1.AssumeRoleResponse, error) {
+func (s *Server) assumeRole(
+	ctx context.Context,
+	req *iamv1.AssumeRoleRequest,
+	a authn,
+) (*iamv1.AssumeRoleResponse, error) {
 	pid, roleName, err := child(req.GetRole(), "roles")
 	if err != nil {
 		return nil, err
@@ -212,15 +227,23 @@ func (s *Server) assumeRole(ctx context.Context, req *iamv1.AssumeRoleRequest, a
 		return nil, toStatus(ctx, err)
 	}
 	return &iamv1.AssumeRoleResponse{Credentials: credsProto(creds), AssumedRoleUser: &iamv1.Principal{
-		Type: iamv1.PrincipalType_PRINCIPAL_TYPE_ASSUMED_ROLE, Arn: creds.AssumedRoleARN, Project: pid, UniqueId: role.ID + ":" + req.GetRoleSessionName(),
-		Resource: name(pid, "roles", role.Name), SessionName: req.GetRoleSessionName(), MfaAuthenticated: sess.MFA, AuthTime: ts(sess.AuthTime),
+		Type: iamv1.PrincipalType_PRINCIPAL_TYPE_ASSUMED_ROLE, Arn: creds.AssumedRoleARN, Project: pid,
+		UniqueId: role.ID + ":" + req.GetRoleSessionName(),
+		Resource: name(
+			pid,
+			"roles",
+			role.Name,
+		), SessionName: req.GetRoleSessionName(), MfaAuthenticated: sess.MFA, AuthTime: ts(sess.AuthTime),
 		SessionContext: ref,
 	}}, nil
 }
 
 // GetSessionToken issues session credentials to a user (long-term key) or
 // the root user, usually to carry MFA.
-func (s *Server) GetSessionToken(ctx context.Context, req *iamv1.GetSessionTokenRequest) (resp *iamv1.GetSessionTokenResponse, err error) {
+func (s *Server) GetSessionToken(
+	ctx context.Context,
+	req *iamv1.GetSessionTokenRequest,
+) (resp *iamv1.GetSessionTokenResponse, err error) {
 	defer func() {
 		s.m.add(ctx, s.m.issued, attribute.String("rpc", "GetSessionToken"), attribute.String("result", result(err)))
 	}()
@@ -231,7 +254,11 @@ func (s *Server) GetSessionToken(ctx context.Context, req *iamv1.GetSessionToken
 	return s.getSessionToken(ctx, req, a)
 }
 
-func (s *Server) getSessionToken(ctx context.Context, req *iamv1.GetSessionTokenRequest, a authn) (*iamv1.GetSessionTokenResponse, error) {
+func (s *Server) getSessionToken(
+	ctx context.Context,
+	req *iamv1.GetSessionTokenRequest,
+	a authn,
+) (*iamv1.GetSessionTokenResponse, error) {
 	p, c, err := s.authenticatedCaller(ctx, a, "GetSessionToken")
 	if err != nil {
 		return nil, toStatus(ctx, err)
@@ -247,7 +274,12 @@ func (s *Server) getSessionToken(ctx context.Context, req *iamv1.GetSessionToken
 	if d == 0 {
 		d = defaultGetSessionToken
 	}
-	creds, err := p.sts.GetSessionToken(ctx, c, d, sts.MFA{SerialNumber: req.GetSerialNumber(), TokenCode: req.GetTokenCode()})
+	creds, err := p.sts.GetSessionToken(
+		ctx,
+		c,
+		d,
+		sts.MFA{SerialNumber: req.GetSerialNumber(), TokenCode: req.GetTokenCode()},
+	)
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}

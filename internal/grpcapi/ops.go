@@ -43,7 +43,11 @@ func fingerprint(req proto.Message) string {
 
 // replay returns the recorded operation of a request id, IDEMPOTENCY_CONFLICT
 // when the same id came with a different request, or nil.
-func (s *Server) replay(ctx context.Context, project, method, requestID string, req proto.Message) (*longrunningpb.Operation, error) {
+func (s *Server) replay(
+	ctx context.Context,
+	project, method, requestID string,
+	req proto.Message,
+) (*longrunningpb.Operation, error) {
 	if requestID == "" {
 		return nil, nil //nolint:nilnil // no request id: nothing to replay
 	}
@@ -78,7 +82,16 @@ type opArgs struct {
 func (s *Server) done(ctx context.Context, a opArgs) (*longrunningpb.Operation, error) {
 	now := timestamppb.New(s.now())
 	id := opID(a.project, a.method, a.requestID)
-	md, err := anypb.New(&commonv1.OperationMetadata{Resource: a.resource, Verb: a.verb, Generation: a.generation, RequestId: a.requestID, CreateTime: now, EndTime: now})
+	md, err := anypb.New(
+		&commonv1.OperationMetadata{
+			Resource:   a.resource,
+			Verb:       a.verb,
+			Generation: a.generation,
+			RequestId:  a.requestID,
+			CreateTime: now,
+			EndTime:    now,
+		},
+	)
 	if err != nil {
 		return nil, fmt.Errorf("operation metadata: %w", err)
 	}
@@ -86,7 +99,12 @@ func (s *Server) done(ctx context.Context, a opArgs) (*longrunningpb.Operation, 
 	if err != nil {
 		return nil, fmt.Errorf("operation response: %w", err)
 	}
-	op := &longrunningpb.Operation{Name: "projects/" + a.project + "/operations/" + id, Metadata: md, Done: true, Result: &longrunningpb.Operation_Response{Response: resp}}
+	op := &longrunningpb.Operation{
+		Name:     "projects/" + a.project + "/operations/" + id,
+		Metadata: md,
+		Done:     true,
+		Result:   &longrunningpb.Operation_Response{Response: resp},
+	}
 	if a.validateOnly {
 		return op, nil
 	}
@@ -94,7 +112,14 @@ func (s *Server) done(ctx context.Context, a opArgs) (*longrunningpb.Operation, 
 	if err != nil {
 		return nil, fmt.Errorf("operation: %w", err)
 	}
-	rec := iam.Operation{ID: id, Project: a.project, RequestID: a.requestID, Fingerprint: fingerprint(a.req), Response: b, Created: s.now().UTC()}
+	rec := iam.Operation{
+		ID:          id,
+		Project:     a.project,
+		RequestID:   a.requestID,
+		Fingerprint: fingerprint(a.req),
+		Response:    b,
+		Created:     s.now().UTC(),
+	}
 	_, err = store.Create(ctx, s.b, rec)
 	if errors.Is(err, store.ErrExists) {
 		// A duplicate of this request recorded first: answer as it did.
@@ -110,7 +135,10 @@ func (s *Server) done(ctx context.Context, a opArgs) (*longrunningpb.Operation, 
 }
 
 // GetOperation returns a recorded IAM operation.
-func (s *Server) GetOperation(ctx context.Context, req *longrunningpb.GetOperationRequest) (*longrunningpb.Operation, error) {
+func (s *Server) GetOperation(
+	ctx context.Context,
+	req *longrunningpb.GetOperationRequest,
+) (*longrunningpb.Operation, error) {
 	project, id, err := child(req.GetName(), "operations")
 	if err != nil {
 		return nil, err
@@ -127,6 +155,9 @@ func (s *Server) GetOperation(ctx context.Context, req *longrunningpb.GetOperati
 }
 
 // WaitOperation returns at once: IAM operations are always done.
-func (s *Server) WaitOperation(ctx context.Context, req *longrunningpb.WaitOperationRequest) (*longrunningpb.Operation, error) {
+func (s *Server) WaitOperation(
+	ctx context.Context,
+	req *longrunningpb.WaitOperationRequest,
+) (*longrunningpb.Operation, error) {
 	return s.GetOperation(ctx, &longrunningpb.GetOperationRequest{Name: req.GetName()})
 }

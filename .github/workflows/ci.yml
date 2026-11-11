@@ -35,13 +35,10 @@ jobs:
       - run: go test -race ./...
 
   # Common golangci-lint baseline (vws-deploy .github/golangci-common.yml, vws-deploy#300).
-  # fetch-depth 0 gives new-from-merge-base the origin/main history it compares against.
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - name: guard-agents.sh rejects bad inputs
         run: scripts/guard-agents.sh selftest
       # This repo's own guard checks. The shared vws-deploy pr-hygiene job that repo-guard.yml calls does not

@@ -19,7 +19,8 @@ func parent(s string) (string, error) {
 // child parses projects/{project}/{collection}/{id}.
 func child(s, collection string) (project, id string, err error) {
 	parts := strings.Split(s, "/")
-	if len(parts) != 4 || parts[0] != "projects" || parts[2] != collection || !iam.ValidProject(parts[1]) || parts[3] == "" {
+	if len(parts) != 4 || parts[0] != "projects" || parts[2] != collection || !iam.ValidProject(parts[1]) ||
+		parts[3] == "" {
 		return "", "", invalidID("name " + quote(s) + " is not projects/{project}/" + collection + "/{id}")
 	}
 	return parts[1], parts[3], nil
@@ -28,7 +29,9 @@ func child(s, collection string) (project, id string, err error) {
 // grandchild parses projects/{p}/{c1}/{id1}/{c2}/{id2}.
 func grandchild(s, c1, c2 string) (project, id1, id2 string, err error) {
 	parts := strings.Split(s, "/")
-	if len(parts) != 6 || parts[0] != "projects" || parts[2] != c1 || parts[4] != c2 || !iam.ValidProject(parts[1]) || parts[3] == "" || parts[5] == "" {
+	if len(parts) != 6 || parts[0] != "projects" || parts[2] != c1 || parts[4] != c2 || !iam.ValidProject(parts[1]) ||
+		parts[3] == "" ||
+		parts[5] == "" {
 		return "", "", "", invalidID("name " + quote(s) + " is not projects/{project}/" + c1 + "/{id}/" + c2 + "/{id}")
 	}
 	return parts[1], parts[3], parts[5], nil

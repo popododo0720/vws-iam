@@ -147,7 +147,12 @@ func TestFromEnv(t *testing.T) {
 	if !ok || err != nil || k.Active() != "k2" {
 		t.Fatalf("set: %v %v", ok, err)
 	}
-	for _, m := range []map[string]string{{secret.EnvKEK: key}, {secret.EnvKEKID: "k"}, {secret.EnvKEK: "%%", secret.EnvKEKID: "k"}, {secret.EnvKEK: "AAAA", secret.EnvKEKID: "k"}} {
+	for _, m := range []map[string]string{
+		{secret.EnvKEK: key},
+		{secret.EnvKEKID: "k"},
+		{secret.EnvKEK: "%%", secret.EnvKEKID: "k"},
+		{secret.EnvKEK: "AAAA", secret.EnvKEKID: "k"},
+	} {
 		if _, _, err := secret.FromEnv(env(m)); err == nil || strings.Contains(err.Error(), key) {
 			t.Fatalf("%v accepted or leaked: %v", m, err)
 		}

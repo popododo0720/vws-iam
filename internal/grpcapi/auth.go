@@ -47,7 +47,10 @@ func badCredentials() error {
 // sends the canonical request and string to sign; the secret never leaves
 // vws-iam. Long-term keys (AKIA and imported VWS root keys) use the global key index,
 // temporary ones (ASIA) are opened from the session token.
-func (s *Server) Authenticate(ctx context.Context, req *iamv1.AuthenticateRequest) (resp *iamv1.AuthenticateResponse, err error) {
+func (s *Server) Authenticate(
+	ctx context.Context,
+	req *iamv1.AuthenticateRequest,
+) (resp *iamv1.AuthenticateResponse, err error) {
 	defer func() { s.m.add(ctx, s.m.authn, attribute.String("result", result(err))) }()
 	// TODO(#20): a GetSessionToken user session has no session_context on
 	// the wire (it is empty for users), so Authorize cannot catch its
@@ -66,7 +69,14 @@ func (s *Server) Authenticate(ctx context.Context, req *iamv1.AuthenticateReques
 func (s *Server) authenticate(
 	ctx context.Context, req *iamv1.AuthenticateRequest, gateway bool,
 ) (*iamv1.AuthenticateResponse, string, error) {
-	sr := sigv4.Request{Date: req.GetDate(), Region: req.GetRegion(), Service: req.GetService(), CanonicalRequest: req.GetCanonicalRequest(), StringToSign: req.GetStringToSign(), Signature: req.GetSignature()}
+	sr := sigv4.Request{
+		Date:             req.GetDate(),
+		Region:           req.GetRegion(),
+		Service:          req.GetService(),
+		CanonicalRequest: req.GetCanonicalRequest(),
+		StringToSign:     req.GetStringToSign(),
+		Signature:        req.GetSignature(),
+	}
 	id := req.GetAccessKeyId()
 	switch {
 	case strings.HasPrefix(id, "ASIA"):
@@ -108,7 +118,8 @@ func (s *Server) authenticate(
 	}
 	arn := iam.UserARN(pid, u.Object)
 	return &iamv1.AuthenticateResponse{Account: pid, Arn: arn, Principal: &iamv1.Principal{
-		Type: iamv1.PrincipalType_PRINCIPAL_TYPE_USER, Arn: arn, Project: pid, UniqueId: u.Object.ID, Resource: name(pid, "users", u.Object.Name), AuthTime: now,
+		Type: iamv1.PrincipalType_PRINCIPAL_TYPE_USER, Arn: arn, Project: pid, UniqueId: u.Object.ID,
+		Resource: name(pid, "users", u.Object.Name), AuthTime: now,
 	}}, "", nil
 }
 
@@ -176,13 +187,24 @@ func (s *Server) sessionPrincipal(ctx context.Context, sess sts.Session) (*iamv1
 		if err != nil || u.Object.ID != sess.PrincipalID {
 			return nil, badCredentials()
 		}
-		pr.Type, pr.Arn, pr.UniqueId, pr.Resource = iamv1.PrincipalType_PRINCIPAL_TYPE_USER, iam.UserARN(pid, u.Object), u.Object.ID, name(pid, "users", u.Object.Name)
+		pr.Type, pr.Arn, pr.UniqueId, pr.Resource = iamv1.PrincipalType_PRINCIPAL_TYPE_USER, iam.UserARN(
+			pid,
+			u.Object,
+		), u.Object.ID, name(
+			pid,
+			"users",
+			u.Object.Name,
+		)
 	case authz.Role:
 		r, err := store.Get[iam.Role](ctx, p.b, sess.Principal.Name)
 		if err != nil || r.Object.ID != sess.RoleID {
 			return nil, badCredentials()
 		}
-		pr.Type, pr.Arn, pr.Resource = iamv1.PrincipalType_PRINCIPAL_TYPE_ASSUMED_ROLE, sess.Principal.ARN, name(pid, "roles", r.Object.Name)
+		pr.Type, pr.Arn, pr.Resource = iamv1.PrincipalType_PRINCIPAL_TYPE_ASSUMED_ROLE, sess.Principal.ARN, name(
+			pid,
+			"roles",
+			r.Object.Name,
+		)
 		pr.UniqueId, pr.SessionName = r.Object.ID+":"+sess.SessionName, sess.SessionName
 	default:
 		return nil, badCredentials()
@@ -353,7 +375,12 @@ func (s *Server) authorize(
 	ctx context.Context, req *iamv1.AuthorizeRequest, ref string,
 ) (resp *iamv1.AuthorizeResponse, err error) {
 	defer func() {
-		s.m.add(ctx, s.m.authz, attribute.String("result", result(err)), attribute.String("decision", resp.GetDecision().String()))
+		s.m.add(
+			ctx,
+			s.m.authz,
+			attribute.String("result", result(err)),
+			attribute.String("decision", resp.GetDecision().String()),
+		)
 	}()
 	if req.GetAction() == "" || !strings.Contains(req.GetAction(), ":") {
 		return nil, invalidSpec("action must look like service:Action")
@@ -494,7 +521,12 @@ func (s *Server) Login(ctx context.Context, req *iamv1.LoginRequest) (resp *iamv
 		return nil, toStatus(ctx, fmt.Errorf("user %q: %w", u.Object.Name, store.ErrRenaming))
 	}
 	if needMFA {
-		return nil, fail(codes.Unauthenticated, "MFA_REQUIRED", "MultiFactorAuthenticationRequired", "an MFA code is required")
+		return nil, fail(
+			codes.Unauthenticated,
+			"MFA_REQUIRED",
+			"MultiFactorAuthenticationRequired",
+			"an MFA code is required",
+		)
 	}
 	if err := sameLoginUser(ctx, p, u); err != nil {
 		return nil, toStatus(ctx, err)
@@ -549,7 +581,10 @@ func sameLoginUser(ctx context.Context, p project, u store.Versioned[iam.User]) 
 }
 
 // ValidateSession returns the principal of a console session.
-func (s *Server) ValidateSession(ctx context.Context, req *iamv1.ValidateSessionRequest) (*iamv1.ValidateSessionResponse, error) {
+func (s *Server) ValidateSession(
+	ctx context.Context,
+	req *iamv1.ValidateSessionRequest,
+) (*iamv1.ValidateSessionResponse, error) {
 	sess, err := s.consoleSession(ctx, req.GetSessionToken())
 	if err != nil {
 		return nil, toStatus(ctx, err)
@@ -564,8 +599,13 @@ func (s *Server) ValidateSession(ctx context.Context, req *iamv1.ValidateSession
 		return nil, err
 	}
 	return &iamv1.ValidateSessionResponse{ExpireTime: timestamppb.New(sess.Expires), Principal: &iamv1.Principal{
-		Type: iamv1.PrincipalType_PRINCIPAL_TYPE_USER, Arn: iam.UserARN(sess.Project, u.Object), Project: sess.Project, UniqueId: u.Object.ID,
-		Resource: name(sess.Project, "users", u.Object.Name), MfaAuthenticated: sess.MFA, AuthTime: timestamppb.New(sess.AuthTime),
+		Type: iamv1.PrincipalType_PRINCIPAL_TYPE_USER, Arn: iam.UserARN(sess.Project, u.Object), Project: sess.Project,
+		UniqueId: u.Object.ID,
+		Resource: name(
+			sess.Project,
+			"users",
+			u.Object.Name,
+		), MfaAuthenticated: sess.MFA, AuthTime: timestamppb.New(sess.AuthTime),
 	}}, nil
 }
 
@@ -585,7 +625,8 @@ func (s *Server) consoleSession(ctx context.Context, tok string) (iam.Session, e
 	}
 	sess := v.Object
 	if !s.now().Before(sess.Expires) {
-		if derr := store.Delete[iam.Session](ctx, s.b, sess.Hash, v.Version); derr != nil && !errors.Is(derr, store.ErrNotFound) {
+		if derr := store.Delete[iam.Session](ctx, s.b, sess.Hash, v.Version); derr != nil &&
+			!errors.Is(derr, store.ErrNotFound) {
 			return iam.Session{}, derr
 		}
 		return iam.Session{}, fail(codes.Unauthenticated, "TOKEN_EXPIRED", "ExpiredToken", "the session has expired")

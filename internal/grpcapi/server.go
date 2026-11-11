@@ -176,11 +176,14 @@ func (s *Server) project(id string) project {
 // message size and keepalive limits.
 func ServerOptions(extra ...grpc.ServerOption) []grpc.ServerOption {
 	opts := obsOptions()
-	opts = append(opts,
+	opts = append(
+		opts,
 		grpc.ChainUnaryInterceptor(deadlineUnary, auditUnary),
 		grpc.MaxRecvMsgSize(maxRecvBytes),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: 10 * time.Second, PermitWithoutStream: true}),
-		grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 5 * time.Minute, Time: time.Minute, Timeout: 20 * time.Second}),
+		grpc.KeepaliveParams(
+			keepalive.ServerParameters{MaxConnectionIdle: 5 * time.Minute, Time: time.Minute, Timeout: 20 * time.Second},
+		),
 	)
 	return append(opts, extra...)
 }
@@ -265,7 +268,8 @@ func (v mfaVerifier) VerifyMFA(ctx context.Context, user, serial, code string) e
 	// with or held by other callers. The answer stays Throttling.
 	if throttledBy(err, iam.AttemptUser) {
 		if _, lerr := v.m.RenewLockSerial(context.WithoutCancel(ctx), user, serial); lerr != nil {
-			slog.Default().LogAttrs(ctx, slog.LevelWarn, "mfa lock renewal on throttle failed", slog.String("error", lerr.Error()))
+			slog.Default().
+				LogAttrs(ctx, slog.LevelWarn, "mfa lock renewal on throttle failed", slog.String("error", lerr.Error()))
 		}
 	}
 	return fmt.Errorf("%w: %w", sts.ErrThrottling, err)

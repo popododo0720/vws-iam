@@ -103,7 +103,11 @@ func translate(op string, kind iam.Kind, err error) error {
 		return store.ErrExists
 	case apierrors.IsConflict(err):
 		return store.ErrConflict
-	case apierrors.IsServerTimeout(err), apierrors.IsTimeout(err), apierrors.IsTooManyRequests(err), apierrors.IsServiceUnavailable(err), apierrors.IsInternalError(err):
+	case apierrors.IsServerTimeout(err),
+		apierrors.IsTimeout(err),
+		apierrors.IsTooManyRequests(err),
+		apierrors.IsServiceUnavailable(err),
+		apierrors.IsInternalError(err):
 		return fmt.Errorf("%w: kube %s %s: %w", store.ErrUnavailable, op, kind, err)
 	}
 	return fmt.Errorf("kube %s %s: %w", op, kind, err)

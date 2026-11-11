@@ -68,7 +68,13 @@ type envelopeRef[T any] interface {
 
 // remove deletes key after etag and dependency checks. A missing object is
 // fine with allowMissing.
-func remove[T iam.Object](ctx context.Context, b store.Backend, key, etag string, allowMissing bool, check func(T) error) (store.Versioned[T], bool, error) {
+func remove[T iam.Object](
+	ctx context.Context,
+	b store.Backend,
+	key, etag string,
+	allowMissing bool,
+	check func(T) error,
+) (store.Versioned[T], bool, error) {
 	cur, err := store.Get[T](ctx, b, key)
 	if errors.Is(err, store.ErrNotFound) && allowMissing {
 		return cur, false, nil
@@ -113,7 +119,13 @@ type enveloped interface {
 
 // create stores obj (unless validateOnly), adopting an object left by an
 // earlier attempt of the same request id.
-func create[T enveloped](ctx context.Context, b store.Backend, obj T, requestID string, validateOnly bool) (store.Versioned[T], error) {
+func create[T enveloped](
+	ctx context.Context,
+	b store.Backend,
+	obj T,
+	requestID string,
+	validateOnly bool,
+) (store.Versioned[T], error) {
 	if err := obj.Validate(); err != nil {
 		return store.Versioned[T]{}, err
 	}
