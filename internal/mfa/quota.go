@@ -63,6 +63,12 @@ func (s *Service) claimMFASlot(
 // lockMFA bounds crash recovery to ten seconds. The conditional device
 // commit, not clocks or process-local exclusion, supplies quota safety.
 func (s *Service) lockMFA(ctx context.Context, user string) (store.Versioned[iam.User], func(), error) {
+	return s.lockMFAChecked(ctx, user, nil)
+}
+
+func (s *Service) lockMFAChecked(
+	ctx context.Context, user string, check func(store.Versioned[iam.User]) error,
+) (store.Versioned[iam.User], func(), error) {
 	id := iam.NewUID()
 	for attempt := 0; attempt < 400; attempt++ {
 		u, err := store.Get[iam.User](ctx, s.b, user)
@@ -72,6 +78,11 @@ func (s *Service) lockMFA(ctx context.Context, user string) (store.Versioned[iam
 		if u.Object.Renaming() {
 			return u, nil, store.ErrRenaming
 		}
+		if check != nil {
+			if err := check(u); err != nil {
+				return u, nil, err
+			}
+		}
 		lease := u.Object.MFARegistrationLease
 		if lease.Holder == "" || !s.now().Before(lease.Expires) {
 			u.Object.MFARegistrationLease = iam.MFARegistrationLease{Holder: id, Expires: s.now().Add(10 * time.Second)}
@@ -80,7 +91,7 @@ func (s *Service) lockMFA(ctx context.Context, user string) (store.Versioned[iam
 				u.Version = v
 				return u, func() { s.unlockMFA(ctx, user, id) }, nil
 			}
-			if !errors.Is(err, store.ErrConflict) {
+			if check != nil || !errors.Is(err, store.ErrConflict) {
 				return u, nil, fmt.Errorf("lock mfa registrations: %w", err)
 			}
 		}

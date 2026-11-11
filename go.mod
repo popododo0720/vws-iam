@@ -2,13 +2,13 @@ module github.com/popododo0720/vws-iam
 
 go 1.26.0
 
-toolchain go1.26.10
+toolchain go1.26.11
 
 require (
 	cloud.google.com/go/longrunning v1.3.0
 	github.com/beevik/etree v1.7.0
 	github.com/popododo0720/vws-lib v0.1.1
-	github.com/popododo0720/vws-proto v0.20.0
+	github.com/popododo0720/vws-proto v0.24.0
 	github.com/russellhaering/goxmldsig v1.6.1
 	go.etcd.io/etcd/api/v3 v3.7.3
 	go.etcd.io/etcd/client/v3 v3.7.3

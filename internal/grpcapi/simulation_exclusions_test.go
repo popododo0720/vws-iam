@@ -102,7 +102,7 @@ func TestSimulationPolicyExclusions(t *testing.T) {
 			}
 			// Filtering is simulation-local, and does not change the stored policies.
 			in.PolicyExclusionList = nil
-			_, err := e.api.SimulatePrincipalPolicy(t.Context(), proj, in)
+			_, err := e.api.SimulatePrincipal(t.Context(), proj, in)
 			wantAWS(t, err, codes.Internal, "PolicyEvaluation")
 		})
 	}
@@ -131,7 +131,7 @@ func TestSimulationPolicyExclusionValidation(t *testing.T) {
 			InlinePolicyIdentifier: &inline{AttachmentType: "user", AttachmentName: "alice", PolicyName: "*"},
 		},
 	} {
-		_, err := e.api.SimulatePrincipalPolicy(t.Context(), proj, grpcapi.SimulateInput{
+		_, err := e.api.SimulatePrincipal(t.Context(), proj, grpcapi.SimulateInput{
 			PolicySourceARN:     simARN + "user/alice",
 			ActionNames:         []string{"s3:GetObject"},
 			PolicyExclusionList: []id{omit},
@@ -142,7 +142,7 @@ func TestSimulationPolicyExclusionValidation(t *testing.T) {
 	for i := range tooMany {
 		tooMany[i].PolicyType = "rcp"
 	}
-	_, err := e.api.SimulatePrincipalPolicy(t.Context(), proj, grpcapi.SimulateInput{
+	_, err := e.api.SimulatePrincipal(t.Context(), proj, grpcapi.SimulateInput{
 		PolicySourceARN:     simARN + "user/alice",
 		ActionNames:         []string{"s3:GetObject"},
 		PolicyExclusionList: tooMany,

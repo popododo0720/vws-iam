@@ -167,9 +167,8 @@ func (s *Server) GetProfile(ctx context.Context, project, profileName string) (I
 	return s.getInstanceProfile(ctx, project, profileName)
 }
 
-// DeleteInstanceProfile is IAM DeleteInstanceProfile, which vws-proto
-// does not carry yet (#92).
-func (s *Server) DeleteInstanceProfile(ctx context.Context, project, profileName string) error {
+// DeleteProfile is the service layer of IAM DeleteInstanceProfile (#92).
+func (s *Server) DeleteProfile(ctx context.Context, project, profileName string) error {
 	return s.deleteInstanceProfile(ctx, project, profileName)
 }
 
@@ -221,9 +220,8 @@ type (
 	EvaluationResult       = evaluationResult
 )
 
-// SimulatePrincipalPolicy is IAM SimulatePrincipalPolicy, which vws-proto
-// does not carry yet (#86).
-func (s *Server) SimulatePrincipalPolicy(
+// SimulatePrincipal is the service layer of IAM SimulatePrincipalPolicy (#86).
+func (s *Server) SimulatePrincipal(
 	ctx context.Context, project string, in SimulateInput,
 ) (SimulationPage, error) {
 	return s.simulatePrincipalPolicy(ctx, project, in)
@@ -246,9 +244,10 @@ type EntitiesQuery = entitiesQuery
 // PolicyEntities is one page of ListEntitiesForPolicy.
 type PolicyEntities = policyEntities
 
-// ListEntitiesForPolicy is IAM ListEntitiesForPolicy, which vws-proto
-// does not carry yet (#85).
-func (s *Server) ListEntitiesForPolicy(ctx context.Context, project string, q EntitiesQuery) (PolicyEntities, error) {
+// PolicyEntitiesPage is the service layer of IAM ListEntitiesForPolicy (#85).
+func (s *Server) PolicyEntitiesPage(
+	ctx context.Context, project string, q EntitiesQuery,
+) (PolicyEntities, error) {
 	return s.listEntitiesForPolicy(ctx, project, q)
 }
 
@@ -294,9 +293,8 @@ type TagPage = tagPage
 // AWSTag is one tag of a TagPage.
 type AWSTag = awsTag
 
-// ListRoleTags is IAM ListRoleTags, which vws-proto does not carry yet
-// (#73).
-func (s *Server) ListRoleTags(
+// RoleTags is the service layer of IAM ListRoleTags (#73).
+func (s *Server) RoleTags(
 	ctx context.Context, project, roleName, marker string, maxItems int,
 ) (TagPage, error) {
 	return s.listRoleTags(ctx, project, roleName, marker, maxItems)

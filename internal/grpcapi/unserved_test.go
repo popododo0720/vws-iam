@@ -14,7 +14,7 @@ import (
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
 )
 
-// TestUnservedRPCsAreUnimplemented: the RPCs vws-proto v0.9.0 to v0.20.0
+// TestUnservedRPCsAreUnimplemented: the RPCs vws-proto v0.9.0 to v0.24.0
 // added that this server does not serve yet answer UNIMPLEMENTED (#94 to
 // #108).
 func TestUnservedRPCsAreUnimplemented(t *testing.T) {
@@ -38,6 +38,30 @@ func TestUnservedRPCsAreUnimplemented(t *testing.T) {
 	}
 	ctx := t.Context()
 	for name, call := range map[string]func() error{
+		"ListRoleTags": func() error {
+			_, err := e.roles.ListRoleTags(ctx, &iamv1.ListRoleTagsRequest{})
+			return err
+		},
+		"TagRole": func() error {
+			_, err := e.roles.TagRole(ctx, &iamv1.TagRoleRequest{})
+			return err
+		},
+		"UntagRole": func() error {
+			_, err := e.roles.UntagRole(ctx, &iamv1.UntagRoleRequest{})
+			return err
+		},
+		"ListEntitiesForPolicy": func() error {
+			_, err := e.policies.ListEntitiesForPolicy(ctx, &iamv1.ListEntitiesForPolicyRequest{})
+			return err
+		},
+		"SimulatePrincipalPolicy": func() error {
+			_, err := e.policies.SimulatePrincipalPolicy(ctx, &iamv1.SimulatePrincipalPolicyRequest{})
+			return err
+		},
+		"DeleteInstanceProfile": func() error {
+			_, err := e.profiles.DeleteInstanceProfile(ctx, &iamv1.DeleteInstanceProfileRequest{})
+			return err
+		},
 		"DeleteUserPermissionsBoundary": func() error {
 			_, err := e.users.DeleteUserPermissionsBoundary(ctx, &iamv1.DeleteUserPermissionsBoundaryRequest{})
 			return err

@@ -3,6 +3,7 @@ package grpcapi
 import (
 	"context"
 
+	"cloud.google.com/go/longrunning/autogen/longrunningpb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -126,4 +127,40 @@ func (s *Server) AddRoleToInstanceProfile(
 // before any write and never served as if the field were unset.
 func unservedField(field string) error {
 	return status.Error(codes.Unimplemented, field+" is not served yet")
+}
+
+// TODO(#73): serve ListRoleTags through listRoleTags.
+func (s *Server) ListRoleTags(
+	context.Context, *iamv1.ListRoleTagsRequest,
+) (*iamv1.ListRoleTagsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "ListRoleTags is not served yet")
+}
+
+// TODO(#85): serve ListEntitiesForPolicy through listEntitiesForPolicy.
+func (s *Server) ListEntitiesForPolicy(
+	context.Context, *iamv1.ListEntitiesForPolicyRequest,
+) (*iamv1.ListEntitiesForPolicyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "ListEntitiesForPolicy is not served yet")
+}
+
+// TODO(#92): serve DeleteInstanceProfile through deleteInstanceProfile.
+func (s *Server) DeleteInstanceProfile(
+	context.Context, *iamv1.DeleteInstanceProfileRequest,
+) (*iamv1.DeleteInstanceProfileResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "DeleteInstanceProfile is not served yet")
+}
+
+func (s *Server) TagRole(context.Context, *iamv1.TagRoleRequest) (*longrunningpb.Operation, error) {
+	return nil, status.Error(codes.Unimplemented, "TagRole is not served yet")
+}
+
+func (s *Server) UntagRole(context.Context, *iamv1.UntagRoleRequest) (*longrunningpb.Operation, error) {
+	return nil, status.Error(codes.Unimplemented, "UntagRole is not served yet")
+}
+
+// TODO(#86): serve SimulatePrincipalPolicy through simulatePrincipalPolicy.
+func (s *Server) SimulatePrincipalPolicy(
+	context.Context, *iamv1.SimulatePrincipalPolicyRequest,
+) (*iamv1.SimulatePrincipalPolicyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "SimulatePrincipalPolicy is not served yet")
 }

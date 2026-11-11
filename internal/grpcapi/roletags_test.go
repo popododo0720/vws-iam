@@ -49,7 +49,7 @@ func listAllRoleTags(t *testing.T, e *env, role string, n int) (map[string]strin
 	got := map[string]string{}
 	marker, pages := "", 0
 	for {
-		page, err := e.api.ListRoleTags(t.Context(), proj, role, marker, n)
+		page, err := e.api.RoleTags(t.Context(), proj, role, marker, n)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -90,7 +90,7 @@ func TestListRoleTags(t *testing.T) {
 			seedTaggedRole(t, b, "other", "App", map[string]string{"elsewhere": "yes"})
 
 			for _, name := range []string{"App", "app", "APP"} {
-				page, err := e.api.ListRoleTags(ctx, proj, name, "", 0)
+				page, err := e.api.RoleTags(ctx, proj, name, "", 0)
 				if err != nil {
 					t.Fatalf("%s: %v", name, err)
 				}
@@ -108,7 +108,7 @@ func TestListRoleTags(t *testing.T) {
 				}
 			}
 
-			page, err := e.api.ListRoleTags(ctx, proj, "Plain", "", 0)
+			page, err := e.api.RoleTags(ctx, proj, "Plain", "", 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -116,7 +116,7 @@ func TestListRoleTags(t *testing.T) {
 				t.Fatalf("untagged role: %+v, want an empty page", page)
 			}
 
-			page, err = e.api.ListRoleTags(ctx, "other", "app", "", 0)
+			page, err = e.api.RoleTags(ctx, "other", "app", "", 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -173,21 +173,21 @@ func TestListRoleTagsDefaultPage(t *testing.T) {
 		tags[fmt.Sprintf("k%02d", i)] = "v"
 	}
 	seedTaggedRole(t, b, proj, "Full", tags)
-	page, err := e.api.ListRoleTags(t.Context(), proj, "Full", "", 0)
+	page, err := e.api.RoleTags(t.Context(), proj, "Full", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(page.Tags) != iam.MaxRoleTags || page.IsTruncated {
 		t.Fatalf("default page: %d tags, IsTruncated %v; want %d, false", len(page.Tags), page.IsTruncated, iam.MaxRoleTags)
 	}
-	page, err = e.api.ListRoleTags(t.Context(), proj, "Full", "", iam.MaxRoleTags-1)
+	page, err = e.api.RoleTags(t.Context(), proj, "Full", "", iam.MaxRoleTags-1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(page.Tags) != iam.MaxRoleTags-1 || !page.IsTruncated || page.Marker == "" {
 		t.Fatalf("MaxItems 49: %d tags, IsTruncated %v, Marker %q", len(page.Tags), page.IsTruncated, page.Marker)
 	}
-	last, err := e.api.ListRoleTags(t.Context(), proj, "Full", page.Marker, 0)
+	last, err := e.api.RoleTags(t.Context(), proj, "Full", page.Marker, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestListRoleTagsChangesBetweenPages(t *testing.T) {
 	e := newEnvOn(t, b, &now)
 	ctx := t.Context()
 	seedTaggedRole(t, b, proj, "App", map[string]string{"b": "1", "d": "2", "f": "3", "h": "4"})
-	first, err := e.api.ListRoleTags(ctx, proj, "App", "", 2)
+	first, err := e.api.RoleTags(ctx, proj, "App", "", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,14 +222,14 @@ func TestListRoleTagsChangesBetweenPages(t *testing.T) {
 	if _, err := store.Update(ctx, sb, r.Object, r.Version); err != nil {
 		t.Fatal(err)
 	}
-	second, err := e.api.ListRoleTags(ctx, proj, "App", first.Marker, 2)
+	second, err := e.api.RoleTags(ctx, proj, "App", first.Marker, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := roleTagKeys(second.Tags); !slices.Equal(got, []string{"e", "f"}) || !second.IsTruncated {
 		t.Fatalf("second page %v, IsTruncated %v; want [e f], true", got, second.IsTruncated)
 	}
-	third, err := e.api.ListRoleTags(ctx, proj, "App", second.Marker, 2)
+	third, err := e.api.RoleTags(ctx, proj, "App", second.Marker, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +267,7 @@ func TestListRoleTagsErrors(t *testing.T) {
 		{"marker empty key", proj, "App", marker("\x00"), 0, "InvalidInput"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			page, err := broken.api.ListRoleTags(t.Context(), tc.pid, tc.role, tc.marker, tc.maxItems)
+			page, err := broken.api.RoleTags(t.Context(), tc.pid, tc.role, tc.marker, tc.maxItems)
 			wantAWS(t, err, codes.InvalidArgument, tc.aws)
 			if len(page.Tags) != 0 {
 				t.Fatalf("tags %v with an error", page.Tags)
@@ -277,17 +277,17 @@ func TestListRoleTagsErrors(t *testing.T) {
 
 	e := newEnvOn(t, b, &now)
 	for _, role := range []string{"Missing", strings.Repeat("r", 64)} {
-		_, err := e.api.ListRoleTags(t.Context(), proj, role, "", 1000)
+		_, err := e.api.RoleTags(t.Context(), proj, role, "", 1000)
 		wantAWS(t, err, codes.NotFound, "NoSuchEntity")
 		if want := "The role with name " + role + " cannot be found."; status.Convert(err).Message() != want {
 			t.Fatalf("message %q, want %q", status.Convert(err).Message(), want)
 		}
 	}
-	if _, err := e.api.ListRoleTags(t.Context(), proj, "App", "", 1); err != nil {
+	if _, err := e.api.RoleTags(t.Context(), proj, "App", "", 1); err != nil {
 		t.Fatalf("MaxItems 1 rejected: %v", err)
 	}
 
-	page, err := broken.api.ListRoleTags(t.Context(), proj, "App", "", 0)
+	page, err := broken.api.RoleTags(t.Context(), proj, "App", "", 0)
 	wantAWS(t, err, codes.Internal, "ServiceFailure")
 	if len(page.Tags) != 0 || strings.Contains(err.Error(), "backend exploded") {
 		t.Fatalf("tags %v, error %v; want no tags and no backend detail", page.Tags, err)
