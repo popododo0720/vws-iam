@@ -109,6 +109,7 @@ var ownerRules = []struct {
 		"wire types stay in grpcapi",
 	},
 	{hasPrefix("google.golang.org/grpc"), []string{"internal/grpcapi", "cmd/vws-iam"}, "gRPC stays at the edge"},
+	{hasPrefix("k8s.io", "sigs.k8s.io"), nil, "Kubernetes is retired"},
 	{hasPrefix("go.etcd.io"), []string{"internal/store/etcdstore"}, "etcd client types stay in the etcd store"},
 	{
 		hasPrefix("github.com/popododo0720/vws-lib"),
@@ -213,6 +214,8 @@ func TestArchitectureRules(t *testing.T) {
 	// Every rule must catch a deliberate violation in a probe tree.
 	probe := t.TempDir()
 	for rel, src := range map[string]string{
+		"internal/iam/k.go":      `package iam; import _ "k8s.io/apimachinery/pkg/types"`,
+		"internal/policy/k.go":   `package policy; import _ "sigs.k8s.io/controller-runtime/pkg/client"`,
 		"internal/iam/i.go":      `package iam; import _ "` + module + `/internal/store"`,
 		"internal/policy/p.go":   `package policy; import _ "google.golang.org/protobuf/proto"`,
 		"internal/password/p.go": `package password; import _ "` + module + `/internal/iam"`,
@@ -236,6 +239,8 @@ func TestArchitectureRules(t *testing.T) {
 		writeFile(t, filepath.Join(probe, rel), src)
 	}
 	want := []string{
+		"internal/iam imports k8s.io/apimachinery/pkg/types: Kubernetes is retired",
+		"internal/policy imports sigs.k8s.io/controller-runtime/pkg/client: Kubernetes is retired",
 		"internal/authz imports google.golang.org/grpc: domain services import no transport",
 		"internal/authz imports google.golang.org/grpc: gRPC stays at the edge",
 		"internal/mfa imports google.golang.org/grpc: domain services import no transport",

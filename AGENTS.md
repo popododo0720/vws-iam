@@ -32,6 +32,7 @@ Every row names its enforcer. `TestAgentsRulesNameAnEnforcer` (internal/archtest
 | `internal/iam`, `internal/policy`, `internal/totp`, and `internal/sigv4` are pure: nothing from this module, Kubernetes, gRPC, or protobuf. | `TestArchitectureRules` |
 | `internal/password` imports nothing from this module; `internal/secret` and `internal/store` see only `internal/iam`. | `TestArchitectureRules` |
 | Domain services (`internal/accesskey`, `internal/authz`, `internal/sts`, `internal/mfa`) import no transport. | `TestArchitectureRules` |
+| Kubernetes imports are forbidden in production code. | `TestArchitectureRules` |
 | etcd client packages stay in `internal/store/etcdstore`. | `TestArchitectureRules` |
 | gRPC stays in `internal/grpcapi` and `cmd/vws-iam`; protobuf, genproto, vws-proto, and longrunning types stay in `internal/grpcapi`. | `TestArchitectureRules` |
 | `internal/grpcapi` uses the `store.Backend` contract, never `memstore` or `etcdstore` internals. | `TestArchitectureRules` |
