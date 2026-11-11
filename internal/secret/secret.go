@@ -93,31 +93,45 @@ func NewKeyring(active string, keys map[string][]byte) (*Keyring, error) {
 // of 32 random bytes, and a file named "active" holding the active id.
 // Key bytes never appear in an error.
 func LoadDir(dir string) (*Keyring, error) {
+	return LoadPrefixed(dir, "")
+}
+
+// LoadPrefixed is LoadDir over only the files of dir whose names start
+// with prefix, the id being the rest of the name. A systemd credential
+// loaded from a directory (LoadCredential=kek:/dir) is a set of such
+// files in $CREDENTIALS_DIRECTORY: kek_active and kek_<id>. A missing
+// active file or active key is an error naming the file.
+func LoadPrefixed(dir, prefix string) (*Keyring, error) {
+	activePath := filepath.Join(dir, prefix+"active")
+	b, err := os.ReadFile(activePath) //nolint:gosec // operator-supplied credential path
+	if err != nil {
+		return nil, fmt.Errorf("KEK active id: %w", err)
+	}
+	active := strings.TrimSpace(string(b))
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("KEK dir: %w", err)
 	}
 	keys := map[string][]byte{}
-	var active string
 	for _, e := range entries {
 		name := e.Name()
-		if e.IsDir() || strings.HasPrefix(name, ".") {
+		id, ok := strings.CutPrefix(name, prefix)
+		if !ok || id == "active" || e.IsDir() || strings.HasPrefix(name, ".") {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(dir, name))
+		b, err := os.ReadFile(filepath.Join(dir, name)) //nolint:gosec // operator-supplied credential path
 		if err != nil {
 			return nil, fmt.Errorf("KEK %q: %w", name, err)
 		}
-		s := strings.TrimSpace(string(b))
-		if name == "active" {
-			active = s
-			continue
-		}
-		key, err := base64.StdEncoding.DecodeString(s)
+		key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(b)))
 		if err != nil {
 			return nil, fmt.Errorf("KEK %q is not base64", name)
 		}
-		keys[name] = key
+		keys[id] = key
+	}
+	if _, ok := keys[active]; !ok {
+		return nil, fmt.Errorf("active KEK %q named by %s: no file %s: %w",
+			active, activePath, filepath.Join(dir, prefix+active), ErrUnknownKEK)
 	}
 	return NewKeyring(active, keys)
 }

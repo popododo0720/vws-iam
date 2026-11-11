@@ -111,6 +111,32 @@ func TestLoadDirNeverEchoesKeyMaterial(t *testing.T) {
 	}
 }
 
+// TestLoadPrefixed reads a keyring from systemd credential files next to
+// unrelated credentials, and names the missing file when one is absent.
+func TestLoadPrefixed(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, s string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("etcd-ca.pem", "not a key")
+	if _, err := secret.LoadPrefixed(dir, "kek_"); err == nil || !strings.Contains(err.Error(), "kek_active") {
+		t.Fatalf("missing active file: %v", err)
+	}
+	write("kek_active", "k2\n")
+	write("kek_k1", base64.StdEncoding.EncodeToString(key(t)))
+	_, err := secret.LoadPrefixed(dir, "kek_")
+	if !errors.Is(err, secret.ErrUnknownKEK) || !strings.Contains(err.Error(), "kek_k2") {
+		t.Fatalf("missing active key file: %v", err)
+	}
+	write("kek_k2", base64.StdEncoding.EncodeToString(key(t)))
+	k, err := secret.LoadPrefixed(dir, "kek_")
+	if err != nil || k.Active() != "k2" {
+		t.Fatalf("credential keyring: %v", err)
+	}
+}
+
 func TestFromEnv(t *testing.T) {
 	env := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
 	if _, ok, err := secret.FromEnv(env(nil)); ok || err != nil {

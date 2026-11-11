@@ -1,4 +1,4 @@
-// Package memstore is the in-memory store.Backend for tests and -namespace="".
+// Package memstore is the in-memory store.Backend for tests and -store=memory.
 package memstore
 
 import (

@@ -18,13 +18,10 @@ import (
 )
 
 func TestParseConfig(t *testing.T) {
-	args := []string{"-namespace", "vws-iam", "-kek-dir", "/k", "-listen", ":1", "-insecure-plaintext"}
+	args := []string{"-store=memory", "-kek-dir", "/k", "-listen", ":1", "-insecure-plaintext"}
 	c, err := parseConfig(args, io.Discard, noEnv)
-	if err != nil || c.namespace != "vws-iam" || c.listen != ":1" {
+	if err != nil || c.kekDir != "/k" || c.listen != ":1" {
 		t.Fatalf("%+v %v", c, err)
-	}
-	if _, err := parseConfig([]string{"-namespace", "vws-iam"}, io.Discard, noEnv); err == nil {
-		t.Fatal("persistent store without a KEK accepted")
 	}
 	if _, err := parseConfig([]string{"extra"}, io.Discard, noEnv); err == nil {
 		t.Fatal("extra argument accepted")
@@ -40,21 +37,24 @@ func envOf(m map[string]string) func(string) string { return func(k string) stri
 
 func TestParseConfigEnvAndBootstrap(t *testing.T) {
 	kek := map[string]string{secret.EnvKEK: base64.StdEncoding.EncodeToString(make([]byte, 32)), secret.EnvKEKID: "k1"}
-	if _, err := parseConfig([]string{"-namespace", "ns"}, io.Discard, envOf(kek)); err != nil {
+	mem, err := parseConfig([]string{"-store=memory"}, io.Discard, envOf(kek))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := parseConfig([]string{"-namespace", "ns", "-kek-dir", "/k"}, io.Discard, envOf(kek)); err == nil {
+	if _, err := parseConfig([]string{"-store=memory", "-kek-dir", "/k"}, io.Discard, envOf(kek)); err == nil {
 		t.Fatal("env and dir KEK both accepted")
 	}
-	if _, err := parseConfig([]string{"bootstrap", "-namespace", "ns"}, io.Discard, envOf(kek)); err == nil {
+	boot := []string{"bootstrap", "-etcd-endpoints", "https://10.0.0.1:2379"}
+	creds := map[string]string{envCredentials: "/c"}
+	if _, err := parseConfig(boot, io.Discard, envOf(creds)); err == nil {
 		t.Fatal("bootstrap without root credentials accepted")
 	}
-	kek[envRootProject] = "acme"
-	c, err := parseConfig([]string{"bootstrap", "-namespace", "ns"}, io.Discard, envOf(kek))
+	creds[envRootProject] = "acme"
+	c, err := parseConfig(boot, io.Discard, envOf(creds))
 	if err != nil || !c.bootstrap {
 		t.Fatalf("%+v %v", c, err)
 	}
-	k, err := keyring(c)
+	k, err := keyring(mem)
 	if err != nil || k.Active() != "k1" {
 		t.Fatalf("env KEK: %v", err)
 	}

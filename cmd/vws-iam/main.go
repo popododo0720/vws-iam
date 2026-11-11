@@ -2,10 +2,9 @@
 //
 // All state (users, groups, roles, policies, access keys, MFA devices, STS
 // revocations, replay entries, attempt counters, and operations) persists
-// as iam.vws.popododo0720.io custom resources in one namespace, so every
-// replica reads the same state and a restart loses nothing. -store picks the
-// backend: kube, memory, or auto (kube with -namespace or inside a pod,
-// memory only outside Kubernetes).
+// in etcd under one key prefix, so every replica reads the same state and a
+// restart loses nothing. -store picks the backend: etcd (default) or
+// memory (one process only).
 package main
 
 import (
@@ -20,7 +19,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -38,17 +36,18 @@ import (
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/secret"
 	"github.com/popododo0720/vws-iam/internal/store"
-	"github.com/popododo0720/vws-iam/internal/store/kubestore"
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
 	"github.com/popododo0720/vws-iam/internal/sts"
 )
 
 type config struct {
-	listen, namespace, kubeconfig, kekDir, rootDir, healthAddr string
-	// storeMode is the resolved backend: storeKube or storeMemory.
-	storeMode string
-	// nsFile is the service account namespace file (tests replace it).
-	nsFile string
+	listen, kekDir, rootDir, healthAddr string
+	// storeMode is storeEtcd or storeMemory.
+	storeMode     string
+	etcdEndpoints []string
+	etcdPrefix    string
+	// credDir is $CREDENTIALS_DIRECTORY, set with storeEtcd.
+	credDir string
 	// bootstrap is the one-shot mode: import the root key and exit.
 	bootstrap bool
 	tls       tlsFiles
@@ -61,23 +60,9 @@ type config struct {
 
 // Store modes of -store.
 const (
-	storeAuto   = "auto"
-	storeKube   = "kube"
+	storeEtcd   = "etcd"
 	storeMemory = "memory"
 )
-
-// Pod environment used to find the namespace when -namespace is unset.
-// Kubernetes sets envServiceHost in every container; envPodNamespace comes
-// from the downward API; saNamespaceFile is mounted with the service
-// account token.
-const (
-	envServiceHost  = "KUBERNETES_SERVICE_HOST"
-	envPodNamespace = "POD_NAMESPACE"
-	saNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
-)
-
-// namespaceRE is a Kubernetes namespace name (DNS-1123 label).
-var namespaceRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 
 // Root credential environment of the bootstrap Job (secretKeyRef).
 const (
@@ -89,21 +74,20 @@ const (
 )
 
 const usage = `usage: vws-iam [flags]            serve gRPC
-       vws-iam bootstrap [flags]  import the root key once and exit (idempotent; helm post-install Job)
+       vws-iam bootstrap [flags]  import the root key once and exit (idempotent)
 
-KEK: env VWS_IAM_KEK (base64 of 32 bytes) + VWS_IAM_KEK_ID, or -kek-dir.
+-store=etcd reads systemd credentials from $CREDENTIALS_DIRECTORY: the etcd client TLS
+(etcd-ca.pem, etcd-client.pem, etcd-client-key.pem) and the KEK (kek_active holding the
+active id, kek_<id> the base64 of 32 bytes per key).
+-store=memory KEK: env VWS_IAM_KEK (base64 of 32 bytes) + VWS_IAM_KEK_ID, -kek-dir, or a
+random one.
 Bootstrap root credentials: env VWS_IAM_ROOT_PROJECT, VWS_IAM_ROOT_ACCESS_KEY_ID,
 VWS_IAM_ROOT_SECRET_ACCESS_KEY, or -root-credentials-dir. The root console password
 is optional: env VWS_IAM_ROOT_PASSWORD, or a password file in -root-credentials-dir.
 `
 
 func parseConfig(args []string, stderr io.Writer, getenv func(string) string) (config, error) {
-	return parseConfigNS(args, stderr, getenv, saNamespaceFile)
-}
-
-// parseConfigNS is parseConfig reading the pod namespace from nsFile.
-func parseConfigNS(args []string, stderr io.Writer, getenv func(string) string, nsFile string) (config, error) {
-	c := config{getenv: getenv, nsFile: nsFile}
+	c := config{getenv: getenv}
 	if len(args) > 0 && args[0] == "bootstrap" {
 		c.bootstrap, args = true, args[1:]
 	}
@@ -115,14 +99,13 @@ func parseConfigNS(args []string, stderr io.Writer, getenv func(string) string, 
 	}
 	fs.SetOutput(stderr)
 	fs.StringVar(&c.listen, "listen", "127.0.0.1:9095", "gRPC listen address")
-	fs.StringVar(&c.storeMode, "store", storeAuto,
-		"backend: kube (custom resources, shared by every replica), memory (one process, lost on exit; "+
-			"never with replicas), or auto (kube with -namespace or inside a pod, else memory)")
-	fs.StringVar(&c.namespace, "namespace", "",
-		"Kubernetes namespace of the IAM custom resources; empty uses the pod namespace "+
-			"(env POD_NAMESPACE, then the service account namespace file)")
-	fs.StringVar(&c.kubeconfig, "kubeconfig", "", "kubeconfig path; empty uses in-cluster config")
-	fs.StringVar(&c.kekDir, "kek-dir", "", "directory of the mounted vws-iam-kek Secret: one base64 32-byte key per id and an \"active\" file")
+	fs.StringVar(&c.storeMode, "store", storeEtcd,
+		"backend: etcd (shared by every replica) or memory (one process, lost on exit; never with replicas)")
+	var endpoints string
+	fs.StringVar(&endpoints, "etcd-endpoints", "", "comma-separated https://host:port etcd client URLs (-store=etcd)")
+	fs.StringVar(&c.etcdPrefix, "etcd-prefix", "/vws/iam", "etcd key prefix of the IAM objects (-store=etcd)")
+	fs.StringVar(&c.kekDir, "kek-dir", "",
+		"-store=memory only: KEK directory of one base64 32-byte key per id and an \"active\" file")
 	fs.StringVar(&c.rootDir, "root-credentials-dir", "",
 		"optional mounted Secret with project, access_key_id and secret_access_key files: imported once as that "+
 			"project's root key; an optional password file sets the root console password")
@@ -142,7 +125,7 @@ func parseConfigNS(args []string, stderr io.Writer, getenv func(string) string, 
 	if fs.NArg() != 0 {
 		return c, fmt.Errorf("unexpected arguments %q", fs.Args())
 	}
-	if err := c.resolveStore(); err != nil {
+	if err := c.checkStore(endpoints); err != nil {
 		return c, err
 	}
 	if err := checkSAML(c.saml); err != nil {
@@ -155,65 +138,17 @@ func parseConfigNS(args []string, stderr io.Writer, getenv func(string) string, 
 	}
 	hasEnvKEK := getenv(secret.EnvKEK) != "" || getenv(secret.EnvKEKID) != ""
 	switch {
+	case c.storeMode == storeEtcd && (hasEnvKEK || c.kekDir != ""):
+		return c, fmt.Errorf("-store=etcd reads the KEK from $%s (%sactive, %s<id>), "+
+			"not from VWS_IAM_KEK/VWS_IAM_KEK_ID or -kek-dir", envCredentials, credKEKPrefix, credKEKPrefix)
 	case hasEnvKEK && c.kekDir != "":
 		return c, errors.New("set either VWS_IAM_KEK/VWS_IAM_KEK_ID or -kek-dir, not both")
-	case !hasEnvKEK && c.kekDir == "" && (c.storeMode == storeKube || c.bootstrap):
-		return c, errors.New("a KEK (VWS_IAM_KEK + VWS_IAM_KEK_ID, or -kek-dir) is required with the kube " +
-			"store or bootstrap: an ephemeral KEK would make stored secrets unreadable")
-	case c.bootstrap && c.storeMode != storeKube:
-		return c, errors.New("bootstrap needs the kube store (-namespace, or run in a pod)")
+	case c.bootstrap && c.storeMode != storeEtcd:
+		return c, errors.New("bootstrap needs -store=etcd")
 	case c.bootstrap && c.rootDir == "" && getenv(envRootProject) == "":
 		return c, errors.New("bootstrap needs root credentials (VWS_IAM_ROOT_* env or -root-credentials-dir)")
 	}
 	return c, nil
-}
-
-// resolveStore turns -store and -namespace into storeKube with a
-// namespace, or storeMemory. Inside a pod, auto never falls back to
-// memory: replicas with private memory would diverge and lose state on
-// restart (#110), so an unknown namespace is an error instead.
-func (c *config) resolveStore() error {
-	switch c.storeMode {
-	case storeMemory:
-		if c.namespace != "" {
-			return errors.New("-store=memory conflicts with -namespace")
-		}
-		return nil
-	case storeAuto:
-		if c.namespace == "" && c.getenv(envServiceHost) == "" {
-			c.storeMode = storeMemory
-			return nil
-		}
-	case storeKube:
-	default:
-		return fmt.Errorf("-store must be %s, %s or %s, not %q", storeAuto, storeKube, storeMemory, c.storeMode)
-	}
-	c.storeMode = storeKube
-	if c.namespace == "" {
-		ns, err := podNamespace(c.getenv, c.nsFile)
-		if err != nil {
-			return err
-		}
-		c.namespace = ns
-	}
-	if !namespaceRE.MatchString(c.namespace) {
-		return fmt.Errorf("namespace %q is not a Kubernetes namespace name", c.namespace)
-	}
-	return nil
-}
-
-// podNamespace is env POD_NAMESPACE, else the service account namespace
-// file.
-func podNamespace(getenv func(string) string, nsFile string) (string, error) {
-	if ns := strings.TrimSpace(getenv(envPodNamespace)); ns != "" {
-		return ns, nil
-	}
-	b, err := os.ReadFile(nsFile) //nolint:gosec // fixed service account path; tests pass a temp file
-	if err != nil {
-		return "", fmt.Errorf("kube store needs a namespace: pass -namespace, set %s, or mount the "+
-			"service account (%w); -store=memory keeps state in one process only", envPodNamespace, err)
-	}
-	return strings.TrimSpace(string(b)), nil
 }
 
 func main() {
@@ -242,19 +177,28 @@ func main() {
 	}
 }
 
-func openStore(cfg config) (store.Backend, error) {
+// openStore opens the backend and returns the function that closes it.
+func openStore(cfg config) (store.Backend, func() error, error) {
 	if cfg.storeMode == storeMemory {
-		return memstore.New(), nil
+		return memstore.New(), func() error { return nil }, nil
 	}
-	s, err := kubestore.Open(cfg.kubeconfig, cfg.namespace)
+	s, err := openEtcd(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("open store: %w", err)
+		return nil, nil, err
 	}
-	return store.WithRetry(s, 4, 100*time.Millisecond), nil
+	return s, s.Close, nil
 }
 
-// keyring loads the KEK keyring; memory mode may use a random one.
+// keyring loads the KEK keyring: from the credential files with the etcd
+// store; memory mode may use a random one.
 func keyring(cfg config) (*secret.Keyring, error) {
+	if cfg.storeMode == storeEtcd {
+		k, err := secret.LoadPrefixed(cfg.credDir, credKEKPrefix)
+		if err != nil {
+			return nil, fmt.Errorf("load KEK: %w", err)
+		}
+		return k, nil
+	}
 	if cfg.getenv != nil {
 		k, ok, err := secret.FromEnv(cfg.getenv)
 		if err != nil {
@@ -360,10 +304,11 @@ func run(ctx context.Context, cfg config) (err error) {
 		return err
 	}
 	log.LogAttrs(ctx, slog.LevelInfo, "loaded KEK keyring", slog.String("active_kek", keys.Active()))
-	backend, err := openStore(cfg)
+	backend, closeStore, err := openStore(cfg)
 	if err != nil {
 		return err
 	}
+	defer func() { err = errors.Join(err, closeStore()) }()
 	if cfg.storeMode == storeMemory {
 		log.LogAttrs(ctx, slog.LevelWarn, "state is in memory: not shared between replicas and lost on exit",
 			slog.String("store", cfg.storeMode))
@@ -425,7 +370,7 @@ func run(ctx context.Context, cfg config) (err error) {
 		srv.GracefulStop()
 	}()
 	log.LogAttrs(ctx, slog.LevelInfo, "serving", slog.String("addr", lis.Addr().String()),
-		slog.String("store", cfg.storeMode), slog.String("namespace", cfg.namespace), slog.Bool("mtls", cfg.tls.enabled()),
+		slog.String("store", cfg.storeMode), slog.Bool("mtls", cfg.tls.enabled()),
 		slog.Bool("saml", cfg.saml != (sts.SAMLServiceProvider{})))
 	if err := srv.Serve(lis); err != nil {
 		return fmt.Errorf("serve: %w", err)
@@ -438,9 +383,8 @@ func run(ctx context.Context, cfg config) (err error) {
 const storeWaitAttempts = 6
 
 // waitStore checks the store before serving, retrying with exponential
-// backoff, each try under its own deadline. A missing CRD, Role or
-// namespace fails startup, so a rollout stops on the old pods instead of
-// serving errors.
+// backoff, each try under its own deadline. An unreachable etcd or a
+// refused client certificate fails startup instead of serving errors.
 func waitStore(
 	ctx context.Context, log *slog.Logger, ready func(context.Context) error, attempts int, base time.Duration,
 ) error {
@@ -522,17 +466,18 @@ func collectReplays(ctx context.Context, log *slog.Logger, api *grpcapi.Server) 
 	}
 }
 
-// runBootstrap is the one-shot Job: open the store, import the root key
+// runBootstrap is the one-shot unit: open the store, import the root key
 // (a no-op when it exists) and exit. It logs the project only.
-func runBootstrap(ctx context.Context, cfg config) error {
+func runBootstrap(ctx context.Context, cfg config) (err error) {
 	keys, err := keyring(cfg)
 	if err != nil {
 		return err
 	}
-	backend, err := openStore(cfg)
+	backend, closeStore, err := openStore(cfg)
 	if err != nil {
 		return err
 	}
+	defer func() { err = errors.Join(err, closeStore()) }()
 	project, err := bootstrapRoot(ctx, backend, keys, cfg)
 	if err != nil {
 		return err

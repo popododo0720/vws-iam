@@ -1,7 +1,9 @@
 # Durable shared state for IAM replicas
 
 Part of #110. This note records the storage decision behind the
-`-store` flag in `cmd/vws-iam`.
+`-store` flag in `cmd/vws-iam`. The Kubernetes store it chose is retired:
+since #450 and #451 the shared store is etcd (`internal/store/etcdstore`),
+see Backend selection below.
 
 ## Problem
 
@@ -40,25 +42,29 @@ No new backend and no leader are needed:
 
 ## Backend selection
 
-`-store` takes `auto` (default), `kube` or `memory`:
+`-store` takes `etcd` (default) or `memory`; `kube`, `auto`,
+`-namespace` and `-kubeconfig` are refused:
 
-- `auto` picks `kube` when `-namespace` is set or the process runs in a
-  pod (`KUBERNETES_SERVICE_HOST` is set); otherwise `memory`.
-- The namespace comes from `-namespace`, then `POD_NAMESPACE`, then the
-  service account namespace file. A pod with no namespace fails startup
-  instead of silently falling back to memory.
+- `etcd` connects to the `-etcd-endpoints` (comma-separated
+  `https://host:port`) and keeps every object under `-etcd-prefix`
+  (default `/vws/iam`). The client TLS and the KEK come only from
+  `$CREDENTIALS_DIRECTORY`, which systemd fills from `LoadCredential=`:
+  `etcd-ca.pem`, `etcd-client.pem`, `etcd-client-key.pem`, and the KEK
+  directory credential `kek` (`kek_active` holding the active id,
+  `kek_<id>` the base64 of 32 bytes for each key). A missing file fails
+  startup with an error naming it.
 - `memory` keeps state in one process only and logs a warning. It is for
   local runs and tests, never for replicas.
 
 Before serving, the store is probed with exponential backoff, each try
-under its own deadline. A missing CRD or Role stops the rollout, so the
-old pods keep serving instead of new pods returning errors. The same
-probe backs `/readyz`.
+under its own deadline. An unreachable etcd or a refused client
+certificate fails startup instead of serving errors. The same probe
+backs `/readyz`.
 
 ## Restart and upgrade safety
 
 - Objects written by a previous release decode unchanged
-  (`TestUpgradeKeepsPersistedState`, `TestPreviousReleaseRecordsDecode`).
+  (`TestPreviousReleaseRecordsDecode`).
 - The root-key bootstrap is idempotent: an existing key is kept
   (`store.ErrExists` is not an error).
 - Deployments that ran in memory had no persisted state, so there is
@@ -66,23 +72,22 @@ probe backs `/readyz`.
 
 ## Deployment requirements
 
-Owned by vws-deploy, listed here so the chart can be checked against it:
+Owned by the installer (`vws install`), listed here so the unit can be
+checked against it:
 
-1. Install `deploy/crds` and `deploy/rbac` (namespaced Role, only the
-   verbs the store calls).
-2. Give the store API credentials: mount the service account token, or
-   pass `-kubeconfig`.
-3. Give the store the namespace that holds its objects: set
-   `POD_NAMESPACE` from `metadata.namespace`, or mount the service
-   account namespace file.
-4. Provide the KEK through the Secret-backed environment or `-kek-dir`.
-5. Raise `replicas` above one only after steps 1 to 4.
+1. Run etcd with client mutual TLS and give vws-iam a client
+   certificate it accepts.
+2. Pass `-store=etcd -etcd-endpoints https://...` and load the
+   credentials with `LoadCredential=`: `etcd-ca.pem`, `etcd-client.pem`,
+   `etcd-client-key.pem` and the KEK directory as `kek`.
+3. Run more than one replica only on the same etcd, prefix and KEK.
 
 ## Evidence
 
-- `TestReplicasShareDurableState` (envtest) writes a user on one replica
-  and reads it from another. It failed before the change with
-  `replica B does not see the user written on A: not found`.
-- Live evidence on the vws-test cluster (users and keys survive a pod
-  restart and are visible from every replica) is still open. Field
-  checks are paused until further notice, so this note does not claim it.
+- `TestReplicasShareDurableState` (embedded etcd over mutual TLS) writes
+  a user on one replica and reads it from another and from a restarted
+  one.
+- `TestEtcdStoreServes` starts `vws-iam -store etcd` against that etcd
+  and gets SERVING; `TestMissingCredentialFailsStartup` removes each
+  credential file in turn.
+- Live evidence is deferred until after phase 1 (owner decision).
