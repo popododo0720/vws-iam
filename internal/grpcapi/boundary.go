@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
+	"strings"
+	"time"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/store"
@@ -97,8 +100,8 @@ func (s *Server) putRolePermissionsBoundary(ctx context.Context, pid, roleName, 
 		return invalidInput("ARN " + boundaryARN + " is not valid.")
 	}
 	p := s.project(pid)
-	if err := p.boundaryPolicy(ctx, boundaryARN); err != nil {
-		return err
+	if _, err := p.boundaryPolicy(ctx, boundaryARN); err != nil {
+		return toStatus(ctx, err)
 	}
 	for attempt := 1; ; attempt++ {
 		cur, err := store.Get[iam.Role](ctx, p.b, roleName)
@@ -119,11 +122,17 @@ func (s *Server) putRolePermissionsBoundary(ctx context.Context, pid, roleName, 
 		r.PermissionsBoundary = boundaryARN
 		bumpRole(&r)
 		r.Updated = s.now().UTC()
-		_, err = store.Update(ctx, p.b, r, cur.Version)
+		pol, err := p.reserveBoundaryPolicy(ctx, boundaryARN)
+		if err == nil {
+			_, err = store.UpdateIf(ctx, p.b, r, cur.Version, store.PreOf(pol))
+		}
 		switch {
 		case err == nil:
 			return nil
 		case errors.Is(err, store.ErrConflict) && attempt < maxDeleteAttempts:
+			if waitErr := waitBoundaryConflict(ctx, attempt); waitErr != nil {
+				return toStatus(ctx, errors.Join(err, waitErr))
+			}
 			continue
 		case errors.Is(err, store.ErrNotFound):
 			return notFound("The role with name " + roleName + " cannot be found.")
@@ -224,8 +233,8 @@ func (s *Server) putUserPermissionsBoundary(ctx context.Context, pid, userName, 
 		return invalidInput("ARN " + boundaryARN + " is not valid.")
 	}
 	p := s.project(pid)
-	if err := p.boundaryPolicy(ctx, boundaryARN); err != nil {
-		return err
+	if _, err := p.boundaryPolicy(ctx, boundaryARN); err != nil {
+		return toStatus(ctx, err)
 	}
 	for attempt := 1; ; attempt++ {
 		cur, err := store.Get[iam.User](ctx, p.b, userName)
@@ -248,11 +257,17 @@ func (s *Server) putUserPermissionsBoundary(ctx context.Context, pid, userName, 
 		u.PermissionsBoundary = boundaryARN
 		bumpUser(&u)
 		u.Updated = s.now().UTC()
-		_, err = store.Update(ctx, p.b, u, cur.Version)
+		pol, err := p.reserveBoundaryPolicy(ctx, boundaryARN)
+		if err == nil {
+			_, err = store.UpdateIf(ctx, p.b, u, cur.Version, store.PreOf(pol))
+		}
 		switch {
 		case err == nil:
 			return nil
 		case errors.Is(err, store.ErrConflict) && attempt < maxDeleteAttempts:
+			if waitErr := waitBoundaryConflict(ctx, attempt); waitErr != nil {
+				return toStatus(ctx, errors.Join(err, waitErr))
+			}
 			continue
 		case errors.Is(err, store.ErrNotFound):
 			return notFound("The user with name " + userName + " cannot be found.")
@@ -270,13 +285,44 @@ const (
 
 // boundaryPolicy reports NoSuchEntity unless arn names a managed policy of
 // project p, path included, as the authorizer resolves attached policies.
-func (p project) boundaryPolicy(ctx context.Context, arn string) error {
-	found, err := p.managedPolicy(ctx, arn)
+func (p project) boundaryPolicy(ctx context.Context, arn string) (store.Versioned[iam.Policy], error) {
+	var zero store.Versioned[iam.Policy]
+	id := arn[strings.LastIndexByte(arn, '/')+1:]
+	if !strings.HasPrefix(arn, iam.ARN("iam", "", p.id, "policy/")) || !iam.ValidPolicyName(id) {
+		return zero, notFound("Policy " + arn + " does not exist or is not attachable.")
+	}
+	pol, err := store.Get[iam.Policy](ctx, p.b, id)
+	if errors.Is(err, store.ErrNotFound) || (err == nil && iam.PolicyARN(p.id, pol.Object) != arn) {
+		return zero, notFound("Policy " + arn + " does not exist or is not attachable.")
+	}
+	return pol, err
+}
+
+// reserveBoundaryPolicy moves the policy version before publishing a boundary.
+// DeletePolicy also advances it before scanning references: either it sees
+// the reference, its delete CAS loses to this reservation, or its deletion
+// invalidates the boundary's UpdateIf. This is a store-level fence, not a
+// process-local lock, and therefore also orders writers on other replicas.
+func (p project) reserveBoundaryPolicy(ctx context.Context, arn string) (store.Versioned[iam.Policy], error) {
+	pol, err := p.boundaryPolicy(ctx, arn)
 	if err != nil {
-		return toStatus(ctx, err)
+		return pol, err
 	}
-	if !found {
-		return notFound("Policy " + arn + " does not exist or is not attachable.")
+	pol.Object.ReferenceGeneration++
+	pol.Version, err = store.Update(ctx, p.b, pol.Object, pol.Version)
+	return pol, err
+}
+
+// Reservations intentionally invalidate concurrent writers. Back off before
+// reserving again so contending replicas leave one another time to publish.
+func waitBoundaryConflict(ctx context.Context, attempt int) error {
+	d := min(5*time.Millisecond<<min(attempt-1, 16), 200*time.Millisecond)
+	timer := time.NewTimer(d/2 + time.Duration(rand.Int64N(int64(d/2)+1)))
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("wait for boundary conflict retry: %w", ctx.Err())
+	case <-timer.C:
+		return nil
 	}
-	return nil
 }
