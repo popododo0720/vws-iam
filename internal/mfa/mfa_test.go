@@ -2,10 +2,10 @@ package mfa_test
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/base32"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"testing"
@@ -34,7 +34,7 @@ func setup(t *testing.T) (*mfa.Service, store.Backend, *clock) {
 // backend is the unwrapped one.
 func setupOn(t *testing.T, wrap func(store.Backend) store.Backend) (*mfa.Service, store.Backend, *clock) {
 	k := make([]byte, 32)
-	if _, err := rand.Read(k); err != nil {
+	if _, err := rand.NewChaCha8([32]byte{1}).Read(k); err != nil {
 		t.Fatal(err)
 	}
 	keys, err := secret.NewKeyring("kek-1", map[string][]byte{"kek-1": k})

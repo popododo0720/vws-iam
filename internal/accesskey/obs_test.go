@@ -84,7 +84,7 @@ func TestOperationsAreMeasuredAndTraced(t *testing.T) {
 	ctx := context.Background()
 	b := memstore.New()
 	withUser(t, b, "carol")
-	svc := accesskey.New(b, b, "proj-a", ring(t, "kek-1", map[string][]byte{"kek-1": kek(t)}), nil)
+	svc := accesskey.New(b, b, "proj-a", ring(t, "kek-1", map[string][]byte{"kek-1": kek(t, 21)}), nil)
 	spans.Reset()
 	before := counts(ctx, t, "vws.iam.access_key.operations")
 
@@ -176,7 +176,7 @@ func (u updateFails) Update(
 }
 
 func TestRewrapIsCounted(t *testing.T) {
-	k1, k2 := kek(t), kek(t)
+	k1, k2 := kek(t, 22), kek(t, 23)
 	for _, tc := range []struct {
 		name    string
 		update  error
@@ -220,12 +220,12 @@ func TestErrorsCarryContext(t *testing.T) {
 	ctx := context.Background()
 	b := memstore.New()
 	withUser(t, b, "erin")
-	svc := accesskey.New(b, b, "proj-a", ring(t, "kek-1", map[string][]byte{"kek-1": kek(t)}), nil)
+	svc := accesskey.New(b, b, "proj-a", ring(t, "kek-1", map[string][]byte{"kek-1": kek(t, 24)}), nil)
 	cred, err := svc.Create(ctx, "erin")
 	if err != nil {
 		t.Fatal(err)
 	}
-	other := accesskey.New(b, b, "proj-a", ring(t, "kek-9", map[string][]byte{"kek-9": kek(t)}), nil)
+	other := accesskey.New(b, b, "proj-a", ring(t, "kek-9", map[string][]byte{"kek-9": kek(t, 25)}), nil)
 	_, openErr := other.GetSigningCredential(ctx, cred.AccessKeyID)
 	_, ownErr := svc.Get(ctx, "mallory", cred.AccessKeyID)
 	_, missingErr := svc.Get(ctx, "mallory", "AKIAUNKNOWNUNKNOWN00")

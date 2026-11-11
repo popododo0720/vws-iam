@@ -2,9 +2,9 @@ package accesskey_test
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"testing"
 
@@ -21,9 +21,9 @@ import (
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
 )
 
-func kek(t *testing.T) []byte {
+func kek(t *testing.T, seed byte) []byte {
 	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
+	if _, err := rand.NewChaCha8([32]byte{seed}).Read(b); err != nil {
 		t.Fatal(err)
 	}
 	return b
@@ -58,7 +58,7 @@ func TestSecretIsNeverStoredInPlaintext(t *testing.T) {
 	c := fakeKube()
 	b := kubestore.New(c, "vws-iam")
 	withUser(t, b, "alice")
-	svc := accesskey.New(b, b, "proj-a", ring(t, "kek-1", map[string][]byte{"kek-1": kek(t)}), nil)
+	svc := accesskey.New(b, b, "proj-a", ring(t, "kek-1", map[string][]byte{"kek-1": kek(t, 1)}), nil)
 	cred, err := svc.Create(context.Background(), "alice")
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +100,7 @@ func TestSecretIsNeverStoredInPlaintext(t *testing.T) {
 func TestInactiveKeyIsRejected(t *testing.T) {
 	b := memstore.New()
 	withUser(t, b, "bob")
-	svc := accesskey.New(b, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t)}), nil)
+	svc := accesskey.New(b, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t, 2)}), nil)
 	ctx := context.Background()
 	cred, err := svc.Create(ctx, "bob")
 	if err != nil {
@@ -133,7 +133,7 @@ func TestAtMostTwoKeysPerUserAndOwnership(t *testing.T) {
 	b := memstore.New()
 	withUser(t, b, "carol")
 	withUser(t, b, "dave")
-	svc := accesskey.New(b, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t)}), nil)
+	svc := accesskey.New(b, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t, 3)}), nil)
 	ctx := context.Background()
 	var ids []string
 	for range 2 {
@@ -160,7 +160,7 @@ func TestAtMostTwoKeysPerUserAndOwnership(t *testing.T) {
 func TestKEKRotationReadsOldKeyIDAndRewraps(t *testing.T) {
 	b := memstore.New()
 	withUser(t, b, "erin")
-	k1, k2 := kek(t), kek(t)
+	k1, k2 := kek(t, 4), kek(t, 5)
 	ctx := context.Background()
 	cred, err := accesskey.New(b, b, "proj-a", ring(t, "kek-1", map[string][]byte{"kek-1": k1}), nil).Create(ctx, "erin")
 	if err != nil {
@@ -182,7 +182,7 @@ func TestKEKRotationReadsOldKeyIDAndRewraps(t *testing.T) {
 		t.Fatalf("after retiring kek-1: %v", err)
 	}
 	// A keyring without the KEK cannot open it.
-	other := accesskey.New(b, b, "proj-a", ring(t, "kek-9", map[string][]byte{"kek-9": kek(t)}), nil)
+	other := accesskey.New(b, b, "proj-a", ring(t, "kek-9", map[string][]byte{"kek-9": kek(t, 6)}), nil)
 	if _, err := other.GetSigningCredential(ctx, cred.AccessKeyID); !errors.Is(err, secret.ErrUnknownKEK) {
 		t.Fatalf("foreign keyring: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestKEKRotationReadsOldKeyIDAndRewraps(t *testing.T) {
 func TestImportKeepsExistingCredentialAndIsIdempotentlyRejected(t *testing.T) {
 	b := memstore.New()
 	withUser(t, b, "root")
-	svc := accesskey.New(b, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t)}), nil)
+	svc := accesskey.New(b, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t, 7)}), nil)
 	ctx := context.Background()
 	id, sec := "AKIAABCDEFGHIJKLMNOP", "0123456789012345678901234567890123456789"
 	if _, err := svc.Import(ctx, "root", id, sec, false); err != nil {
@@ -213,7 +213,7 @@ func TestIndexAndRootKey(t *testing.T) {
 	b := memstore.New()
 	scopedA := store.Scoped(b, "proj-a")
 	withUser(t, scopedA, "alice")
-	svc := accesskey.New(scopedA, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t)}), nil)
+	svc := accesskey.New(scopedA, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t, 8)}), nil)
 	ctx := context.Background()
 	cred, err := svc.Create(ctx, "alice")
 	if err != nil {
@@ -243,7 +243,7 @@ func TestIndexAndRootKey(t *testing.T) {
 func TestDeleteCheckedKeepsTheKeyUnlessThePreconditionHolds(t *testing.T) {
 	b := memstore.New()
 	withUser(t, b, "frank")
-	svc := accesskey.New(b, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t)}), nil)
+	svc := accesskey.New(b, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t, 9)}), nil)
 	ctx := context.Background()
 	cred, err := svc.Create(ctx, "frank")
 	if err != nil {
@@ -305,7 +305,7 @@ func TestDeleteCheckedKeepsTheKeyUnlessThePreconditionHolds(t *testing.T) {
 func TestReservedKeyIsInertUntilActivated(t *testing.T) {
 	b := memstore.New()
 	withUser(t, b, "gina")
-	svc := accesskey.New(b, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t)}), nil)
+	svc := accesskey.New(b, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t, 10)}), nil)
 	ctx := context.Background()
 	lock := iam.MembershipLock{Name: iam.MembershipLockKey}
 	lv, err := store.Create(ctx, b, lock)
@@ -378,7 +378,7 @@ func TestFailedSweepOfReservedKeyFailsClosed(t *testing.T) {
 			failing := false
 			b := failingKeyDelete{Backend: tc.open(), on: &failing}
 			withUser(t, b, "gina")
-			svc := accesskey.New(b, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t)}), nil)
+			svc := accesskey.New(b, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t, 11)}), nil)
 			ctx := context.Background()
 			if _, err := svc.Create(ctx, "gina"); err != nil {
 				t.Fatal(err)
@@ -472,7 +472,7 @@ func TestFailedSweepOfPendingKeyFailsClosed(t *testing.T) {
 			failing := false
 			b := failingKeyDelete{Backend: tc.open(), on: &failing}
 			withUser(t, b, "gina")
-			svc := accesskey.New(b, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t)}), nil)
+			svc := accesskey.New(b, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t, 12)}), nil)
 			ctx := context.Background()
 			lock := iam.MembershipLock{Name: iam.MembershipLockKey}
 			lv, err := store.Create(ctx, b, lock)
@@ -518,7 +518,7 @@ func (g goneKeyDelete) DeleteIf(ctx context.Context, kind iam.Kind, key, version
 func TestSweepOfGoneKeyIsNotAFailure(t *testing.T) {
 	b := goneKeyDelete{memstore.New()}
 	withUser(t, b, "gina")
-	svc := accesskey.New(b, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t)}), nil)
+	svc := accesskey.New(b, b, "proj-a", ring(t, "k", map[string][]byte{"k": kek(t, 13)}), nil)
 	ctx := context.Background()
 	lock := iam.MembershipLock{Name: iam.MembershipLockKey}
 	lv, err := store.Create(ctx, b, lock)

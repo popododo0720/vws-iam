@@ -2,16 +2,17 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
 	"errors"
 	"io"
+	"math/rand/v2"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/cryptotest"
 	"time"
 
 	"go.etcd.io/etcd/server/v3/embed"
@@ -33,7 +34,7 @@ func writeCredentials(t *testing.T, ca testCA) string {
 	dir := t.TempDir()
 	cert, key := ca.leaf(t, "vws-iam", x509.ExtKeyUsageClientAuth)
 	kek := make([]byte, 32)
-	if _, err := rand.Read(kek); err != nil {
+	if _, err := rand.NewChaCha8([32]byte{1}).Read(kek); err != nil {
 		t.Fatal(err)
 	}
 	for name, b := range map[string][]byte{
@@ -88,6 +89,7 @@ func credEnv(dir string, extra map[string]string) func(string) string {
 // TestEtcdStoreServes: vws-iam -store etcd starts against etcd over
 // mutual TLS and answers health checks.
 func TestEtcdStoreServes(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 486)
 	endpoint, creds := startEtcd(t)
 	addr := freeAddr(t)
 	args := []string{"-etcd-endpoints", endpoint, "-health-listen=", "-listen", addr}
@@ -124,6 +126,7 @@ func TestEtcdStoreServes(t *testing.T) {
 // TestMissingCredentialFailsStartup: each missing credential file stops
 // startup with an error naming that file, before etcd is dialed.
 func TestMissingCredentialFailsStartup(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 486)
 	for _, name := range []string{credEtcdCA, credEtcdCert, credEtcdKey, credKEKPrefix + "active", credKEKPrefix + "k1"} {
 		t.Run(name, func(t *testing.T) {
 			dir := writeCredentials(t, newCA(t, "etcd-ca"))
@@ -183,6 +186,7 @@ func (r replica) keySvc(project string) *accesskey.Service {
 // TestReplicasShareDurableState is #110 on etcd: two replicas on one etcd
 // see each other's writes, and a restarted replica still sees them.
 func TestReplicasShareDurableState(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 486)
 	endpoint, creds := startEtcd(t)
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
@@ -239,6 +243,7 @@ func TestReplicasShareDurableState(t *testing.T) {
 // TestBootstrapOnEtcd: vws-iam bootstrap imports the root key into etcd,
 // a second run keeps it, and a serving replica signs with it.
 func TestBootstrapOnEtcd(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 486)
 	endpoint, creds := startEtcd(t)
 	sec, err := accesskey.NewSecret()
 	if err != nil {

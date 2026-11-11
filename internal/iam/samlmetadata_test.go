@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"strings"
 	"testing"
+	"testing/cryptotest"
 	"time"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
@@ -74,6 +75,7 @@ func entity(attrs, children string) string {
 }
 
 func TestParseSAMLMetadata(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 486)
 	certA, a := testCert(t, "a")
 	certB, b := testCert(t, "b")
 	_, enc := testCert(t, "enc")
@@ -262,6 +264,7 @@ func TestParseSAMLMetadata(t *testing.T) {
 }
 
 func TestParseSAMLMetadataDepthBoundary(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 486)
 	_, a := testCert(t, "a")
 	// The entity is level 1 and the IDP level 2, so n more elements nest to
 	// level 2+n; the limit is 64 levels.

@@ -2,10 +2,10 @@ package sts_test
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"math/rand/v2"
 	"strings"
 	"testing"
 	"time"
@@ -342,9 +342,10 @@ func TestDecodeAuthorizationMessageExpiresAndStaysInProject(t *testing.T) {
 func TestDecodeAuthorizationMessageAcrossKEKRotation(t *testing.T) {
 	e := msgEnv(t)
 	ctx := context.Background()
+	rng := rand.NewChaCha8([32]byte{1})
 	kek := func() []byte {
 		k := make([]byte, 32)
-		if _, err := rand.Read(k); err != nil {
+		if _, err := rng.Read(k); err != nil {
 			t.Fatal(err)
 		}
 		return k

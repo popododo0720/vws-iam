@@ -2,9 +2,9 @@ package sts_test
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"math/rand/v2"
 	"strings"
 	"testing"
 	"time"
@@ -320,8 +320,9 @@ func TestSessionRefSurvivesRestartAndKEKRotation(t *testing.T) {
 	// kek-1 stays in the ring after a rotation, so references sealed under
 	// it still open; without it they do not.
 	k1, k2 := make([]byte, 32), make([]byte, 32)
+	rng := rand.NewChaCha8([32]byte{1})
 	for _, k := range [][]byte{k1, k2} {
-		if _, err := rand.Read(k); err != nil {
+		if _, err := rng.Read(k); err != nil {
 			t.Fatal(err)
 		}
 	}

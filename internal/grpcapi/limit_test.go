@@ -2,7 +2,7 @@ package grpcapi_test
 
 import (
 	"context"
-	"crypto/rand"
+	"math/rand/v2"
 	"strconv"
 	"strings"
 	"sync"
@@ -121,6 +121,7 @@ func testAttemptLimits(t *testing.T, backend func(*testing.T) store.Backend) {
 	})
 
 	t.Run("UnknownUsersBoundedPerIP", func(t *testing.T) {
+		rng := rand.New(rand.NewPCG(486, 1))
 		// #41: concurrent random user names from one source IP, or from
 		// callers without one, create at most IPAttemptLimit user
 		// counters per window: the IP counter is taken before the user's.
@@ -134,7 +135,8 @@ func testAttemptLimits(t *testing.T, backend func(*testing.T) store.Backend) {
 			errs := make([]error, n)
 			var wg sync.WaitGroup
 			for i := range n {
-				wg.Go(func() { errs[i] = login(ctx, e, "u"+rand.Text(), "wrong password!", ip) })
+				name := "u" + strconv.FormatUint(rng.Uint64(), 36)
+				wg.Go(func() { errs[i] = login(ctx, e, name, "wrong password!", ip) })
 			}
 			wg.Wait()
 			checked := 0
@@ -148,7 +150,7 @@ func testAttemptLimits(t *testing.T, backend func(*testing.T) store.Backend) {
 			if checked != grpcapi.IPAttemptLimit {
 				t.Fatalf("source IP %q: %d of %d guesses reached the check, want %d", ip, checked, n, grpcapi.IPAttemptLimit)
 			}
-			wantThrottled(t, login(ctx, e, "u"+rand.Text(), "wrong password!", ip))
+			wantThrottled(t, login(ctx, e, "u"+strconv.FormatUint(rng.Uint64(), 36), "wrong password!", ip))
 			vs, err := store.List[iam.AttemptCounter](ctx, b)
 			if err != nil {
 				t.Fatal(err)
