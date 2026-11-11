@@ -126,14 +126,14 @@ func parseConfig(args []string, stderr io.Writer, getenv func(string) string) (c
 		return c, fmt.Errorf("unexpected arguments %q", fs.Args())
 	}
 	if err := c.checkStore(endpoints); err != nil {
-		return c, err
+		return c, fmt.Errorf("store config: %w", err)
 	}
 	if err := checkSAML(c.saml); err != nil {
-		return c, err
+		return c, fmt.Errorf("SAML config: %w", err)
 	}
 	if !c.bootstrap {
 		if err := c.tls.check(c.listen, c.insecurePlaintext); err != nil {
-			return c, err
+			return c, fmt.Errorf("tls config: %w", err)
 		}
 	}
 	hasEnvKEK := getenv(secret.EnvKEK) != "" || getenv(secret.EnvKEKID) != ""
@@ -195,14 +195,14 @@ func keyring(cfg config) (*secret.Keyring, error) {
 	if cfg.storeMode == storeEtcd {
 		k, err := secret.LoadPrefixed(cfg.credDir, credKEKPrefix)
 		if err != nil {
-			return nil, fmt.Errorf("load KEK: %w", err)
+			return nil, fmt.Errorf("load KEK keyring: %w", err)
 		}
 		return k, nil
 	}
 	if cfg.getenv != nil {
 		k, ok, err := secret.FromEnv(cfg.getenv)
 		if err != nil {
-			return nil, fmt.Errorf("load KEK: %w", err)
+			return nil, fmt.Errorf("load KEK keyring: %w", err)
 		}
 		if ok {
 			return k, nil
@@ -211,17 +211,17 @@ func keyring(cfg config) (*secret.Keyring, error) {
 	if cfg.kekDir != "" {
 		k, err := secret.LoadDir(cfg.kekDir)
 		if err != nil {
-			return nil, fmt.Errorf("load KEK: %w", err)
+			return nil, fmt.Errorf("load KEK keyring: %w", err)
 		}
 		return k, nil
 	}
 	kek := make([]byte, 32)
 	if _, err := rand.Read(kek); err != nil {
-		return nil, fmt.Errorf("ephemeral KEK: %w", err)
+		return nil, fmt.Errorf("load KEK keyring: generate ephemeral key: %w", err)
 	}
 	k, err := secret.NewKeyring("ephemeral", map[string][]byte{"ephemeral": kek})
 	if err != nil {
-		return nil, fmt.Errorf("ephemeral KEK: %w", err)
+		return nil, fmt.Errorf("load KEK keyring: generate ephemeral key: %w", err)
 	}
 	return k, nil
 }
@@ -249,7 +249,12 @@ func readRootPassword(dir string) (string, error) {
 
 // bootstrapRoot imports the root key once and, when one is given, sets
 // the root console password (#34). Nothing secret is logged.
-func bootstrapRoot(ctx context.Context, b store.Backend, keys *secret.Keyring, cfg config) (string, error) {
+func bootstrapRoot(ctx context.Context, b store.Backend, keys *secret.Keyring, cfg config) (_ string, err error) {
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("bootstrap root key: %w", err)
+		}
+	}()
 	var project, id, sec, pw string
 	if cfg.rootDir != "" {
 		var err error
@@ -334,7 +339,7 @@ func run(ctx context.Context, cfg config) (err error) {
 	if cfg.healthAddr != "" {
 		bound, stopHealth, err := health.Serve(ctx, cfg.healthAddr, health.Default())
 		if err != nil {
-			return fmt.Errorf("health: %w", err)
+			return fmt.Errorf("start health server: %w", err)
 		}
 		defer func() { err = errors.Join(err, stopHealth(context.WithoutCancel(ctx))) }()
 		log.LogAttrs(ctx, slog.LevelInfo, "health serving", slog.String("addr", bound))
@@ -354,7 +359,7 @@ func run(ctx context.Context, cfg config) (err error) {
 	}
 	lis, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.listen)
 	if err != nil {
-		return fmt.Errorf("listen: %w", err)
+		return fmt.Errorf("listen gRPC: %w", err)
 	}
 	srv := grpc.NewServer(grpcapi.ServerOptions(transport...)...)
 	api := grpcapi.New(backend, keys, apiOptions(cfg)...)
@@ -373,7 +378,7 @@ func run(ctx context.Context, cfg config) (err error) {
 		slog.String("store", cfg.storeMode), slog.Bool("mtls", cfg.tls.enabled()),
 		slog.Bool("saml", cfg.saml != (sts.SAMLServiceProvider{})))
 	if err := srv.Serve(lis); err != nil {
-		return fmt.Errorf("serve: %w", err)
+		return fmt.Errorf("serve gRPC: %w", err)
 	}
 	return nil
 }
