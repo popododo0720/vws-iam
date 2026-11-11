@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"Action\":\"ec2:DescribeInstances\",\"Resource\":\"*\",\"Identity\":[{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"*\",\"Resource\":\"*\"}]}],\"Restriction\":[{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:*\",\"Resource\":\"*\"}]}]}")

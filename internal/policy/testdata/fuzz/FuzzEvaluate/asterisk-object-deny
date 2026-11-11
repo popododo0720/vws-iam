@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"Action\":\"s3:GetObject\",\"Resource\":\"arn:vws:s3:::one/*suffix\",\"Identity\":[{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:*\",\"Resource\":\"*\"},{\"Effect\":\"Deny\",\"Action\":\"s3:GetObject\",\"Resource\":\"arn:vws:s3:::one/*\"}]}]}")
