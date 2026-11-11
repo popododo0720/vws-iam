@@ -1,4 +1,4 @@
-// Code generated from the AWS service authorization reference on 2026-11-10; DO NOT EDIT.
+// Code generated from the AWS service authorization reference on 2026-11-11; DO NOT EDIT.
 // Sources: https://servicereference.us-east-1.amazonaws.com/v1/{service}/{service}.json
 // Only unambiguous IAM/STS types and S3 bucket/object types are included.
 package grpcapi

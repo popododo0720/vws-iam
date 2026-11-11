@@ -18,6 +18,8 @@ jobs:
           go-version: "1.26.11"
       - name: gofmt
         run: test -z "$(gofmt -l cmd internal)"
+      - name: Generated simulator resources
+        run: bash scripts/check-generated-go.sh
       - name: vendored vws-lib
         run: VWS_LIB_OFFLINE=1 scripts/vendor-lib.sh check
       - name: govulncheck
