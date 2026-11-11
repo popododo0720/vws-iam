@@ -1,6 +1,6 @@
 package main
 
-//vws:unseeded TestMutualTLS and TestMutualTLSRotation serve TLS; server goroutines outlive the test, so a cryptotest override races with their writes.
+//vws:unseeded TestMutualTLS* serve TLS; their server goroutines outlive the test and race a cryptotest override.
 
 import (
 	"context"
