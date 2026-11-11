@@ -80,7 +80,7 @@ func (s *Server) FederationToken(
 // AssumeSAMLRole is STS AssumeRoleWithSAML, which this server does not
 // serve over gRPC yet (#106).
 func (s *Server) AssumeSAMLRole(ctx context.Context, req sts.SAMLRequest) (sts.SAMLRoleSession, error) {
-	return s.assumeRoleWithSAML(ctx, req)
+	return s.assumeRoleWithSAML(ctx, req, "")
 }
 
 // DeleteLinkedRole is IAM DeleteServiceLinkedRole, which this server
@@ -434,4 +434,11 @@ func (s *Server) ListOpenIDConnectProviderTags(
 	ctx context.Context, project, arn, marker string, maxItems int,
 ) (TagPage, error) {
 	return s.listOIDCProviderTags(ctx, project, arn, marker, maxItems)
+}
+
+// AssumeSAMLRoleFrom supplies the gateway-observed address to the handler.
+func (s *Server) AssumeSAMLRoleFrom(
+	ctx context.Context, req sts.SAMLRequest, sourceIP string,
+) (sts.SAMLRoleSession, error) {
+	return s.assumeRoleWithSAML(ctx, req, sourceIP)
 }

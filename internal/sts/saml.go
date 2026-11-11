@@ -104,6 +104,8 @@ func WithSAML(p SAMLProviders, sp SAMLServiceProvider) Option {
 // SAMLRequest is the input of AssumeRoleWithSAML. Never log it: the
 // assertion is a bearer credential.
 type SAMLRequest struct {
+	// SourceIP is the transport-observed caller address, never an assertion attribute.
+	SourceIP     string
 	RoleARN      string
 	PrincipalARN string
 	// Assertion is the base64 SAML response from the IdP.
@@ -220,6 +222,11 @@ func (s *Service) AssumeRoleWithSAML(
 	trust, err := policy.ParseTrust(r.Object.AssumeRolePolicy)
 	if err != nil {
 		return SAMLRoleSession{}, fmt.Errorf("trust policy of %s: %w", req.RoleARN, err)
+	}
+	// TODO(#106): vws-proto#87 must carry the gateway-observed source IP.
+	// Until then a trust policy requiring the key fails closed.
+	if err := setFederatedSourceIP(trust, tctx, req.SourceIP); err != nil {
+		return SAMLRoleSession{}, err
 	}
 	// With a SourceIdentity attribute the trust policy must also allow
 	// sts:SetSourceIdentity, as AWS requires.
