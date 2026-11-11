@@ -69,6 +69,7 @@ func Samples() []iam.Object {
 			RevokeGeneration: 2, MFA: true, SourceIP: "192.0.2.1", Created: now, Expires: now.Add(12 * time.Hour),
 			IdleTimeout: time.Hour, LastActive: now,
 		},
+		keyPairSample(now),
 		iam.Operation{ID: "op-1", Project: "proj-a", Response: []byte{1}, Created: now},
 		iam.ReplayEntry{Hash: strings.Repeat("cd", 32), Expires: now.Add(time.Hour)},
 		iam.AttemptCounter{Hash: strings.Repeat("ef", 32), Scope: iam.AttemptIP, Failures: 1, WindowStart: now},
@@ -184,6 +185,11 @@ func Run(t *testing.T, open func(t *testing.T) store.Backend, without ...iam.Kin
 				c := o
 				c.LastActive, c.Revoked = later, later
 				roundTrip(t, b, o, c)
+			case iam.KeyPair:
+				c := o
+				c.Generation, c.Updated = 2, later
+				c.Labels = map[string]string{"team": "b"}
+				roundTrip(t, b, o, c)
 			case iam.Operation:
 				c := o
 				c.Created = later
@@ -235,6 +241,14 @@ func Run(t *testing.T, open func(t *testing.T) store.Backend, without ...iam.Kin
 	t.Run("OIDCProviderLongestRoundTrip", func(t *testing.T) {
 		oidcProviderLongestRoundTrip(t, open(t))
 	})
+	if !slices.Contains(without, iam.KindKeyPair) {
+		t.Run("KeyPairReplayAndRestart", func(t *testing.T) {
+			keyPairReplayAndRestart(t, open(t))
+		})
+		t.Run("InvalidKeyPairIsNotStored", func(t *testing.T) {
+			invalidKeyPairIsNotStored(t, open(t))
+		})
+	}
 	t.Run("SAMLProviderLargestRoundTrip", func(t *testing.T) {
 		samlProviderLargestRoundTrip(t, open(t))
 	})

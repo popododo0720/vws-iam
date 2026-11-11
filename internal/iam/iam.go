@@ -13,7 +13,7 @@ import (
 // Kind names one stored resource type.
 type Kind string
 
-// The stored kinds. Each is one CRD in the vws-iam namespace.
+// The stored kinds. Kinds added after Kubernetes was retired have no CRD.
 const (
 	KindUser       Kind = "IamUser"
 	KindGroup      Kind = "IamGroup"
@@ -44,6 +44,8 @@ const (
 	KindOIDCProvider Kind = "IamOIDCProvider"
 	// KindConsoleSession is a console session shared by console-api (#454).
 	KindConsoleSession Kind = "IamConsoleSession"
+	// KindKeyPair is a regional SSH public key (#452).
+	KindKeyPair Kind = "IamKeyPair"
 )
 
 // Kinds lists every stored kind.
@@ -51,7 +53,7 @@ var Kinds = []Kind{
 	KindUser, KindGroup, KindRole, KindPolicy, KindAccessKey, KindMfaDevice,
 	KindKeyIndex, KindSession, KindOperation, KindReplay, KindAttempt, KindMemberLock, KindFidoDevice,
 	KindInstanceProfile, KindAccountAlias, KindAccountAliasClaim, KindPasswordPolicy, KindRootLogin,
-	KindSAMLProvider, KindOIDCProvider, KindConsoleSession,
+	KindSAMLProvider, KindOIDCProvider, KindConsoleSession, KindKeyPair,
 }
 
 // Meta is the resource envelope every API resource carries.
