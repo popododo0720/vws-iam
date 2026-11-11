@@ -1,5 +1,7 @@
 package main
 
+//vws:unseeded TestMutualTLS and TestMutualTLSRotation serve TLS; server goroutines outlive the test, so a cryptotest override races with their writes.
+
 import (
 	"context"
 	"crypto/ecdsa"
@@ -188,7 +190,6 @@ func waitServing(t *testing.T, addr string, creds credentials.TransportCredentia
 // TestMutualTLS is #21: with the TLS flags only a client presenting a
 // certificate from the client CA reaches an RPC.
 func TestMutualTLS(t *testing.T) {
-	cryptotest.SetGlobalRandom(t, 486)
 	serverCA, clientCA, otherCA := newCA(t, "server-ca"), newCA(t, "client-ca"), newCA(t, "other-ca")
 	f := serverFiles(t, t.TempDir(), serverCA, clientCA)
 	addr := serve(t, "-tls-cert-file", f.certFile, "-tls-key-file", f.keyFile, "-tls-client-ca-file", f.clientCAFile)
@@ -215,7 +216,6 @@ func TestMutualTLS(t *testing.T) {
 // and client CA) applies to the next connection without a restart, and
 // the old client CA no longer admits anyone.
 func TestMutualTLSRotation(t *testing.T) {
-	cryptotest.SetGlobalRandom(t, 486)
 	serverCA, clientCA := newCA(t, "server-ca"), newCA(t, "client-ca")
 	dir := t.TempDir()
 	f := serverFiles(t, dir, serverCA, clientCA)
