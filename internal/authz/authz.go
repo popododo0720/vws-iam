@@ -308,11 +308,17 @@ func (a *Authorizer) authorize(
 	}
 	c := a.context(p, arn, reqCtx)
 	r := policy.Request{Principal: arn, Account: a.account, Action: action, Resource: resource, Context: c}
-	if p.Kind == User {
-		boundary, err := a.userBoundary(ctx, p)
-		if err != nil {
-			return policy.Decision{}, err
-		}
+	var boundary []policy.Named
+	switch p.Kind {
+	case User:
+		boundary, err = a.userBoundary(ctx, p)
+	case Role:
+		boundary, err = a.roleBoundary(ctx, p)
+	}
+	if err != nil {
+		return policy.Decision{}, err
+	}
+	if p.Kind == User || p.Kind == Role {
 		return policy.EvaluateBounded(r, ids, session, boundary), nil
 	}
 	return policy.Evaluate(r, ids, session), nil
