@@ -294,8 +294,6 @@ func (r renamer[T]) drive(ctx context.Context, src store.Versioned[T]) (store.Ve
 		if err != nil {
 			return zero, err
 		}
-		// Conditional writes may move src's version (kubestore fences)
-		// without changing it; anything else is copied again.
 		again, gone, err := r.reread(ctx, src)
 		if err != nil {
 			return zero, err
@@ -347,7 +345,7 @@ var errSourceGone = errors.New("the renamed object is gone")
 
 // confirm sets RenameConfirmed on dst, the copy of src's rename, only
 // while src still holds the mark at the version read, and returns dst and
-// src read again (a kubestore fence may move src's version). A refused
+// src read again. A refused
 // write is errSourceMoved (src changed, or dst moved by a concurrent user
 // rename) or errSourceGone. Only a confirmed copy is promoted once src is
 // gone, so a copy a stale coordinator creates after the rename finished

@@ -1,4 +1,4 @@
-package kubestore_test
+package store_test
 
 import (
 	"bytes"
@@ -12,16 +12,10 @@ import (
 	"testing"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/envtest"
-
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/secret"
 	"github.com/popododo0720/vws-iam/internal/store"
-	"github.com/popododo0720/vws-iam/internal/store/kubestore"
+	"github.com/popododo0720/vws-iam/internal/store/memstore"
 )
 
 const (
@@ -33,47 +27,21 @@ const (
 var fixtureNow = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 
 func fixtureDir() string {
-	return filepath.Join("..", "..", "..", "testdata", "upgrade", fixtureTag)
+	return filepath.Join("..", "..", "testdata", "upgrade", fixtureTag)
 }
 
-// TestPreviousReleaseRecordsDecode loads the custom resources that the
-// previous release wrote into envtest with today's CRDs, then reads every
-// kind through today's kubestore and typed helpers. Renaming, removing or
-// re-encoding a stored field changes the decoded object and fails it.
+// TestPreviousReleaseRecordsDecode reads the previous release's stored specs
+// through the current typed helpers without a transport-specific decoder.
 func TestPreviousReleaseRecordsDecode(t *testing.T) {
-	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
-		t.Skip("KUBEBUILDER_ASSETS is not set")
-	}
-	env := &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "..", "deploy", "crds")},
-		ErrorIfCRDPathMissing: true,
-	}
-	cfg, err := env.Start()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := env.Stop(); err != nil {
-			t.Error(err)
-		}
-	})
-	c, err := client.New(cfg, client.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
 	ctx := context.Background()
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{GenerateName: "vws-iam-upgrade-"}}
-	if err := c.Create(ctx, ns); err != nil {
-		t.Fatal(err)
-	}
+	raw := memstore.New()
 	keys, err := secret.NewKeyring(fixtureKEKID, map[string][]byte{fixtureKEKID: bytes.Repeat([]byte{0x42}, 32)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := loadFixtureCRs(t, c, ns.Name), fixtureCounts(); !reflect.DeepEqual(got, want) {
+	if got, want := loadFixtureRecords(t, raw), fixtureCounts(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("fixture records by kind = %v, want %v", got, want)
 	}
-	raw := kubestore.New(c, ns.Name)
 	b := store.Scoped(raw, fixtureProject)
 
 	t.Run("user with session revocation", func(t *testing.T) {
@@ -276,7 +244,7 @@ func fixtureCounts() map[iam.Kind]int {
 	}
 }
 
-func loadFixtureCRs(t *testing.T, c client.Client, namespace string) map[iam.Kind]int {
+func loadFixtureRecords(t *testing.T, backend store.Backend) map[iam.Kind]int {
 	t.Helper()
 	entries, err := os.ReadDir(fixtureDir())
 	if err != nil {
@@ -293,21 +261,24 @@ func loadFixtureCRs(t *testing.T, c client.Client, namespace string) map[iam.Kin
 		if err != nil {
 			t.Fatal(err)
 		}
-		u := &unstructured.Unstructured{}
-		if err := json.Unmarshal(b, u); err != nil {
+		var record struct {
+			Kind     iam.Kind `json:"kind"`
+			Metadata struct {
+				Annotations map[string]string `json:"annotations"`
+			} `json:"metadata"`
+			Spec json.RawMessage `json:"spec"`
+		}
+		if err := json.Unmarshal(b, &record); err != nil {
 			t.Fatalf("%s: %v", e.Name(), err)
 		}
-		if got, want := u.GetAPIVersion(), kubestore.Group+"/"+kubestore.Version; got != want {
-			t.Fatalf("%s apiVersion = %q, want %q", e.Name(), got, want)
+		key := record.Metadata.Annotations["iam.vws.popododo0720.io/key"]
+		if key == "" {
+			t.Fatalf("%s has no key annotation", e.Name())
 		}
-		if u.GetName() == "" || u.GetAnnotations()[kubestore.Group+"/key"] == "" {
-			t.Fatalf("%s has no metadata.name or key annotation", e.Name())
-		}
-		u.SetNamespace(namespace)
-		if err := c.Create(ctx, u); err != nil {
+		if _, err := backend.Create(ctx, record.Kind, key, record.Spec); err != nil {
 			t.Fatalf("%s: %v", e.Name(), err)
 		}
-		counts[iam.Kind(u.GetKind())]++
+		counts[record.Kind]++
 	}
 	return counts
 }

@@ -152,10 +152,8 @@ func TestConcurrentGroupsPerUserMemstore(t *testing.T) {
 	testConcurrentGroupsPerUser(t, func(*testing.T) store.Backend { return memstore.New() })
 }
 
-// TestConcurrentGroupsPerUserOnAPIServer runs it on kubestore against a
-// real kube-apiserver. It skips without KUBEBUILDER_ASSETS.
-func TestConcurrentGroupsPerUserOnAPIServer(t *testing.T) {
-	testConcurrentGroupsPerUser(t, apiServerBackends(t))
+func TestConcurrentGroupsPerUserEtcd(t *testing.T) {
+	testConcurrentGroupsPerUser(t, etcdBackend)
 }
 
 func testConcurrentGroupsPerUser(t *testing.T, backend func(*testing.T) store.Backend) {

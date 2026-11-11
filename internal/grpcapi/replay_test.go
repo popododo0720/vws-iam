@@ -2,19 +2,10 @@ package grpcapi_test
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
 	"google.golang.org/grpc/codes"
 
@@ -22,7 +13,6 @@ import (
 
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/store"
-	"github.com/popododo0720/vws-iam/internal/store/kubestore"
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
 )
 
@@ -32,63 +22,8 @@ func TestSharedReplayMemstore(t *testing.T) {
 	testSharedReplay(t, func(*testing.T) store.Backend { return memstore.New() })
 }
 
-// TestSharedReplayOnAPIServer runs the #33 replica suite on kubestore
-// against a real kube-apiserver with deploy/crds (IamReplayEntry). It
-// skips without KUBEBUILDER_ASSETS.
-func TestSharedReplayOnAPIServer(t *testing.T) {
-	testSharedReplay(t, apiServerBackends(t))
-}
-
-// apiServerBackends starts envtest with deploy/crds and returns a
-// constructor of kubestore backends, each in a fresh namespace. It skips
-// the test without KUBEBUILDER_ASSETS.
-func apiServerBackends(t *testing.T) func(*testing.T) store.Backend {
-	t.Helper()
-	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
-		t.Skip("KUBEBUILDER_ASSETS is not set")
-	}
-	te := &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "deploy", "crds")},
-		ErrorIfCRDPathMissing: true,
-	}
-	cfg, err := te.Start()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := te.Stop(); err != nil {
-			t.Error(err)
-		}
-	})
-	// The suites send hundreds of requests; lift client-side throttling.
-	cfg.QPS, cfg.Burst = 1000, 2000
-	scheme := runtime.NewScheme()
-	if err := clientgoscheme.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
-	c, err := client.New(cfg, client.Options{Scheme: scheme})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Warm the client's REST mapper for every kind, so the first RPC of a
-	// suite does not spend its deadline on API discovery.
-	warm := kubestore.New(c, "default")
-	for _, k := range iam.Kinds {
-		if k == iam.KindConsoleSession || k == iam.KindKeyPair { // no CRDs: Kubernetes is retired (#454, #452)
-			continue
-		}
-		if _, err := warm.List(t.Context(), k); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return func(t *testing.T) store.Backend {
-		t.Helper()
-		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{GenerateName: "vws-iam-"}}
-		if err := c.Create(context.Background(), ns); err != nil {
-			t.Fatal(err)
-		}
-		return kubestore.New(c, ns.Name)
-	}
+func TestSharedReplayEtcd(t *testing.T) {
+	testSharedReplay(t, etcdBackend)
 }
 
 // replicas starts two servers (A and B) on one backend and one clock and

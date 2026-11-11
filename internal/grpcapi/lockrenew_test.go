@@ -24,10 +24,8 @@ func TestLoginLockRenewalMemstore(t *testing.T) {
 	testLoginLockRenewal(t, func(*testing.T) store.Backend { return memstore.New() })
 }
 
-// TestLoginLockRenewalOnAPIServer runs it on kubestore against a real
-// kube-apiserver. It skips without KUBEBUILDER_ASSETS.
-func TestLoginLockRenewalOnAPIServer(t *testing.T) {
-	testLoginLockRenewal(t, apiServerBackends(t))
+func TestLoginLockRenewalEtcd(t *testing.T) {
+	testLoginLockRenewal(t, etcdBackend)
 }
 
 func loginTOTP(ctx context.Context, e *env, user, pw, totpCode, ip string) error {
@@ -181,7 +179,7 @@ func testLoginLockRenewal(t *testing.T, backend func(*testing.T) store.Backend) 
 	})
 }
 
-// TestSTSLockRenewalMemstore and TestSTSLockRenewalOnAPIServer: a STS
+// TestSTSLockRenewalMemstore and TestSTSLockRenewalEtcd: a STS
 // attempt throttled by the user's own limit renews only a running device
 // lock, never past mfa.MaxLockout from the failure that locked it, and
 // never starts one (#48).
@@ -189,8 +187,8 @@ func TestSTSLockRenewalMemstore(t *testing.T) {
 	testSTSLockRenewal(t, func(*testing.T) store.Backend { return memstore.New() })
 }
 
-func TestSTSLockRenewalOnAPIServer(t *testing.T) {
-	testSTSLockRenewal(t, apiServerBackends(t))
+func TestSTSLockRenewalEtcd(t *testing.T) {
+	testSTSLockRenewal(t, etcdBackend)
 }
 
 func testSTSLockRenewal(t *testing.T, backend func(*testing.T) store.Backend) {

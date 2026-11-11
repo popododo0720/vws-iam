@@ -14,9 +14,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
@@ -24,28 +21,14 @@ import (
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/mfa"
 	"github.com/popododo0720/vws-iam/internal/store"
-	"github.com/popododo0720/vws-iam/internal/store/kubestore"
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
 )
-
-// fakeKube is kubestore on a fake API server.
-func fakeKube() store.Backend {
-	s := runtime.NewScheme()
-	for _, k := range iam.Kinds {
-		gvk := kubestore.GVK(k)
-		s.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
-		gvk.Kind += "List"
-		s.AddKnownTypeWithName(gvk, &unstructured.UnstructuredList{})
-	}
-	return kubestore.New(fake.NewClientBuilder().WithScheme(s).Build(), "vws-iam")
-}
 
 var renameBackends = []struct {
 	name string
 	open func() store.Backend
 }{
 	{"memstore", func() store.Backend { return memstore.New() }},
-	{"kubestore", fakeKube},
 }
 
 // membershipLease outlasts grpcapi.membershipLease (10s), the lease of

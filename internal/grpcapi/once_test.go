@@ -266,10 +266,8 @@ func TestRequestIDAppliesOnceMemstore(t *testing.T) {
 	testRequestIDAppliesOnce(t, func(*testing.T) store.Backend { return memstore.New() })
 }
 
-// TestRequestIDAppliesOnceOnAPIServer runs it on kubestore against a real
-// kube-apiserver. It skips without KUBEBUILDER_ASSETS.
-func TestRequestIDAppliesOnceOnAPIServer(t *testing.T) {
-	testRequestIDAppliesOnce(t, apiServerBackends(t))
+func TestRequestIDAppliesOnceEtcd(t *testing.T) {
+	testRequestIDAppliesOnce(t, etcdBackend)
 }
 
 func testRequestIDAppliesOnce(t *testing.T, backend func(*testing.T) store.Backend) {

@@ -137,7 +137,6 @@ func TestAccessKeyUserEtagMoveBeforeCommit(t *testing.T) {
 		open func(p *trap) store.Backend
 	}{
 		{"memstore", func(p *trap) store.Backend { return trapped{Backend: memstore.New(), p: p} }},
-		{"kubestore", trappedKube},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &trap{}
@@ -212,7 +211,6 @@ func TestAccessKeyUserEtagRestartAndReplay(t *testing.T) {
 		open func() store.Backend
 	}{
 		{"memstore", func() store.Backend { return memstore.New() }},
-		{"kubestore", func() store.Backend { return trappedKube(&trap{}) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := tc.open()

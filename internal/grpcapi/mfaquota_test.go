@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/popododo0720/vws-iam/internal/store/memstore"
+
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/mfa"
 	"github.com/popododo0720/vws-iam/internal/secret"
@@ -16,9 +18,9 @@ import (
 	"github.com/popododo0720/vws-iam/internal/totp"
 )
 
-func TestMFAQuotaOnAPIServer(t *testing.T) { testMFAQuotaOn(t, apiServerBackends(t)) }
-func TestMFAQuotaOnFakeKube(t *testing.T) {
-	testMFAQuotaOn(t, func(*testing.T) store.Backend { return fakeKube() })
+func TestMFAQuotaEtcd(t *testing.T) { testMFAQuotaOn(t, etcdBackend) }
+func TestMFAQuotaMemstore(t *testing.T) {
+	testMFAQuotaOn(t, func(*testing.T) store.Backend { return memstore.New() })
 }
 
 func testMFAQuotaOn(t *testing.T, backend func(*testing.T) store.Backend) {

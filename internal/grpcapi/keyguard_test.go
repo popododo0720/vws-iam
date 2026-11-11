@@ -9,17 +9,11 @@ import (
 	"cloud.google.com/go/longrunning/autogen/longrunningpb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/store"
-	"github.com/popododo0720/vws-iam/internal/store/kubestore"
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
 )
 
@@ -295,48 +289,6 @@ func (b trapped) DeleteIf(ctx context.Context, kind iam.Kind, key, version strin
 	return b.Backend.DeleteIf(ctx, kind, key, version, pre)
 }
 
-// trappedKube is kubestore on a fake API server that springs p inside
-// the conditional write: after kubestore fenced the user and just before
-// the key write reaches the API server.
-func trappedKube(p *trap) store.Backend {
-	s := runtime.NewScheme()
-	for _, k := range iam.Kinds {
-		gvk := kubestore.GVK(k)
-		s.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
-		gvk.Kind += "List"
-		s.AddKnownTypeWithName(gvk, &unstructured.UnstructuredList{})
-	}
-	isKey := func(obj client.Object) bool {
-		return obj.GetObjectKind().GroupVersionKind().Kind == string(iam.KindAccessKey)
-	}
-	// voids reports whether obj is the bump that voids a fence: it sets a
-	// new voided-fence annotation and changes nothing else that matters.
-	voids := func(ctx context.Context, c client.WithWatch, obj client.Object) bool {
-		const ann = kubestore.Group + "/voided-fence"
-		cur := &unstructured.Unstructured{}
-		cur.SetGroupVersionKind(obj.GetObjectKind().GroupVersionKind())
-		if err := c.Get(ctx, client.ObjectKeyFromObject(obj), cur); err != nil {
-			return false
-		}
-		return obj.GetAnnotations()[ann] != cur.GetAnnotations()[ann]
-	}
-	c := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptor.Funcs{
-		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
-			if isKey(obj) && !voids(ctx, c, obj) {
-				p.spring()
-			}
-			return c.Update(ctx, obj, opts...)
-		},
-		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
-			if isKey(obj) {
-				p.spring()
-			}
-			return c.Delete(ctx, obj, opts...)
-		},
-	}).Build()
-	return kubestore.New(c, "vws-iam")
-}
-
 // TestAccessKeyARNMoveBeforeCommit is the concurrent case: UpdateUser
 // moves the user after the server matched expected_user_arn and before the
 // key write commits. The store's conditional write must refuse the key
@@ -348,7 +300,6 @@ func TestAccessKeyARNMoveBeforeCommit(t *testing.T) {
 		open func(p *trap) store.Backend
 	}{
 		{"memstore", func(p *trap) store.Backend { return trapped{Backend: memstore.New(), p: p} }},
-		{"kubestore", trappedKube},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &trap{}

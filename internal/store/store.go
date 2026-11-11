@@ -1,6 +1,6 @@
 // Package store defines the IAM repository. A Backend stores opaque specs
 // per kind with optimistic concurrency; the typed helpers encode domain
-// objects. memstore, kubestore and etcdstore are the backends, and
+// objects. memstore and etcdstore are the backends, and
 // storetest is the suite they all pass.
 package store
 
@@ -53,7 +53,7 @@ type Backend interface {
 	// gone or no longer at pre.Version, or key is not at version, nothing
 	// is written and the error is ErrConflict. A backend may advance pre's
 	// version, but not its spec, as a side effect even when it refuses the
-	// write (kubestore records a fence on it), so read pre again before the
+	// write, so read pre again before the
 	// next conditional write.
 	UpdateIf(ctx context.Context, kind iam.Kind, key string, spec []byte, version string, pre Pre) (string, error)
 	// DeleteIf is Delete under the same precondition. version is required.

@@ -2,12 +2,13 @@
 
 IAM custom resources written by the vws-iam release pinned as `sha-74a29dc`
 in vws-deploy (`charts/vws/values.yaml`). `TestPreviousReleaseRecordsDecode`
-loads them into envtest with the current `deploy/crds` and reads every field
-through the current decode path.
+extracts their stored specs into the memory backend and reads every field
+through the current typed store helpers (`internal/store/upgrade_test.go`).
+These files preserve the historical capture format; Kubernetes is retired.
 
 Tag: sha-74a29dc
 Commit: 74a29dc134568142c4c7dbd7ca71739a60057e90
-Command: `git archive 74a29dc134568142c4c7dbd7ca71739a60057e90 | tar -x -C /tmp/vws-iam-74a29dc`, then `go run ./cmd/capturefixtures` from that tree against envtest with its `deploy/crds`; the throwaway harness created each record through that commit's `internal/store` and `kubestore`, sealed the fixture secrets with the KEK below, and wrote one JSON CR per object.
+Historical capture command: `git archive 74a29dc134568142c4c7dbd7ca71739a60057e90 | tar -x -C /tmp/vws-iam-74a29dc`, then `go run ./cmd/capturefixtures` from that tree against envtest with its `deploy/crds`; the throwaway harness created each record through that commit's `internal/store` and `kubestore`, sealed the fixture secrets with the KEK below, and wrote one JSON CR per object.
 KEK id: fixture-kek
 
 The throwaway capture tree is not committed. Its KEK is 32 bytes of `0x42`,

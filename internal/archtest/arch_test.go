@@ -81,7 +81,7 @@ var packageRules = []struct {
 	{"internal/sigv4", func(imp string) bool { return isModule(imp) || transport(imp) }, "SigV4 verification is pure"},
 	{
 		"internal/grpcapi",
-		hasPrefix(module+"/internal/store/kubestore", module+"/internal/store/memstore", module+"/internal/store/etcdstore"),
+		hasPrefix(module+"/internal/store/memstore", module+"/internal/store/etcdstore"),
 		"the server uses the store.Backend contract, not a backend's internals",
 	},
 }
@@ -92,7 +92,7 @@ var ownerRules = []struct {
 	owners []string
 	why    string
 }{
-	{hasPrefix("database/sql"), nil, "no SQL: state lives in custom resources"},
+	{hasPrefix("database/sql"), nil, "no SQL: state lives in the store"},
 	{
 		func(imp string) bool { return imp == "log" || hasPrefix("github.com/getsentry")(imp) },
 		nil,
@@ -109,11 +109,6 @@ var ownerRules = []struct {
 		"wire types stay in grpcapi",
 	},
 	{hasPrefix("google.golang.org/grpc"), []string{"internal/grpcapi", "cmd/vws-iam"}, "gRPC stays at the edge"},
-	{
-		hasPrefix("k8s.io", "sigs.k8s.io"),
-		[]string{"internal/store/kubestore"},
-		"Kubernetes client types stay in the custom resource store",
-	},
 	{hasPrefix("go.etcd.io"), []string{"internal/store/etcdstore"}, "etcd client types stay in the etcd store"},
 	{
 		hasPrefix("github.com/popododo0720/vws-lib"),
@@ -228,15 +223,13 @@ func TestArchitectureRules(t *testing.T) {
 		"internal/sigv4/v.go":    `package sigv4; import _ "google.golang.org/grpc"`,
 		"internal/totp/t.go":     `package totp; import _ "` + module + `/internal/iam"`,
 		"internal/sts/s.go":      `package sts; import _ "google.golang.org/grpc"`,
-		"internal/grpcapi/g.go": `package grpcapi; import _ "` + module + `/internal/store/kubestore"; ` +
+		"internal/grpcapi/g.go": `package grpcapi; import _ "` + module + `/internal/store/memstore"; ` +
 			`func f(s S) { s.GetSigningCredential() }`,
-		"internal/widget/k.go":              `package widget; import _ "k8s.io/apimachinery/pkg/types"`,
 		"internal/widget/e.go":              `package widget; import _ "go.etcd.io/etcd/client/v3"`,
 		"internal/widget/l.go":              `package widget; import "log"; var _ = log.Println`,
 		"internal/widget/w.go":              `package widget; import "testing"; var _ testing.TB`,
 		"internal/widget/c.go":              `package widget; func f(s S) { c := s.GetSigningCredential; _ = c }`,
 		"internal/store/storetest/s.go":     `package storetest; import "testing"; var _ testing.TB`,
-		"internal/store/kubestore/k.go":     `package kubestore; import _ "sigs.k8s.io/controller-runtime/pkg/client"`,
 		"internal/store/memstore/m_test.go": `package memstore; import "log"`,
 		"internal/store/etcdstore/e.go":     `package etcdstore; import _ "go.etcd.io/etcd/client/v3"`,
 	} {
@@ -252,16 +245,15 @@ func TestArchitectureRules(t *testing.T) {
 		"internal/sts imports google.golang.org/grpc: gRPC stays at the edge",
 		"internal/sigv4 imports google.golang.org/grpc: SigV4 verification is pure",
 		"internal/sigv4 imports google.golang.org/grpc: gRPC stays at the edge",
-		"internal/grpcapi imports " + module + "/internal/store/kubestore: the server uses the store.Backend contract," +
+		"internal/grpcapi imports " + module + "/internal/store/memstore: the server uses the store.Backend contract," +
 			" not a backend's internals",
 		"internal/iam imports " + module + "/internal/store: the domain types are pure",
 		"internal/password imports " + module + "/internal/iam: password hashing imports nothing from this module",
 		"internal/policy imports google.golang.org/protobuf/proto: the policy engine is pure",
 		"internal/policy imports google.golang.org/protobuf/proto: wire types stay in grpcapi",
 		"internal/secret imports " + module + "/internal/store: sealing sees only the domain types",
-		"internal/store imports database/sql: no SQL: state lives in custom resources",
+		"internal/store imports database/sql: no SQL: state lives in the store",
 		"internal/widget imports go.etcd.io/etcd/client/v3: etcd client types stay in the etcd store",
-		"internal/widget imports k8s.io/apimachinery/pkg/types: Kubernetes client types stay in the custom resource store",
 		"internal/widget imports log: logs are slog through vws-lib obs",
 		"internal/widget imports testing: production code does not import testing",
 		"internal/widget uses GetSigningCredential: a plaintext secret is opened only for signature checks",

@@ -1,9 +1,8 @@
 # Durable shared state for IAM replicas
 
-Part of #110. This note records the storage decision behind the
-`-store` flag in `cmd/vws-iam`. The Kubernetes store it chose is retired:
-since #450 and #451 the shared store is etcd (`internal/store/etcdstore`),
-see Backend selection below.
+Part of #110. Since #450 and #451 the shared store is etcd
+(`internal/store/etcdstore`). This note records the storage decision
+behind the `-store` flag in `cmd/vws-iam`.
 
 ## Problem
 
@@ -19,26 +18,16 @@ the same data from every endpoint after propagation.
 | In-memory per replica (old behavior) | No | No | None |
 | PVC file store, one writer | Only with a single leader | Yes | Leader election, ReadWriteOnce limits scale-out, new backup path |
 | Single replica, in memory | Yes (one copy) | No | No HA |
-| Kubernetes custom resources (`kubestore`) | Yes | Yes (etcd) | Needs CRDs and a namespaced Role |
+| Shared etcd | Yes | Yes | Client mutual TLS and systemd credentials |
 
 ## Decision
 
-Use the existing `kubestore` backend whenever vws-iam runs in a pod.
-No new backend and no leader are needed:
-
-- Every IAM object, STS revocation, replay entry, attempt counter and
-  long-running operation is a custom resource in the
-  `iam.vws.popododo0720.io` group (`deploy/crds/iam.yaml`), in one
-  namespace.
-- Reads go straight to the API server without an informer cache, so a
-  write on one replica is visible to the next read on any replica.
-- Writes use resourceVersion compare-and-swap
-  (`internal/store/kubestore/kubestore.go`), so concurrent replicas
-  cannot overwrite each other. Transient API errors are retried with
-  bounded backoff (`store.WithRetry`).
-- Secret material is encrypted with the KEK keyring before it is
-  stored. The kube store refuses to start with an ephemeral KEK, because
-  a restart would make stored secrets unreadable.
+Use the shared etcd backend for every replica. Each IAM object occupies
+one key under the configured prefix. Writes use etcd transactions and
+modification revisions for compare-and-swap, including conditional writes
+on another object. Secret material is encrypted with the KEK keyring
+before it is stored; the TLS client files and KEK come from systemd
+credentials so restarts can read existing data.
 
 ## Backend selection
 

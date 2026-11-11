@@ -76,7 +76,6 @@ still works. Console Login renews the same way (#48).
 
 ```
 go test -race ./...
-KUBEBUILDER_ASSETS=<dir with kube-apiserver and etcd> go test ./internal/store/kubestore
 golangci-lint run
 ```
 

@@ -177,10 +177,8 @@ func TestConcurrentAccessKeyRequestIDMemstore(t *testing.T) {
 	testConcurrentAccessKeyRequestID(t, func(*testing.T) store.Backend { return memstore.New() })
 }
 
-// TestConcurrentAccessKeyRequestIDOnAPIServer runs it on kubestore
-// against a real kube-apiserver. It skips without KUBEBUILDER_ASSETS.
-func TestConcurrentAccessKeyRequestIDOnAPIServer(t *testing.T) {
-	testConcurrentAccessKeyRequestID(t, apiServerBackends(t))
+func TestConcurrentAccessKeyRequestIDEtcd(t *testing.T) {
+	testConcurrentAccessKeyRequestID(t, etcdBackend)
 }
 
 func testConcurrentAccessKeyRequestID(t *testing.T, backend func(*testing.T) store.Backend) {

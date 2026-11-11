@@ -8,16 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-
 	"github.com/popododo0720/vws-iam/internal/accesskey"
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/secret"
 	"github.com/popododo0720/vws-iam/internal/store"
-	"github.com/popododo0720/vws-iam/internal/store/kubestore"
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
 )
 
@@ -43,20 +37,8 @@ func withUser(t *testing.T, b store.Backend, name string) {
 	}
 }
 
-func fakeKube() client.Client {
-	s := runtime.NewScheme()
-	for _, k := range iam.Kinds {
-		gvk := kubestore.GVK(k)
-		s.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
-		gvk.Kind += "List"
-		s.AddKnownTypeWithName(gvk, &unstructured.UnstructuredList{})
-	}
-	return fake.NewClientBuilder().WithScheme(s).Build()
-}
-
 func TestSecretIsNeverStoredInPlaintext(t *testing.T) {
-	c := fakeKube()
-	b := kubestore.New(c, "vws-iam")
+	b := memstore.New()
 	withUser(t, b, "alice")
 	svc := accesskey.New(b, b, "proj-a", ring(t, "kek-1", map[string][]byte{"kek-1": kek(t, 1)}), nil)
 	cred, err := svc.Create(context.Background(), "alice")
@@ -69,23 +51,15 @@ func TestSecretIsNeverStoredInPlaintext(t *testing.T) {
 	if strings.Contains(fmt.Sprintf("%v %+v", cred, cred), cred.Secret) {
 		t.Fatal("Credential formatting prints the secret")
 	}
-	// Inspect the raw custom resource as the API server stores it.
-	l := &unstructured.UnstructuredList{}
-	gvk := kubestore.GVK(iam.KindAccessKey)
-	gvk.Kind += "List"
-	l.SetGroupVersionKind(gvk)
-	if err := c.List(context.Background(), l); err != nil || len(l.Items) != 1 {
-		t.Fatalf("list: %v %d", err, len(l.Items))
-	}
-	raw, err := l.Items[0].MarshalJSON()
+	raw, err := b.Get(context.Background(), iam.KindAccessKey, cred.AccessKeyID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), cred.Secret) {
-		t.Fatal("custom resource contains the plaintext secret")
+	if strings.Contains(string(raw.Spec), cred.Secret) {
+		t.Fatal("stored record contains the plaintext secret")
 	}
-	if !strings.Contains(string(raw), `"keyId":"kek-1"`) {
-		t.Fatalf("custom resource has no KEK id: %s", raw)
+	if !strings.Contains(string(raw.Spec), `"keyId":"kek-1"`) {
+		t.Fatalf("stored record has no KEK id: %s", raw.Spec)
 	}
 	got, err := svc.GetSigningCredential(context.Background(), cred.AccessKeyID)
 	if err != nil || got.Secret != cred.Secret || got.UserName != "alice" {
@@ -372,7 +346,6 @@ func TestFailedSweepOfReservedKeyFailsClosed(t *testing.T) {
 		open func() store.Backend
 	}{
 		{"memstore", func() store.Backend { return memstore.New() }},
-		{"kubestore", func() store.Backend { return kubestore.New(fakeKube(), "vws-iam") }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			failing := false
@@ -426,7 +399,6 @@ func TestFailedSweepOfReservedKeyFailsClosed(t *testing.T) {
 			if err := svc.SweepPending(ctx, "gina", hold2); err != nil {
 				t.Fatalf("sweep: %v", err)
 			}
-			// A kubestore fence may advance the lock; the hold is still ours.
 			cur, err = store.Get[iam.MembershipLock](ctx, b, iam.MembershipLockKey)
 			if err != nil {
 				t.Fatal(err)
@@ -466,7 +438,6 @@ func TestFailedSweepOfPendingKeyFailsClosed(t *testing.T) {
 		open func() store.Backend
 	}{
 		{"memstore", func() store.Backend { return memstore.New() }},
-		{"kubestore", func() store.Backend { return kubestore.New(fakeKube(), "vws-iam") }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			failing := false
