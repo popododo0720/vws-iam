@@ -7,6 +7,7 @@ import (
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
+	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/sts"
 )
 
@@ -439,4 +440,22 @@ func (s *Server) AssumeSAMLRoleFrom(
 	ctx context.Context, req sts.SAMLRequest, sourceIP string,
 ) (sts.SAMLRoleSession, error) {
 	return s.assumeRoleWithSAML(ctx, req, sourceIP)
+}
+
+// ConsoleSessionSpec is the spec of CreateConsoleSession, which no vws-proto
+// release carries yet (#454).
+type ConsoleSessionSpec = consoleSessionSpec
+
+func (s *Server) CreateConsoleSession(
+	ctx context.Context, pid string, spec ConsoleSessionSpec,
+) (iam.ConsoleSession, error) {
+	return s.createConsoleSession(ctx, pid, spec)
+}
+
+func (s *Server) CheckConsoleSession(ctx context.Context, tok string) (iam.ConsoleSession, error) {
+	return s.checkConsoleSession(ctx, tok)
+}
+
+func (s *Server) RevokeConsoleSession(ctx context.Context, tok string) error {
+	return s.revokeConsoleSession(ctx, tok)
 }

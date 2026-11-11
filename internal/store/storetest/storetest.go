@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,6 +34,11 @@ func Samples() []iam.Object {
 		},
 		iam.KeyIndex{ID: "AKIAABCDEFGHIJKLMNOP", Project: "proj-a"},
 		iam.Session{Hash: strings.Repeat("ab", 32), Project: "proj-a", UserName: "Alice", AuthTime: now, Expires: now.Add(time.Hour)},
+		iam.ConsoleSession{
+			Hash: strings.Repeat("a1", 32), Project: "proj-a", ID: "web-1", UserName: "Alice", UserUID: "u-1",
+			RevokeGeneration: 2, MFA: true, SourceIP: "192.0.2.1", Created: now, Expires: now.Add(12 * time.Hour),
+			IdleTimeout: time.Hour, LastActive: now,
+		},
 		iam.Operation{ID: "op-1", Project: "proj-a", Response: []byte{1}, Created: now},
 		iam.ReplayEntry{Hash: strings.Repeat("cd", 32), Expires: now.Add(time.Hour)},
 		iam.AttemptCounter{Hash: strings.Repeat("ef", 32), Scope: iam.AttemptIP, Failures: 1, WindowStart: now},
@@ -101,12 +107,16 @@ func roundTrip[T iam.Object](t *testing.T, b store.Backend, obj T, changed T) {
 	}
 }
 
-// Run runs the suite. open returns a fresh empty backend.
-func Run(t *testing.T, open func(t *testing.T) store.Backend) {
+// Run runs the suite. open returns a fresh empty backend. RoundTripEveryKind
+// skips the kinds in without, which the backend does not store.
+func Run(t *testing.T, open func(t *testing.T) store.Backend, without ...iam.Kind) {
 	t.Run("RoundTripEveryKind", func(t *testing.T) {
 		b := open(t)
 		later := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
 		for _, o := range Samples() {
+			if slices.Contains(without, o.Kind()) {
+				continue
+			}
 			switch o := o.(type) {
 			case iam.User:
 				c := o
@@ -139,6 +149,10 @@ func Run(t *testing.T, open func(t *testing.T) store.Backend) {
 			case iam.Session:
 				c := o
 				c.Expires = later
+				roundTrip(t, b, o, c)
+			case iam.ConsoleSession:
+				c := o
+				c.LastActive, c.Revoked = later, later
 				roundTrip(t, b, o, c)
 			case iam.Operation:
 				c := o

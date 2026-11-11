@@ -457,6 +457,7 @@ func collectReplays(ctx context.Context, log *slog.Logger, api *grpcapi.Server) 
 			{"replay", api.GCReplayEntries},
 			{"attempt", api.GCAttemptCounters},
 			{"session key", api.GCSessionKeys},
+			{"console session", api.GCConsoleSessions},
 			{"rename", api.ResumeRenames},
 		} {
 			cctx, cancel := context.WithTimeout(ctx, time.Minute)
