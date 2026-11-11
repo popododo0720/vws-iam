@@ -108,7 +108,11 @@ var ownerRules = []struct {
 		[]string{"internal/grpcapi"},
 		"wire types stay in grpcapi",
 	},
-	{hasPrefix("google.golang.org/grpc"), []string{"internal/grpcapi", "cmd/vws-iam"}, "gRPC stays at the edge"},
+	{
+		hasPrefix("google.golang.org/grpc"),
+		[]string{"internal/grpcapi", "cmd/vws-iam", "internal/store/etcdstore"},
+		"gRPC stays at the edge",
+	},
 	{hasPrefix("k8s.io", "sigs.k8s.io"), nil, "Kubernetes is retired"},
 	{hasPrefix("go.etcd.io"), []string{"internal/store/etcdstore"}, "etcd client types stay in the etcd store"},
 	{

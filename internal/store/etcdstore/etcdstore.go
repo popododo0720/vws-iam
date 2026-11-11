@@ -23,12 +23,13 @@ import (
 // Store is a store.Backend on an etcd client.
 type Store struct {
 	c      *clientv3.Client
+	kv     clientv3.KV
 	prefix string
 }
 
 // New wraps a client; every key lives under prefix.
 func New(c *clientv3.Client, prefix string) *Store {
-	return &Store{c: c, prefix: prefix}
+	return &Store{c: c, kv: clientv3.NewKVFromKVClient(failFast{clientv3.RetryKVClient(c)}, c), prefix: prefix}
 }
 
 // Open connects to endpoints (tlsConfig nil: plaintext) with the call
@@ -97,7 +98,7 @@ func revision(version string) int64 {
 
 func (s *Store) get(ctx context.Context, kind iam.Kind, key string) (*clientv3.GetResponse, error) {
 	return read(ctx, "get", kind, func(ctx context.Context) (*clientv3.GetResponse, error) {
-		return s.c.Get(ctx, s.path(kind, key))
+		return s.kv.Get(ctx, s.path(kind, key))
 	})
 }
 
@@ -109,7 +110,7 @@ func (s *Store) Create(ctx context.Context, kind iam.Kind, key string, spec []by
 	}
 	k := s.path(kind, key)
 	r, err := call(ctx, "create", kind, func(ctx context.Context) (*clientv3.TxnResponse, error) {
-		return s.c.Txn(ctx).If(clientv3.Compare(clientv3.CreateRevision(k), "=", 0)).
+		return s.kv.Txn(ctx).If(clientv3.Compare(clientv3.CreateRevision(k), "=", 0)).
 			Then(clientv3.OpPut(k, val)).Commit()
 	})
 	if err != nil {
@@ -179,7 +180,7 @@ func (s *Store) commit(
 		reads = append(reads, clientv3.OpGet(pk, clientv3.WithKeysOnly()))
 	}
 	r, err := call(ctx, opName, kind, func(ctx context.Context) (*clientv3.TxnResponse, error) {
-		return s.c.Txn(ctx).If(cmps...).Then(op).Else(reads...).Commit()
+		return s.kv.Txn(ctx).If(cmps...).Then(op).Else(reads...).Commit()
 	})
 	if err != nil {
 		return nil, err
@@ -226,7 +227,7 @@ func (s *Store) ListPage(ctx context.Context, kind iam.Kind, limit int64, cont s
 		from = p + cont + "\x00"
 	}
 	r, err := read(ctx, "list", kind, func(ctx context.Context) (*clientv3.GetResponse, error) {
-		return s.c.Get(ctx, from, clientv3.WithRange(clientv3.GetPrefixRangeEnd(p)),
+		return s.kv.Get(ctx, from, clientv3.WithRange(clientv3.GetPrefixRangeEnd(p)),
 			clientv3.WithSort(clientv3.SortByKey, clientv3.SortAscend), clientv3.WithLimit(max(limit, 0)))
 	})
 	if err != nil {
@@ -254,7 +255,7 @@ func (s *Store) Delete(ctx context.Context, kind iam.Kind, key, version string) 
 		return err
 	}
 	r, err := call(ctx, "delete", kind, func(ctx context.Context) (*clientv3.DeleteResponse, error) {
-		return s.c.Delete(ctx, k)
+		return s.kv.Delete(ctx, k)
 	})
 	if err != nil {
 		return err
