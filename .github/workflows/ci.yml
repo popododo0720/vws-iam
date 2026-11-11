@@ -47,6 +47,10 @@ jobs:
         run: scripts/guard.sh correct
       - name: guard.sh fails on an empty /correct loop section
         run: scripts/guard_test.sh
+      - name: Tests use seeded randomness
+        run: scripts/check-test-rand.sh
+      - name: Randomness check rejects unseeded fixtures
+        run: scripts/check-test-rand_test.sh
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.11"
