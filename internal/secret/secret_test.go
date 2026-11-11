@@ -2,11 +2,11 @@ package secret_test
 
 import (
 	"bytes"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,17 +16,17 @@ import (
 	"github.com/popododo0720/vws-iam/internal/secret"
 )
 
-func key(t *testing.T) []byte {
+func key(t *testing.T, seed byte) []byte {
 	t.Helper()
 	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
+	if _, err := rand.NewChaCha8([32]byte{seed}).Read(b); err != nil {
 		t.Fatal(err)
 	}
 	return b
 }
 
 func TestSealOpenAndRotation(t *testing.T) {
-	k1, k2 := key(t), key(t)
+	k1, k2 := key(t, 1), key(t, 2)
 	old, err := secret.NewKeyring("kek-1", map[string][]byte{"kek-1": k1})
 	if err != nil {
 		t.Fatal(err)
@@ -60,7 +60,7 @@ func TestSealOpenAndRotation(t *testing.T) {
 }
 
 func TestOpenRejectsTamperingAndMovedCiphertext(t *testing.T) {
-	k, err := secret.NewKeyring("a", map[string][]byte{"a": key(t)})
+	k, err := secret.NewKeyring("a", map[string][]byte{"a": key(t, 3)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,14 +85,14 @@ func TestKeyringRejectsBadKEKs(t *testing.T) {
 	if _, err := secret.NewKeyring("a", map[string][]byte{"a": make([]byte, 16)}); err == nil {
 		t.Fatal("16-byte KEK accepted")
 	}
-	if _, err := secret.NewKeyring("b", map[string][]byte{"a": key(t)}); !errors.Is(err, secret.ErrUnknownKEK) {
+	if _, err := secret.NewKeyring("b", map[string][]byte{"a": key(t, 4)}); !errors.Is(err, secret.ErrUnknownKEK) {
 		t.Fatalf("missing active: %v", err)
 	}
 }
 
 func TestLoadDirNeverEchoesKeyMaterial(t *testing.T) {
 	dir := t.TempDir()
-	k := key(t)
+	k := key(t, 5)
 	write := func(name, s string) {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(s), 0o600); err != nil {
 			t.Fatal(err)
@@ -125,12 +125,12 @@ func TestLoadPrefixed(t *testing.T) {
 		t.Fatalf("missing active file: %v", err)
 	}
 	write("kek_active", "k2\n")
-	write("kek_k1", base64.StdEncoding.EncodeToString(key(t)))
+	write("kek_k1", base64.StdEncoding.EncodeToString(key(t, 6)))
 	_, err := secret.LoadPrefixed(dir, "kek_")
 	if !errors.Is(err, secret.ErrUnknownKEK) || !strings.Contains(err.Error(), "kek_k2") {
 		t.Fatalf("missing active key file: %v", err)
 	}
-	write("kek_k2", base64.StdEncoding.EncodeToString(key(t)))
+	write("kek_k2", base64.StdEncoding.EncodeToString(key(t, 7)))
 	k, err := secret.LoadPrefixed(dir, "kek_")
 	if err != nil || k.Active() != "k2" {
 		t.Fatalf("credential keyring: %v", err)
@@ -163,7 +163,7 @@ func TestFromEnv(t *testing.T) {
 // purpose and KEK, never the plain SHA-256 of the input, in KEK id order,
 // and a KEK's digest is the same in every ring that holds it.
 func TestDigests(t *testing.T) {
-	ka, kb := key(t), key(t)
+	ka, kb := key(t, 8), key(t, 9)
 	ring := func(active string, ids ...string) *secret.Keyring {
 		t.Helper()
 		keys := map[string][]byte{}
@@ -209,7 +209,7 @@ func TestDigests(t *testing.T) {
 // digest, so a replay claim does not meet its own entry and an attempt is
 // counted once.
 func TestDigestsDuplicateKEK(t *testing.T) {
-	ka, kb := key(t), key(t)
+	ka, kb := key(t, 10), key(t, 11)
 	k, err := secret.NewKeyring("a", map[string][]byte{"a": ka, "b": kb, "c": ka})
 	if err != nil {
 		t.Fatal(err)

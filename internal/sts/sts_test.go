@@ -2,9 +2,9 @@ package sts_test
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"testing"
 	"time"
@@ -44,7 +44,7 @@ const assumeAny = `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action
 
 func setup(t *testing.T) env {
 	k := make([]byte, 32)
-	if _, err := rand.Read(k); err != nil {
+	if _, err := rand.NewChaCha8([32]byte{1}).Read(k); err != nil {
 		t.Fatal(err)
 	}
 	keys, err := secret.NewKeyring("kek-1", map[string][]byte{"kek-1": k})

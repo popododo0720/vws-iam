@@ -2,8 +2,8 @@ package sts_test
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
+	"math/rand/v2"
 	"strings"
 	"testing"
 	"time"
@@ -39,7 +39,7 @@ func keyInfoSetup(t testing.TB) keyInfoEnv { return keyInfoSetupOn(t, memstore.N
 func keyInfoSetupOn(t testing.TB, root store.Backend) keyInfoEnv {
 	t.Helper()
 	k := make([]byte, 32)
-	if _, err := rand.Read(k); err != nil {
+	if _, err := rand.NewChaCha8([32]byte{1}).Read(k); err != nil {
 		t.Fatal(err)
 	}
 	keys, err := secret.NewKeyring("kek-1", map[string][]byte{"kek-1": k})

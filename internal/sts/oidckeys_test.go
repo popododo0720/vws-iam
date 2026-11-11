@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/cryptotest"
 	"time"
 
 	"go.opentelemetry.io/otel/codes"
@@ -175,6 +176,7 @@ func wantIDPCommunication(t *testing.T, what string, err error) {
 // (any case) and the leaf chains to it for the host; a trusted chain needs
 // no thumbprint. A refused certificate reads nothing and is not retried.
 func TestOIDCKeysThumbprint(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 486)
 	ctx := context.Background()
 	p := newIdP(t, nil)
 	f := p.fetcher(nil, nil, time.Second)
@@ -211,6 +213,7 @@ func TestOIDCKeysThumbprint(t *testing.T) {
 // TestOIDCKeysSelfSignedLeaf: a server that presents only a self-signed
 // certificate is pinned by that certificate's thumbprint.
 func TestOIDCKeysSelfSignedLeaf(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 486)
 	var self *pki
 	p := newIdP(t, func(_, _ *pki) []*pki {
 		self = issue(t, nil, false, "idp.test")
@@ -227,6 +230,7 @@ func TestOIDCKeysSelfSignedLeaf(t *testing.T) {
 // vouch for a leaf it did not sign or for a host the leaf does not name; an
 // IP-literal issuer is refused before any connection.
 func TestOIDCKeysOtherHosts(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 486)
 	ctx := context.Background()
 	keysHost := func(p *idp) {
 		p.handle(func(w http.ResponseWriter, r *http.Request) bool {
@@ -272,6 +276,7 @@ func TestOIDCKeysOtherHosts(t *testing.T) {
 // TestOIDCKeysReturnsACopy: a caller that changes the document it got does
 // not change what the next caller gets from the cache.
 func TestOIDCKeysReturnsACopy(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 486)
 	p := newIdP(t, nil)
 	f := p.fetcher(nil, nil, time.Second)
 	pin := []string{thumbprint(p.ca.cert)}
@@ -290,6 +295,7 @@ func TestOIDCKeysReturnsACopy(t *testing.T) {
 // TestOIDCKeysTimeoutCoversTheWholeFetch: the timeout is one budget for
 // discovery and the JWKS together, not one per request.
 func TestOIDCKeysTimeoutCoversTheWholeFetch(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 486)
 	if sts.OIDCFetchTimeout != 5*time.Second {
 		t.Fatalf("OIDCFetchTimeout %v, want 5s", sts.OIDCFetchTimeout)
 	}
@@ -316,6 +322,7 @@ func TestOIDCKeysTimeoutCoversTheWholeFetch(t *testing.T) {
 // TestOIDCKeysTimeout: an IdP that does not answer is ErrIDPCommunication
 // within the fetch timeout.
 func TestOIDCKeysTimeout(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 486)
 	p := newIdP(t, nil)
 	p.handle(func(_ http.ResponseWriter, r *http.Request) bool {
 		select {
@@ -336,6 +343,7 @@ func TestOIDCKeysTimeout(t *testing.T) {
 // TestOIDCKeysRetry: a 5xx or 429 is retried up to three attempts, any
 // other status is not.
 func TestOIDCKeysRetry(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 486)
 	ctx := context.Background()
 	for _, tc := range []struct {
 		name     string
@@ -379,6 +387,7 @@ func TestOIDCKeysRetry(t *testing.T) {
 // (order and case do not matter) until OIDCKeyCacheTTL passes; a failure
 // is not cached; a new fetcher (a restart) starts empty.
 func TestOIDCKeysCache(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 486)
 	ctx := context.Background()
 	p := newIdP(t, nil)
 	clk := &lockedClock{t: time.Now()}
@@ -433,6 +442,7 @@ func TestOIDCKeysCache(t *testing.T) {
 // TestOIDCKeysConcurrent: concurrent fetches of one provider make one
 // request, and a caller that gives up does not fail the others.
 func TestOIDCKeysConcurrent(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 486)
 	p := newIdP(t, nil)
 	release := make(chan struct{})
 	p.handle(func(_ http.ResponseWriter, r *http.Request) bool {
@@ -488,6 +498,7 @@ func TestOIDCKeysConcurrent(t *testing.T) {
 // key set, a redirect, an over-long body and an unreachable IdP are all
 // ErrIDPCommunication, and none is cached.
 func TestOIDCKeysHostileIdP(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 486)
 	const disc = "/.well-known/openid-configuration"
 	meta := func(issuer, jwksURI string) string {
 		return `{"issuer":"` + issuer + `","jwks_uri":"` + jwksURI + `"}`
@@ -557,6 +568,7 @@ func TestOIDCKeysHostileIdP(t *testing.T) {
 // and one counter and latency point by op and result; a failure marks the
 // span failed with the result, never the issuer.
 func TestOIDCKeysAreMeasuredAndTraced(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 486)
 	p := newIdP(t, nil)
 	f := p.fetcher(nil, nil, time.Second)
 	spans.Reset()

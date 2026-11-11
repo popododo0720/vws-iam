@@ -2,8 +2,8 @@ package sts_test
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
+	"math/rand/v2"
 	"strings"
 	"testing"
 
@@ -136,8 +136,9 @@ func TestSessionRefSAMLSurvivesRestartAndKEKRotation(t *testing.T) {
 	e := samlSetup(t)
 	ctx := context.Background()
 	k1, k2 := make([]byte, 32), make([]byte, 32)
+	rng := rand.NewChaCha8([32]byte{1})
 	for _, k := range [][]byte{k1, k2} {
-		if _, err := rand.Read(k); err != nil {
+		if _, err := rng.Read(k); err != nil {
 			t.Fatal(err)
 		}
 	}

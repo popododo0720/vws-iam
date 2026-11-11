@@ -2,8 +2,8 @@ package sts_test
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"testing"
@@ -85,7 +85,7 @@ func testRevokeSkew(t *testing.T, backend func(testing.TB) store.Backend) {
 			ctx := t.Context()
 			b := backend(t)
 			k := make([]byte, 32)
-			if _, err := rand.Read(k); err != nil {
+			if _, err := rand.NewChaCha8([32]byte{1}).Read(k); err != nil {
 				t.Fatal(err)
 			}
 			keys, err := secret.NewKeyring("kek-1", map[string][]byte{"kek-1": k})

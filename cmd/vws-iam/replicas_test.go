@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
 	"errors"
 	"io"
+	"math/rand/v2"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -33,7 +33,7 @@ func writeCredentials(t *testing.T, ca testCA) string {
 	dir := t.TempDir()
 	cert, key := ca.leaf(t, "vws-iam", x509.ExtKeyUsageClientAuth)
 	kek := make([]byte, 32)
-	if _, err := rand.Read(kek); err != nil {
+	if _, err := rand.NewChaCha8([32]byte{1}).Read(kek); err != nil {
 		t.Fatal(err)
 	}
 	for name, b := range map[string][]byte{

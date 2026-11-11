@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"testing/cryptotest"
 	"time"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
@@ -42,6 +43,7 @@ func samlDoc(t *testing.T, runes int) string {
 }
 
 func TestSAMLProviderValidate(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 486)
 	doc := samlDoc(t, iam.MinSAMLMetadataLen)
 	p := iam.SAMLProvider{Name: "corp", MetadataDocument: doc, Created: time.Now()}
 	if err := p.Validate(); err != nil {
@@ -112,6 +114,7 @@ func TestSAMLProviderValidate(t *testing.T) {
 // however few characters the document has; escaped characters count as
 // they are stored.
 func TestSAMLProviderValidateEncodedSize(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 486)
 	_, c := testCert(t, "doc")
 	at := func(comment string) iam.SAMLProvider {
 		return iam.SAMLProvider{

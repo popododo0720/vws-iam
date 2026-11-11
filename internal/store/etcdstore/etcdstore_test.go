@@ -2,9 +2,9 @@ package etcdstore_test
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net/url"
 	"os"
 	"strconv"
@@ -197,7 +197,7 @@ func TestSecretIsSealedInEtcd(t *testing.T) {
 		t.Fatal(err)
 	}
 	kek := make([]byte, 32)
-	if _, err := rand.Read(kek); err != nil {
+	if _, err := rand.NewChaCha8([32]byte{1}).Read(kek); err != nil {
 		t.Fatal(err)
 	}
 	ring, err := secret.NewKeyring("kek-1", map[string][]byte{"kek-1": kek})

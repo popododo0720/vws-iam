@@ -1,9 +1,9 @@
 package grpcapi_test
 
 import (
-	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"math/rand/v2"
 	"testing"
 
 	"golang.org/x/crypto/argon2"
@@ -20,7 +20,7 @@ import (
 func cheapPHC(t *testing.T, pw string) string {
 	t.Helper()
 	salt := make([]byte, 16)
-	if _, err := rand.Read(salt); err != nil {
+	if _, err := rand.NewChaCha8([32]byte{1}).Read(salt); err != nil {
 		t.Fatal(err)
 	}
 	const m, it, p = 8, 1, 1

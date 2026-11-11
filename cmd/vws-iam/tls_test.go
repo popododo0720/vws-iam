@@ -1,5 +1,7 @@
 package main
 
+//vws:unseeded TestMutualTLS* serve TLS; their server goroutines outlive the test and race a cryptotest override.
+
 import (
 	"context"
 	"crypto/ecdsa"
@@ -17,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/cryptotest"
 	"time"
 
 	"google.golang.org/grpc"
@@ -38,7 +41,7 @@ func newCA(t *testing.T, name string) testCA {
 		t.Fatal(err)
 	}
 	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: name},
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: name},
 		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
 		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
 	}
@@ -61,7 +64,7 @@ func (ca testCA) leaf(t *testing.T, name string, usage x509.ExtKeyUsage) (certPE
 		t.Fatal(err)
 	}
 	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: name},
+		SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: name},
 		DNSNames: []string{name}, IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1)},
 		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{usage},
@@ -245,6 +248,7 @@ func TestMutualTLSRotation(t *testing.T) {
 }
 
 func TestTLSFlags(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 486)
 	dir := t.TempDir()
 	f := serverFiles(t, dir, newCA(t, "s"), newCA(t, "c"))
 	all := []string{"-tls-cert-file", f.certFile, "-tls-key-file", f.keyFile, "-tls-client-ca-file", f.clientCAFile}
@@ -283,6 +287,7 @@ func TestTLSFlags(t *testing.T) {
 // TestTLSBadFilesFailStartup: a missing or invalid mount stops the
 // process before it listens instead of on the first connection.
 func TestTLSBadFilesFailStartup(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 486)
 	dir := t.TempDir()
 	good := serverFiles(t, dir, newCA(t, "s"), newCA(t, "c"))
 	notPEM := filepath.Join(dir, "bad.pem")
