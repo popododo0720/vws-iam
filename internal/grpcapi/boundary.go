@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"strings"
+	"time"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/store"
@@ -128,6 +130,9 @@ func (s *Server) putRolePermissionsBoundary(ctx context.Context, pid, roleName, 
 		case err == nil:
 			return nil
 		case errors.Is(err, store.ErrConflict) && attempt < maxDeleteAttempts:
+			if waitErr := waitBoundaryConflict(ctx, attempt); waitErr != nil {
+				return toStatus(ctx, errors.Join(err, waitErr))
+			}
 			continue
 		case errors.Is(err, store.ErrNotFound):
 			return notFound("The role with name " + roleName + " cannot be found.")
@@ -260,6 +265,9 @@ func (s *Server) putUserPermissionsBoundary(ctx context.Context, pid, userName, 
 		case err == nil:
 			return nil
 		case errors.Is(err, store.ErrConflict) && attempt < maxDeleteAttempts:
+			if waitErr := waitBoundaryConflict(ctx, attempt); waitErr != nil {
+				return toStatus(ctx, errors.Join(err, waitErr))
+			}
 			continue
 		case errors.Is(err, store.ErrNotFound):
 			return notFound("The user with name " + userName + " cannot be found.")
@@ -303,4 +311,18 @@ func (p project) reserveBoundaryPolicy(ctx context.Context, arn string) (store.V
 	pol.Object.ReferenceGeneration++
 	pol.Version, err = store.Update(ctx, p.b, pol.Object, pol.Version)
 	return pol, err
+}
+
+// Reservations intentionally invalidate concurrent writers. Back off before
+// reserving again so contending replicas leave one another time to publish.
+func waitBoundaryConflict(ctx context.Context, attempt int) error {
+	d := min(5*time.Millisecond<<min(attempt-1, 16), 200*time.Millisecond)
+	timer := time.NewTimer(d/2 + time.Duration(rand.Int64N(int64(d/2)+1)))
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("wait for boundary conflict retry: %w", ctx.Err())
+	case <-timer.C:
+		return nil
+	}
 }
