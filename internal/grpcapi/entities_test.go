@@ -97,7 +97,7 @@ func listEntitiesAll(
 	t.Helper()
 	var names []string
 	for pages := 1; ; pages++ {
-		pg, err := api.ListEntitiesForPolicy(t.Context(), proj, q)
+		pg, err := api.PolicyEntitiesPage(t.Context(), proj, q)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -159,7 +159,7 @@ func TestListEntitiesForPolicy(t *testing.T) {
 			}
 			all := []string{"group/Devs", "role/Admin", "role/bounded", "user/alice", "user/Bob", "user/dave"}
 			for _, replica := range []*env{e, newEnvOn(t, b, &now)} {
-				pg, err := replica.api.ListEntitiesForPolicy(t.Context(), proj, grpcapi.EntitiesQuery{PolicyARN: pol})
+				pg, err := replica.api.PolicyEntitiesPage(t.Context(), proj, grpcapi.EntitiesQuery{PolicyARN: pol})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -209,7 +209,7 @@ func TestListEntitiesForPolicy(t *testing.T) {
 				if tc.q.PolicyARN == "" {
 					tc.q.PolicyARN = pol
 				}
-				pg, err := e.api.ListEntitiesForPolicy(t.Context(), proj, tc.q)
+				pg, err := e.api.PolicyEntitiesPage(t.Context(), proj, tc.q)
 				if err != nil {
 					t.Fatalf("%+v: %v", tc.q, err)
 				}
@@ -237,7 +237,7 @@ func TestListEntitiesForPolicyUnattached(t *testing.T) {
 	seedEntPolicy(t, b, proj, "/", "Lonely")
 	seedEntity(t, b, entity{kind: "user", name: "alice"})
 	q := grpcapi.EntitiesQuery{PolicyARN: entPolicyARN("/", "Lonely")}
-	pg, err := e.api.ListEntitiesForPolicy(t.Context(), proj, q)
+	pg, err := e.api.PolicyEntitiesPage(t.Context(), proj, q)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +300,7 @@ func TestListEntitiesForPolicyDefaultPage(t *testing.T) {
 	for i := range grpcapi.DefaultListPageSize + 1 {
 		seedEntity(t, b, entity{kind: "user", name: fmt.Sprintf("u%03d", i), attached: []string{pol}})
 	}
-	pg, err := e.api.ListEntitiesForPolicy(t.Context(), proj, grpcapi.EntitiesQuery{PolicyARN: pol})
+	pg, err := e.api.PolicyEntitiesPage(t.Context(), proj, grpcapi.EntitiesQuery{PolicyARN: pol})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +389,7 @@ func TestListEntitiesForPolicyErrors(t *testing.T) {
 		if q.PolicyARN == "" {
 			q.PolicyARN = pol
 		}
-		_, err := e.api.ListEntitiesForPolicy(t.Context(), pid, q)
+		_, err := e.api.PolicyEntitiesPage(t.Context(), pid, q)
 		return err
 	}
 	validation := []grpcapi.EntitiesQuery{
@@ -441,7 +441,7 @@ func TestListEntitiesForPolicyErrors(t *testing.T) {
 	}
 	for _, k := range []iam.Kind{iam.KindGroup, iam.KindRole, iam.KindUser} {
 		broken := newEnvOn(t, failingList{b, k, errors.New("backend exploded")}, &now)
-		_, err := broken.api.ListEntitiesForPolicy(t.Context(), proj, grpcapi.EntitiesQuery{PolicyARN: pol})
+		_, err := broken.api.PolicyEntitiesPage(t.Context(), proj, grpcapi.EntitiesQuery{PolicyARN: pol})
 		wantAWS(t, err, codes.Internal, "ServiceFailure")
 	}
 }

@@ -1,6 +1,7 @@
 package grpcapi_test
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
 )
 
-// TestUnservedRPCsAreUnimplemented: the RPCs vws-proto v0.9.0 to v0.20.0
+// TestUnservedRPCsAreUnimplemented: the RPCs vws-proto v0.9.0 to v0.24.0
 // added that this server does not serve yet answer UNIMPLEMENTED (#94 to
 // #108).
 func TestUnservedRPCsAreUnimplemented(t *testing.T) {
@@ -38,6 +39,30 @@ func TestUnservedRPCsAreUnimplemented(t *testing.T) {
 	}
 	ctx := t.Context()
 	for name, call := range map[string]func() error{
+		"ListRoleTags": func() error {
+			_, err := e.roles.ListRoleTags(ctx, &iamv1.ListRoleTagsRequest{})
+			return err
+		},
+		"TagRole": func() error {
+			_, err := e.roles.TagRole(ctx, &iamv1.TagRoleRequest{})
+			return err
+		},
+		"UntagRole": func() error {
+			_, err := e.roles.UntagRole(ctx, &iamv1.UntagRoleRequest{})
+			return err
+		},
+		"ListEntitiesForPolicy": func() error {
+			_, err := e.policies.ListEntitiesForPolicy(ctx, &iamv1.ListEntitiesForPolicyRequest{})
+			return err
+		},
+		"SimulatePrincipalPolicy": func() error {
+			_, err := e.policies.SimulatePrincipalPolicy(ctx, &iamv1.SimulatePrincipalPolicyRequest{})
+			return err
+		},
+		"DeleteInstanceProfile": func() error {
+			_, err := e.profiles.DeleteInstanceProfile(ctx, &iamv1.DeleteInstanceProfileRequest{})
+			return err
+		},
 		"DeleteUserPermissionsBoundary": func() error {
 			_, err := e.users.DeleteUserPermissionsBoundary(ctx, &iamv1.DeleteUserPermissionsBoundaryRequest{})
 			return err
@@ -78,6 +103,47 @@ func TestUnservedRPCsAreUnimplemented(t *testing.T) {
 		if err := call(); status.Code(err) != codes.Unimplemented {
 			t.Errorf("%s: %v, want Unimplemented", name, err)
 		}
+	}
+}
+
+func TestEnableMFAPreconditionsUnserved(t *testing.T) {
+	for _, bc := range renameBackends {
+		t.Run(bc.name, func(t *testing.T) {
+			b := bc.open()
+			now := time.Now().UTC()
+			e := newEnvOn(t, b, &now)
+			u := e.createUser(t, t.Context(), "alice")
+			d, err := e.mfa.CreateVirtualMfaDevice(t.Context(), &iamv1.CreateVirtualMfaDeviceRequest{
+				Parent: parentName, MfaDeviceId: "phone", MfaDevice: &iamv1.MfaDevice{},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			sb := store.Scoped(b, proj)
+			before, err := store.Get[iam.MfaDevice](t.Context(), sb, "phone")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, req := range []*iamv1.EnableMfaDeviceRequest{
+				{ExpectedUserArn: u.GetStatus().GetArn()},
+				{UserEtag: u.GetEtag()},
+				{ExpectedUserArn: "bad-arn", UserEtag: "bad etag"},
+			} {
+				req.Name, req.User = d.GetMfaDevice().GetName(), u.GetName()
+				req.AuthenticationCode_1, req.AuthenticationCode_2 = "000000", "000000"
+				for range 2 {
+					e = newEnvOn(t, b, &now)
+					out, err := e.mfa.EnableMfaDevice(t.Context(), req)
+					if status.Code(err) != codes.Unimplemented || out != nil {
+						t.Fatalf("enable with unsupported preconditions: %v, %v", out, err)
+					}
+					after, err := store.Get[iam.MfaDevice](t.Context(), sb, "phone")
+					if err != nil || !reflect.DeepEqual(before, after) {
+						t.Fatalf("refused enable changed device state: %v", err)
+					}
+				}
+			}
+		})
 	}
 }
 

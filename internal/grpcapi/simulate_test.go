@@ -77,7 +77,7 @@ func summary(p grpcapi.SimulationPage) []string {
 
 func simulate(t *testing.T, e *env, in grpcapi.SimulateInput) grpcapi.SimulationPage {
 	t.Helper()
-	p, err := e.api.SimulatePrincipalPolicy(t.Context(), proj, in)
+	p, err := e.api.SimulatePrincipal(t.Context(), proj, in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +348,7 @@ func TestSimulatePrincipalPolicyPages(t *testing.T) {
 		t.Fatalf("default page: %d results truncated %v, want all 3", len(p.Results), p.IsTruncated)
 	}
 	in.Marker, in.MaxItems = "Mw", 1 // offset 3 of 3 actions
-	if _, err := e.api.SimulatePrincipalPolicy(t.Context(), proj, in); err == nil {
+	if _, err := e.api.SimulatePrincipal(t.Context(), proj, in); err == nil {
 		t.Fatal("a marker past the last action was accepted")
 	}
 }
@@ -433,7 +433,7 @@ func TestSimulatePrincipalPolicyErrors(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := e.api.SimulatePrincipalPolicy(t.Context(), c.pid, c.in)
+			_, err := e.api.SimulatePrincipal(t.Context(), c.pid, c.in)
 			wantAWS(t, err, c.code, c.aws)
 		})
 	}
@@ -445,7 +445,7 @@ func TestSimulatePrincipalPolicyErrors(t *testing.T) {
 	if _, err := store.Mutate(t.Context(), store.Scoped(b, proj), "alice", breakAlice); err != nil {
 		t.Fatal(err)
 	}
-	_, err := e.api.SimulatePrincipalPolicy(t.Context(), proj, ok(func(*in) {}))
+	_, err := e.api.SimulatePrincipal(t.Context(), proj, ok(func(*in) {}))
 	wantAWS(t, err, codes.Internal, "PolicyEvaluation")
 	if strings.Contains(err.Error(), "not json") {
 		t.Fatalf("PolicyEvaluation %q echoes the stored document", err)

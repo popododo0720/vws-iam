@@ -120,6 +120,9 @@ func userRef(project, s string) (string, error) {
 
 // EnableMfaDevice assigns a device after two consecutive codes.
 func (s *Server) EnableMfaDevice(ctx context.Context, req *iamv1.EnableMfaDeviceRequest) (*iamv1.EnableMfaDeviceResponse, error) {
+	if req.GetExpectedUserArn() != "" || req.GetUserEtag() != "" {
+		return nil, unservedField("EnableMfaDevice user preconditions (#472)")
+	}
 	pid, id, err := child(req.GetName(), "mfaDevices")
 	if err != nil {
 		return nil, err

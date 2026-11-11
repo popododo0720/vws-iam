@@ -37,16 +37,16 @@ func TestDeleteInstanceProfile(t *testing.T) {
 			e, other := newEnvOn(t, b, &now), newEnvOn(t, b, &now)
 			ctx := t.Context()
 			seedInstanceProfile(t, b, "Webserver")
-			if err := e.api.DeleteInstanceProfile(ctx, proj, "WEBSERVER"); err != nil {
+			if err := e.api.DeleteProfile(ctx, proj, "WEBSERVER"); err != nil {
 				t.Fatal(err)
 			}
 			profileGone(t, b, "Webserver")
-			wantAWS(t, other.api.DeleteInstanceProfile(ctx, proj, "Webserver"), codes.NotFound, "NoSuchEntity")
+			wantAWS(t, other.api.DeleteProfile(ctx, proj, "Webserver"), codes.NotFound, "NoSuchEntity")
 
 			seedRole(t, e, "S3Access")
 			seedInstanceProfile(t, b, "app", "S3Access")
 			before := storedProfile(t, b, "app")
-			err := other.api.DeleteInstanceProfile(ctx, proj, "app")
+			err := other.api.DeleteProfile(ctx, proj, "app")
 			wantAWS(t, err, codes.FailedPrecondition, "DeleteConflict")
 			if !strings.Contains(err.Error(), "must remove roles from instance profile first") {
 				t.Fatalf("DeleteConflict message %q, want the AWS wording", err)
@@ -57,7 +57,7 @@ func TestDeleteInstanceProfile(t *testing.T) {
 			if err := e.api.RemoveProfileRole(ctx, proj, "app", "s3access"); err != nil {
 				t.Fatal(err)
 			}
-			if err := other.api.DeleteInstanceProfile(ctx, proj, "app"); err != nil {
+			if err := other.api.DeleteProfile(ctx, proj, "app"); err != nil {
 				t.Fatal(err)
 			}
 			profileGone(t, b, "app")
@@ -72,7 +72,7 @@ func TestDeleteInstanceProfileDeletedRole(t *testing.T) {
 	now := time.Now().UTC()
 	e := newEnvOn(t, b, &now)
 	seedInstanceProfile(t, b, "web", "Gone")
-	if err := e.api.DeleteInstanceProfile(t.Context(), proj, "web"); err != nil {
+	if err := e.api.DeleteProfile(t.Context(), proj, "web"); err != nil {
 		t.Fatal(err)
 	}
 	profileGone(t, b, "web")
@@ -104,14 +104,14 @@ func TestDeleteInstanceProfileErrors(t *testing.T) {
 	ctx := t.Context()
 	seedInstanceProfile(t, b, "web")
 	for _, n := range []string{"", "a b", "a/b", "é", strings.Repeat("p", iam.MaxInstanceProfileNameLen+1)} {
-		wantAWS(t, e.api.DeleteInstanceProfile(ctx, proj, n), codes.InvalidArgument, "ValidationError")
+		wantAWS(t, e.api.DeleteProfile(ctx, proj, n), codes.InvalidArgument, "ValidationError")
 	}
-	wantAWS(t, e.api.DeleteInstanceProfile(ctx, "Bad_Project", "web"), codes.InvalidArgument, "ValidationError")
+	wantAWS(t, e.api.DeleteProfile(ctx, "Bad_Project", "web"), codes.InvalidArgument, "ValidationError")
 	storedProfile(t, b, "web")
-	wantAWS(t, e.api.DeleteInstanceProfile(ctx, proj, "missing"), codes.NotFound, "NoSuchEntity")
+	wantAWS(t, e.api.DeleteProfile(ctx, proj, "missing"), codes.NotFound, "NoSuchEntity")
 	for _, n := range []string{strings.Repeat("p", iam.MaxInstanceProfileNameLen), "A+=,.@_-z9"} {
 		seedInstanceProfile(t, b, n)
-		if err := e.api.DeleteInstanceProfile(ctx, proj, n); err != nil {
+		if err := e.api.DeleteProfile(ctx, proj, n); err != nil {
 			t.Fatalf("DeleteInstanceProfile(%q): %v, want deleted", n, err)
 		}
 	}
@@ -125,7 +125,7 @@ func TestDeleteInstanceProfileErrors(t *testing.T) {
 		m := memstore.New()
 		fe := newEnvOn(t, fail(m), &now)
 		seedInstanceProfile(t, m, "web", "r")
-		wantAWS(t, fe.api.DeleteInstanceProfile(ctx, proj, "web"), codes.Internal, "InternalFailure")
+		wantAWS(t, fe.api.DeleteProfile(ctx, proj, "web"), codes.Internal, "InternalFailure")
 		storedProfile(t, m, "web")
 	}
 }
@@ -139,7 +139,7 @@ func TestDeleteInstanceProfileCanceled(t *testing.T) {
 	seedInstanceProfile(t, b, "web")
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	err := e.api.DeleteInstanceProfile(ctx, proj, "web")
+	err := e.api.DeleteProfile(ctx, proj, "web")
 	if status.Code(err) != codes.Canceled {
 		t.Fatalf("canceled request: %v, want Canceled", err)
 	}
@@ -165,7 +165,7 @@ func TestDeleteInstanceProfileConcurrent(t *testing.T) {
 				wg.Go(func() {
 					api := replicas[i%2].api
 					if i/2%2 == 0 {
-						errs[i] = api.DeleteInstanceProfile(t.Context(), proj, "web")
+						errs[i] = api.DeleteProfile(t.Context(), proj, "web")
 					} else {
 						errs[i] = api.AddProfileRole(t.Context(), proj, "web", "r")
 					}
@@ -238,7 +238,7 @@ func TestDeleteInstanceProfileStaleRead(t *testing.T) {
 			seedRole(t, newEnvOn(t, inner, &now), "late")
 			seedInstanceProfile(t, inner, "web")
 			b := &changingBeforeDelete{Backend: inner, role: "late", t: t}
-			err := newEnvOn(t, b, &now).api.DeleteInstanceProfile(t.Context(), proj, "web")
+			err := newEnvOn(t, b, &now).api.DeleteProfile(t.Context(), proj, "web")
 			wantAWS(t, err, codes.FailedPrecondition, "DeleteConflict")
 			if got := storedProfile(t, inner, "web").Object.Roles; len(got) != 1 || got[0] != "late" {
 				t.Fatalf("after stale read: roles %q, want [late] kept", got)
