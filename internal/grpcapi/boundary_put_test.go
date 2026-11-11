@@ -186,7 +186,7 @@ type describing struct {
 	t    *testing.T
 }
 
-func (c *describing) Update(ctx context.Context, k iam.Kind, key string, v []byte, version string) (string, error) {
+func (c *describing) beforeWrite(ctx context.Context, k iam.Kind, key string) {
 	if k == iam.KindRole {
 		c.once.Do(func() {
 			b, name := store.Scoped(c.Backend, proj), strings.TrimPrefix(key, proj+"/")
@@ -198,7 +198,23 @@ func (c *describing) Update(ctx context.Context, k iam.Kind, key string, v []byt
 			}
 		})
 	}
+}
+
+func (c *describing) Update(ctx context.Context, k iam.Kind, key string, v []byte, version string) (string, error) {
+	c.beforeWrite(ctx, k, key)
 	return c.Backend.Update(ctx, k, key, v, version)
+}
+
+func (c *describing) UpdateIf(
+	ctx context.Context,
+	k iam.Kind,
+	key string,
+	v []byte,
+	version string,
+	pre store.Pre,
+) (string, error) {
+	c.beforeWrite(ctx, k, key)
+	return c.Backend.UpdateIf(ctx, k, key, v, version, pre)
 }
 
 // TestPutRolePermissionsBoundaryStaleRead: a role changed after it was

@@ -442,6 +442,10 @@ type Policy struct {
 	// labels: AWS tag keys and values allow characters and lengths the label
 	// grammar rejects (#74, #75, #76).
 	Tags map[string]string `json:"tags,omitempty"`
+
+	// ReferenceGeneration orders boundary publication and deletion scans without
+	// changing the public policy generation or its timestamps.
+	ReferenceGeneration uint64 `json:"referenceGeneration,omitempty"`
 }
 
 func (Policy) Kind() Kind    { return KindPolicy }

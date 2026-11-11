@@ -256,6 +256,46 @@ func (s *Server) UpdatePolicy(ctx context.Context, req *iamv1.UpdatePolicyReques
 	return op, toStatus(ctx, err)
 }
 
+// removeBoundaryPolicy reserves a new reference generation before checking
+// dependencies. Boundary writers do the same before publishing through UpdateIf.
+// A writer starting after the scan invalidates the delete CAS; one starting
+// before the reservation can no longer publish after it. Reserving on both
+// paths also closes the gap between a boundary's reservation and publication.
+func removeBoundaryPolicy(
+	ctx context.Context,
+	b store.Backend,
+	key, etag string,
+	allowMissing bool,
+	check func(iam.Policy) error,
+) (store.Versioned[iam.Policy], error) {
+	cur, err := store.Get[iam.Policy](ctx, b, key)
+	if errors.Is(err, store.ErrNotFound) && allowMissing {
+		return cur, nil
+	}
+	if err != nil {
+		return cur, err
+	}
+	if err := checkEtag(etag, cur.Version); err != nil {
+		return cur, err
+	}
+	cur.Object.ReferenceGeneration++
+	cur.Version, err = store.Update(ctx, b, cur.Object, cur.Version)
+	if errors.Is(err, store.ErrConflict) {
+		return cur, checkEtag("stale", "")
+	}
+	if err != nil {
+		return cur, err
+	}
+	if err := check(cur.Object); err != nil {
+		return cur, err
+	}
+	err = store.Delete[iam.Policy](ctx, b, key, cur.Version)
+	if errors.Is(err, store.ErrConflict) {
+		return cur, checkEtag("stale", "")
+	}
+	return cur, err
+}
+
 // DeletePolicy deletes a policy that is attached nowhere.
 func (s *Server) DeletePolicy(ctx context.Context, req *iamv1.DeletePolicyRequest) (*longrunningpb.Operation, error) {
 	pid, id, err := child(req.GetName(), "policies")
@@ -266,7 +306,7 @@ func (s *Server) DeletePolicy(ctx context.Context, req *iamv1.DeletePolicyReques
 	if op, err := s.replay(ctx, pid, "DeletePolicy", req.GetRequestId(), req); op != nil || err != nil {
 		return op, toStatus(ctx, err)
 	}
-	v, _, err := remove(ctx, p.b, id, req.GetEtag(), req.GetAllowMissing(), func(pol iam.Policy) error {
+	v, err := removeBoundaryPolicy(ctx, p.b, id, req.GetEtag(), req.GetAllowMissing(), func(pol iam.Policy) error {
 		if len(pol.Versions) > 1 {
 			return deleteConflict("policy has non-default versions; delete them with DeletePolicyVersion first")
 		}

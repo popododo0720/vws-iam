@@ -162,7 +162,7 @@ type changingUser struct {
 	t    *testing.T
 }
 
-func (c *changingUser) Update(ctx context.Context, k iam.Kind, key string, v []byte, version string) (string, error) {
+func (c *changingUser) beforeWrite(ctx context.Context, k iam.Kind, key string) {
 	if k == iam.KindUser {
 		c.once.Do(func() {
 			b, name := store.Scoped(c.Backend, proj), strings.TrimPrefix(key, proj+"/")
@@ -174,7 +174,23 @@ func (c *changingUser) Update(ctx context.Context, k iam.Kind, key string, v []b
 			}
 		})
 	}
+}
+
+func (c *changingUser) Update(ctx context.Context, k iam.Kind, key string, v []byte, version string) (string, error) {
+	c.beforeWrite(ctx, k, key)
 	return c.Backend.Update(ctx, k, key, v, version)
+}
+
+func (c *changingUser) UpdateIf(
+	ctx context.Context,
+	k iam.Kind,
+	key string,
+	v []byte,
+	version string,
+	pre store.Pre,
+) (string, error) {
+	c.beforeWrite(ctx, k, key)
+	return c.Backend.UpdateIf(ctx, k, key, v, version, pre)
 }
 
 // TestDeleteUserPermissionsBoundaryStaleRead: a user changed after it was
