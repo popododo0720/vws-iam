@@ -195,7 +195,7 @@ func TestInlinePolicyNameLength(t *testing.T) {
 		}
 		for _, name := range []string{strings.Repeat("a", 129), "", "bad name", "a/b", "a:b", strings.Repeat("\u00e9", 4)} {
 			err := o.with(map[string]string{name: "{}"}).Validate()
-			want := `invalid: inline policy name "` + name + `"`
+			want := `invalid: ` + o.kind + ` "` + o.kind + `" inline policy name "` + name + `"`
 			if err == nil || err.Error() != want || !errors.Is(err, iam.ErrInvalid) {
 				t.Errorf("%s inline policy %q: %v, want %s", o.kind, name, err, want)
 			}
