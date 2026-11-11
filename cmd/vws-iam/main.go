@@ -320,13 +320,7 @@ func run(ctx context.Context, cfg config) (err error) {
 		log.LogAttrs(ctx, slog.LevelWarn, "state is in memory: not shared between replicas and lost on exit",
 			slog.String("store", cfg.storeMode))
 	}
-	ready := func(ctx context.Context) error {
-		_, err := backend.List(ctx, iam.KindKeyIndex)
-		if err != nil {
-			return fmt.Errorf("store: %w", err)
-		}
-		return nil
-	}
+	ready := storeReady(backend)
 	if err := waitStore(ctx, log, ready, storeWaitAttempts, time.Second); err != nil {
 		return err
 	}
@@ -415,6 +409,23 @@ func waitStore(
 		case <-t.C:
 		}
 		wait *= 2
+	}
+}
+
+// storeReady reads at most one page: it runs on every health probe, and the
+// key index grows with every live STS session (#188).
+func storeReady(b store.Backend) func(context.Context) error {
+	return func(ctx context.Context) error {
+		var err error
+		if p, ok := b.(store.Pager); ok {
+			_, _, err = p.ListPage(ctx, iam.KindKeyIndex, 1, "")
+		} else {
+			_, err = b.List(ctx, iam.KindKeyIndex)
+		}
+		if err != nil {
+			return fmt.Errorf("store: %w", err)
+		}
+		return nil
 	}
 }
 

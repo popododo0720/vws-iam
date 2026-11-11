@@ -18,8 +18,30 @@ type retrying struct {
 // WithRetry wraps b so a transient ErrUnavailable is retried up to attempts
 // times, waiting base, 2*base, ... between tries. A Create retried after an
 // unseen success reports ErrExists, which callers resolve by request id.
+// When b is a Pager, so is the result, retrying each page on its own.
 func WithRetry(b Backend, attempts int, base time.Duration) Backend {
-	return retrying{b: b, attempts: max(attempts, 1), base: base}
+	r := retrying{b: b, attempts: max(attempts, 1), base: base}
+	if p, ok := b.(Pager); ok {
+		return retryingPager{retrying: r, p: p}
+	}
+	return r
+}
+
+type retryingPager struct {
+	retrying
+	p Pager
+}
+
+func (r retryingPager) ListPage(ctx context.Context, kind iam.Kind, limit int64, cont string) ([]Entry, string, error) {
+	type page struct {
+		es   []Entry
+		next string
+	}
+	pg, err := do(ctx, r.retrying, func() (page, error) {
+		es, next, err := r.p.ListPage(ctx, kind, limit, cont)
+		return page{es, next}, err
+	})
+	return pg.es, pg.next, err
 }
 
 func do[T any](ctx context.Context, r retrying, f func() (T, error)) (T, error) {
