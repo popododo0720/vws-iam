@@ -3,7 +3,6 @@ package grpcapi
 import (
 	"context"
 
-	"cloud.google.com/go/longrunning/autogen/longrunningpb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -141,10 +140,6 @@ func (s *Server) DeleteInstanceProfile(
 	context.Context, *iamv1.DeleteInstanceProfileRequest,
 ) (*iamv1.DeleteInstanceProfileResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "DeleteInstanceProfile is not served yet")
-}
-
-func (s *Server) UntagRole(context.Context, *iamv1.UntagRoleRequest) (*longrunningpb.Operation, error) {
-	return nil, status.Error(codes.Unimplemented, "UntagRole is not served yet")
 }
 
 // TODO(#86): serve SimulatePrincipalPolicy through simulatePrincipalPolicy.
