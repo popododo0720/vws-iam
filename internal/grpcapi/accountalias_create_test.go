@@ -418,6 +418,32 @@ func TestCreateAccountAliasRepairs(t *testing.T) {
 	aliasGone(t, b, proj, "zzz-corp")
 }
 
+// TestCreateAccountAliasReclaimBumpsSeq: reclaiming an unclaimed alias
+// record (left by a create that never won the claim) bumps its Seq past
+// every alias the project holds, so it is never tied, by Seq, with an
+// already-held alias at the same Seq and does not lose the Seq/name
+// tie-break in dropOlderAliases to it (#252).
+func TestCreateAccountAliasReclaimBumpsSeq(t *testing.T) {
+	b := memstore.New()
+	now := time.Now().UTC()
+	ctx := t.Context()
+	seedAlias(t, b, proj, "peer-corp") // held, Seq 0
+	// An unclaimed record at the same Seq, as a create leaves one whose
+	// claim write never won (or whose response was lost).
+	orphan := iam.AccountAlias{Meta: iam.Meta{UID: iam.NewUID(), Generation: 1}, Name: "new-corp", Created: now}
+	if _, err := store.Create(ctx, store.Scoped(b, proj), orphan); err != nil {
+		t.Fatal(err)
+	}
+	e := newEnvOn(t, b, &now)
+	if err := e.api.CreateAccountAlias(ctx, proj, "new-corp"); err != nil {
+		t.Fatalf("reclaiming an unclaimed record: %v, want success", err)
+	}
+	if got := listedAliases(t, e, proj); !slices.Equal(got, []string{"new-corp"}) {
+		t.Fatalf("project lists %q, want only the reclaimed new-corp", got)
+	}
+	aliasGone(t, b, proj, "peer-corp")
+}
+
 // TestCreateAccountAliasErrors: a bad project or AccountAlias is
 // ValidationError before any store access, the AWS length and pattern
 // bounds are accepted, and a store failure on any read or write is
