@@ -49,7 +49,7 @@ func TestConformanceOnAPIServer(t *testing.T) {
 			t.Fatal(err)
 		}
 		return kubestore.New(c, ns.Name)
-	}, iam.KindConsoleSession) // no CRD: Kubernetes is retired (#454)
+	}, iam.KindConsoleSession, iam.KindKeyPair) // no CRDs: Kubernetes is retired (#454, #452)
 }
 
 func TestLongPolicyNameOnAPIServer(t *testing.T) {
