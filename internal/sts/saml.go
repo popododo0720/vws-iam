@@ -260,7 +260,8 @@ func (s *Service) AssumeRoleWithSAML(
 		PrincipalID: r.Object.ID, RoleID: r.Object.ID, SessionName: cl.sessionName,
 		// AWS keeps these three keys for later requests and AssumeRole
 		// calls of the session (cross-service SAML context keys).
-		SAML: &SAMLIdentity{Subject: cl.subject, SubjectType: cl.subjectType, NameQualifier: nameQualifier},
+		SAML:           &SAMLIdentity{Subject: cl.subject, SubjectType: cl.subjectType, NameQualifier: nameQualifier},
+		SourceIdentity: cl.sourceIdentity,
 	}, d, cl.sessionNotOnOrAfter, o) // SessionNotOnOrAfter stays an absolute cap
 	if err != nil {
 		return SAMLRoleSession{}, fmt.Errorf("assume role with saml: %w", err)

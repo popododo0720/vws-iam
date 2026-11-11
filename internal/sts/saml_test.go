@@ -704,9 +704,10 @@ func TestAssumeRoleWithSAMLTrustPrincipalAccount(t *testing.T) {
 func TestAssumeRoleWithSAMLChainedIdentity(t *testing.T) {
 	e := samlSetup(t)
 	ctx := context.Background()
+	// The assertion sets a source identity, so chaining also needs
+	// sts:SetSourceIdentity in the permissions and the trust policy (#359).
 	if _, err := store.Mutate(ctx, e.b, "saml-dev", func(r *iam.Role) error {
-		r.InlinePolicies["sts"] = `{"Version":"2012-10-17","Statement":
-			{"Effect":"Allow","Action":"sts:AssumeRole","Resource":"*"}}`
+		r.InlinePolicies["sts"] = assumeAndSI
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -734,7 +735,7 @@ func TestAssumeRoleWithSAMLChainedIdentity(t *testing.T) {
 	}
 	samlCaller := sess.Caller()
 	const adminARN = "arn:vws:iam::" + acct + ":role/admin"
-	allow := `{"Effect":"Allow","Principal":{"AWS":"` + acct + `"},"Action":"sts:AssumeRole"`
+	allow := `{"Effect":"Allow","Principal":{"AWS":"` + acct + `"},"Action":["sts:AssumeRole","sts:SetSourceIdentity"]`
 	cond := func(op, key, value string) string {
 		return `,"Condition":{"` + op + `":{"` + key + `":"` + value + `"}}`
 	}

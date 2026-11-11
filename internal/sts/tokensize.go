@@ -22,7 +22,8 @@ const MaxSessionTokenSize = 4096
 type IssueOption func(*issueOptions)
 
 type issueOptions struct {
-	minTokenSize int
+	minTokenSize   int
+	sourceIdentity string
 }
 
 // MinimumSessionTokenSize is the AWS MinimumSessionTokenSize parameter:
@@ -33,8 +34,19 @@ func MinimumSessionTokenSize(n int) IssueOption {
 	return func(o *issueOptions) { o.minTokenSize = n }
 }
 
-// issueOpts applies opts and checks them, before any store read.
+// issueOpts applies opts of a call that has no SourceIdentity parameter
+// and checks them, before any store read.
 func issueOpts(opts []IssueOption) (issueOptions, error) {
+	o, err := assumeRoleOpts(opts)
+	if err == nil && o.sourceIdentity != "" {
+		return issueOptions{}, fmt.Errorf("%w: SourceIdentity is a parameter of AssumeRole only", ErrInvalidRequest)
+	}
+	return o, err
+}
+
+// assumeRoleOpts applies the opts of AssumeRole and checks them, before
+// any store read.
+func assumeRoleOpts(opts []IssueOption) (issueOptions, error) {
 	var o issueOptions
 	for _, opt := range opts {
 		opt(&o)
@@ -42,6 +54,9 @@ func issueOpts(opts []IssueOption) (issueOptions, error) {
 	if o.minTokenSize < 0 || o.minTokenSize > MaxSessionTokenSize {
 		return issueOptions{}, fmt.Errorf("%w: MinimumSessionTokenSize must be between 0 and %d",
 			ErrInvalidRequest, MaxSessionTokenSize)
+	}
+	if o.sourceIdentity != "" && !assumeRoleSourceIdentityRE.MatchString(o.sourceIdentity) {
+		return issueOptions{}, fmt.Errorf("%w: SourceIdentity must be 2-64 characters of [\\w+=,.@-]", ErrInvalidRequest)
 	}
 	return o, nil
 }

@@ -25,7 +25,7 @@ func samlContext(t *testing.T, svc *sts.Service, c sts.Credentials) map[string][
 		t.Fatal(err)
 	}
 	m := map[string][]string{}
-	got.AddSAMLContext(m)
+	got.AddSessionContext(m)
 	return m
 }
 
@@ -35,10 +35,20 @@ func samlContext(t *testing.T, svc *sts.Service, c sts.Credentials) map[string][
 func TestSessionRefCarriesSAMLIdentity(t *testing.T) {
 	e := samlSetup(t)
 	ctx := context.Background()
+	// The assertion sets a source identity, so chaining also needs
+	// sts:SetSourceIdentity in the permissions and the trust policy (#359).
 	for _, mutate := range []func() error{
 		func() error {
 			_, err := store.Mutate(ctx, e.b, "saml-dev", func(r *iam.Role) error {
-				r.InlinePolicies["sts"] = assumeAny
+				r.InlinePolicies["sts"] = assumeAndSI
+				return nil
+			})
+			return err
+		},
+		func() error {
+			_, err := store.Mutate(ctx, e.b, "admin", func(r *iam.Role) error {
+				r.AssumeRolePolicy = `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Principal":{"AWS":"` +
+					acct + `"},"Action":["sts:AssumeRole","sts:SetSourceIdentity"]}}`
 				return nil
 			})
 			return err
@@ -74,6 +84,7 @@ func TestSessionRefCarriesSAMLIdentity(t *testing.T) {
 
 	want := map[string][]string{
 		"saml:sub": {"alice@corp.test"}, "saml:sub_type": {"persistent"}, "saml:namequalifier": {saml.NameQualifier},
+		"aws:SourceIdentity": {"alice"},
 	}
 	restarted := sts.New(e.b, e.keys, e.az, acct, e.clk.now)
 	for name, c := range map[string]sts.Credentials{"SAML session": saml.Credentials, "chained session": chained} {
@@ -164,7 +175,7 @@ func TestSessionRefSAMLSurvivesRestartAndKEKRotation(t *testing.T) {
 	sub := func(svc *sts.Service) (string, error) {
 		r, err := svc.CheckSessionRef(ctx, ref)
 		m := map[string][]string{}
-		r.AddSAMLContext(m)
+		r.AddSessionContext(m)
 		return strings.Join(m["saml:sub"], ","), err
 	}
 	both := ring("kek-2", map[string][]byte{"kek-1": k1, "kek-2": k2})
