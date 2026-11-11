@@ -1,7 +1,6 @@
 package grpcapi_test
 
 import (
-	"reflect"
 	"testing"
 	"time"
 
@@ -103,47 +102,6 @@ func TestUnservedRPCsAreUnimplemented(t *testing.T) {
 		if err := call(); status.Code(err) != codes.Unimplemented {
 			t.Errorf("%s: %v, want Unimplemented", name, err)
 		}
-	}
-}
-
-func TestEnableMFAPreconditionsUnserved(t *testing.T) {
-	for _, bc := range renameBackends {
-		t.Run(bc.name, func(t *testing.T) {
-			b := bc.open()
-			now := time.Now().UTC()
-			e := newEnvOn(t, b, &now)
-			u := e.createUser(t, t.Context(), "alice")
-			d, err := e.mfa.CreateVirtualMfaDevice(t.Context(), &iamv1.CreateVirtualMfaDeviceRequest{
-				Parent: parentName, MfaDeviceId: "phone", MfaDevice: &iamv1.MfaDevice{},
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			sb := store.Scoped(b, proj)
-			before, err := store.Get[iam.MfaDevice](t.Context(), sb, "phone")
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, req := range []*iamv1.EnableMfaDeviceRequest{
-				{ExpectedUserArn: u.GetStatus().GetArn()},
-				{UserEtag: u.GetEtag()},
-				{ExpectedUserArn: "bad-arn", UserEtag: "bad etag"},
-			} {
-				req.Name, req.User = d.GetMfaDevice().GetName(), u.GetName()
-				req.AuthenticationCode_1, req.AuthenticationCode_2 = "000000", "000000"
-				for range 2 {
-					e = newEnvOn(t, b, &now)
-					out, err := e.mfa.EnableMfaDevice(t.Context(), req)
-					if status.Code(err) != codes.Unimplemented || out != nil {
-						t.Fatalf("enable with unsupported preconditions: %v, %v", out, err)
-					}
-					after, err := store.Get[iam.MfaDevice](t.Context(), sb, "phone")
-					if err != nil || !reflect.DeepEqual(before, after) {
-						t.Fatalf("refused enable changed device state: %v", err)
-					}
-				}
-			}
-		})
 	}
 }
 

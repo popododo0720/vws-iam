@@ -225,9 +225,19 @@ const maxEnableAttempts = 8
 // that user (#134): the user gone is NotFound, renaming or replaced by
 // another user under the name is ErrRenaming or ErrConflict.
 func (s *Service) Enable(ctx context.Context, user, name, code1, code2 string) (err error) {
+	return s.EnableChecked(ctx, user, name, code1, code2, nil)
+}
+
+// EnableChecked checks the user before the quota lease changes its version.
+// The lease and slot claim carry that version forward by CAS, then UpdateIf
+// commits the device on it. A guarded call never retries a conflicting write
+// against a user version the caller did not authorize.
+func (s *Service) EnableChecked(
+	ctx context.Context, user, name, code1, code2 string, check func(store.Versioned[iam.User]) error,
+) (err error) {
 	ctx, end := start(ctx, "Enable")
 	defer end(&err)
-	locked, unlock, err := s.lockMFA(ctx, user)
+	locked, unlock, err := s.lockMFAChecked(ctx, user, check)
 	if err != nil {
 		return fmt.Errorf("enable mfa device %s: user %q: %w", name, user, err)
 	}
@@ -242,6 +252,9 @@ func (s *Service) Enable(ctx context.Context, user, name, code1, code2 string) (
 		if u.Object.Renaming() {
 			return fmt.Errorf("user %q: %w", user, store.ErrRenaming)
 		}
+		if check != nil && u.Version != locked.Version {
+			return fmt.Errorf("enable mfa device %s: %w", name, store.ErrConflict)
+		}
 		if uid != "" && u.Object.UID != uid {
 			return fmt.Errorf("user %q was replaced: %w", user, store.ErrConflict)
 		}
@@ -254,14 +267,14 @@ func (s *Service) Enable(ctx context.Context, user, name, code1, code2 string) (
 			return fmt.Errorf("enable mfa device %s: %w", name, ErrEntityInUse)
 		}
 		pre, err := s.claimMFASlot(ctx, u, holder, false)
-		if errors.Is(err, store.ErrConflict) && attempt+1 < maxEnableAttempts {
+		if errors.Is(err, store.ErrConflict) && check == nil && attempt+1 < maxEnableAttempts {
 			continue
 		}
 		if err != nil {
 			return fmt.Errorf("enable mfa device %s: %w", name, err)
 		}
 		err = s.enable(ctx, u.Object.Name, name, code1, code2, &pre)
-		if errors.Is(err, store.ErrConflict) && attempt+1 < maxEnableAttempts {
+		if errors.Is(err, store.ErrConflict) && check == nil && attempt+1 < maxEnableAttempts {
 			continue
 		}
 		if err != nil {

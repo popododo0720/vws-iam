@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"cloud.google.com/go/longrunning/autogen/longrunningpb"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	commonv1 "github.com/popododo0720/vws-proto/gen/go/vws/common/v1"
@@ -120,9 +121,6 @@ func userRef(project, s string) (string, error) {
 
 // EnableMfaDevice assigns a device after two consecutive codes.
 func (s *Server) EnableMfaDevice(ctx context.Context, req *iamv1.EnableMfaDeviceRequest) (*iamv1.EnableMfaDeviceResponse, error) {
-	if req.GetExpectedUserArn() != "" || req.GetUserEtag() != "" {
-		return nil, unservedField("EnableMfaDevice user preconditions (#472)")
-	}
 	pid, id, err := child(req.GetName(), "mfaDevices")
 	if err != nil {
 		return nil, err
@@ -132,7 +130,24 @@ func (s *Server) EnableMfaDevice(ctx context.Context, req *iamv1.EnableMfaDevice
 		return nil, err
 	}
 	p := s.project(pid)
-	if err := p.mfa.Enable(ctx, user, id, req.GetAuthenticationCode_1(), req.GetAuthenticationCode_2()); err != nil {
+	g, err := newKeyGuard(pid, "", req.GetExpectedUserArn(), req.GetUserEtag())
+	if err != nil {
+		return nil, err
+	}
+	var check func(store.Versioned[iam.User]) error
+	if g.fenced() {
+		check = func(u store.Versioned[iam.User]) error {
+			want := iam.User{Name: u.Object.Name, Path: g.arnPath}
+			if g.arn != "" && (g.arnProject != pid || store.Fold(g.arnUser) != store.Fold(u.Object.Name) ||
+				iam.UserARN(pid, u.Object) != iam.UserARN(pid, want)) {
+				return fail(codes.FailedPrecondition, "GENERATION_CONFLICT", "ConcurrentModification",
+					"user does not match expected_user_arn")
+			}
+			return checkEtag(g.userEtag, u.Version)
+		}
+	}
+	err = p.mfa.EnableChecked(ctx, user, id, req.GetAuthenticationCode_1(), req.GetAuthenticationCode_2(), check)
+	if err != nil {
 		return nil, toStatus(ctx, err)
 	}
 	out, err := p.mfaGet(ctx, id)
