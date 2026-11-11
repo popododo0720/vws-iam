@@ -6,6 +6,8 @@ import (
 	"errors"
 	"slices"
 
+	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
+
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/store"
 )
@@ -41,11 +43,7 @@ type tagPage struct {
 // that key even when tags change in between: every tag that exists for
 // the whole listing is returned once. The call only reads.
 // Authorization (iam:ListRoleTags) is console-api's, as for the other
-// IAM reads.
-//
-// TODO(#73): serve this as an RPC once vws-proto carries it
-// (popododo0720/vws-proto#139); console-api dispatch is
-// popododo0720/vws-console-api#558.
+// IAM reads; its Query dispatch is popododo0720/vws-console-api#558.
 func (s *Server) listRoleTags(ctx context.Context, pid, roleName, marker string, maxItems int) (tagPage, error) {
 	if !iam.ValidProject(pid) {
 		return tagPage{}, invalidID("project " + quote(pid) + " is not a project id")
@@ -69,6 +67,27 @@ func (s *Server) listRoleTags(ctx context.Context, pid, roleName, marker string,
 		return tagPage{}, readFailure(ctx, err)
 	}
 	return pageTags(r.Object.Tags, after, maxItems), nil
+}
+
+// ListRoleTags is IAM ListRoleTags over gRPC (#73): the tags of the role
+// name names, through listRoleTags. page_size is MaxItems and page_token
+// the Marker; next_page_token is set exactly when the page is truncated.
+func (s *Server) ListRoleTags(
+	ctx context.Context, req *iamv1.ListRoleTagsRequest,
+) (*iamv1.ListRoleTagsResponse, error) {
+	pid, id, err := child(req.GetName(), "roles")
+	if err != nil {
+		return nil, err
+	}
+	pg, err := s.listRoleTags(ctx, pid, id, req.GetPageToken(), int(req.GetPageSize()))
+	if err != nil {
+		return nil, err
+	}
+	out := &iamv1.ListRoleTagsResponse{NextPageToken: pg.Marker}
+	for _, tg := range pg.Tags {
+		out.Tags = append(out.Tags, &iamv1.Tag{Key: tg.Key, Value: tg.Value})
+	}
+	return out, nil
 }
 
 // pageTags is the page of tags after key after (every key when ""),

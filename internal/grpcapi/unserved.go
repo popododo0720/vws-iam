@@ -129,13 +129,6 @@ func unservedField(field string) error {
 	return status.Error(codes.Unimplemented, field+" is not served yet")
 }
 
-// TODO(#73): serve ListRoleTags through listRoleTags.
-func (s *Server) ListRoleTags(
-	context.Context, *iamv1.ListRoleTagsRequest,
-) (*iamv1.ListRoleTagsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ListRoleTags is not served yet")
-}
-
 // TODO(#85): serve ListEntitiesForPolicy through listEntitiesForPolicy.
 func (s *Server) ListEntitiesForPolicy(
 	context.Context, *iamv1.ListEntitiesForPolicyRequest,
