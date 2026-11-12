@@ -39,6 +39,8 @@ type KeyPair struct {
 	FingerprintSHA256 string      `json:"fingerprintSha256"`
 	KeyType           KeyPairType `json:"keyType"`
 	Created           time.Time   `json:"created"`
+	Pending           bool        `json:"pending,omitempty"`
+	Deleted           time.Time   `json:"deleted,omitempty"`
 }
 
 func (KeyPair) Kind() Kind    { return KindKeyPair }
@@ -58,13 +60,16 @@ func ValidKeyPairName(name string) bool {
 	return true
 }
 
+// ValidKeyPairRegion applies the ResourceId grammar to a regional scope.
+func ValidKeyPairRegion(region string) bool { return keyPairRegionRE.MatchString(region) }
+
 func (p KeyPair) Validate() error {
 	switch {
 	case !keyPairIDRE.MatchString(p.ID):
 		return invalid("key pair id")
 	case !ValidKeyPairName(p.Name):
 		return invalid("key pair %q name", p.ID)
-	case !keyPairRegionRE.MatchString(p.Region):
+	case !ValidKeyPairRegion(p.Region):
 		return invalid("key pair %q region", p.ID)
 	case p.Created.IsZero():
 		return invalid("key pair %q created time", p.ID)

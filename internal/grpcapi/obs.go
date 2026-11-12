@@ -65,6 +65,7 @@ func result(err error) string {
 
 var mutating = []string{
 	"Create",
+	"Import",
 	"Update",
 	"Delete",
 	"Set",

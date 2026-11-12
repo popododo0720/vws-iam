@@ -48,6 +48,7 @@ type Server struct {
 	iamv1.UnsafeAuthServiceServer
 	iamv1.UnsafeTokenServiceServer
 	iamv1.UnsafeInstanceProfileServiceServer
+	iamv1.UnsafeKeyPairServiceServer
 	longrunningpb.UnimplementedOperationsServer
 
 	b    store.Backend
@@ -130,6 +131,7 @@ func Register(g *grpc.Server, s *Server) {
 	iamv1.RegisterAuthServiceServer(g, s)
 	iamv1.RegisterTokenServiceServer(g, s)
 	iamv1.RegisterInstanceProfileServiceServer(g, s)
+	iamv1.RegisterKeyPairServiceServer(g, s)
 	longrunningpb.RegisterOperationsServer(g, s)
 }
 
@@ -203,7 +205,7 @@ func deadlineUnary(ctx context.Context, req any, _ *grpc.UnaryServerInfo, next g
 // ClientServiceConfig is the gRPC service config callers (console-api)
 // should dial with: per-call timeouts, and retries of UNAVAILABLE for every
 // method. Mutations carry request_id, so a retry is idempotent; the secret
-// RPCs (CreateAccessKey, CreateVirtualMfaDevice) are excluded.
+// RPCs (CreateAccessKey, CreateVirtualMfaDevice, CreateKeyPair) are excluded.
 const ClientServiceConfig = `{
   "methodConfig": [
     {
@@ -218,6 +220,10 @@ const ClientServiceConfig = `{
         {"service": "vws.iam.v1.MfaDeviceService", "method": "ListMfaDevices"},
         {"service": "vws.iam.v1.AccessKeyService", "method": "GetAccessKey"},
         {"service": "vws.iam.v1.AccessKeyService", "method": "ListAccessKeys"},
+        {"service": "vws.iam.v1.KeyPairService", "method": "GetKeyPair"},
+        {"service": "vws.iam.v1.KeyPairService", "method": "ListKeyPairs"},
+        {"service": "vws.iam.v1.KeyPairService", "method": "ImportKeyPair"},
+        {"service": "vws.iam.v1.KeyPairService", "method": "DeleteKeyPair"},
         {"service": "google.longrunning.Operations"}
       ],
       "timeout": "5s",
@@ -232,7 +238,8 @@ const ClientServiceConfig = `{
     {
       "name": [
         {"service": "vws.iam.v1.AccessKeyService", "method": "CreateAccessKey"},
-        {"service": "vws.iam.v1.MfaDeviceService", "method": "CreateVirtualMfaDevice"}
+        {"service": "vws.iam.v1.MfaDeviceService", "method": "CreateVirtualMfaDevice"},
+        {"service": "vws.iam.v1.KeyPairService", "method": "CreateKeyPair"}
       ],
       "timeout": "10s"
     }
