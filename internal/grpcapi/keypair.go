@@ -57,7 +57,7 @@ func keyPairProto(pid string, v store.Versioned[iam.KeyPair]) *iamv1.KeyPair {
 
 func (s *Server) publicKeyPair(keyName, region, material string) (iam.KeyPair, error) {
 	k := iam.KeyPair{
-		ID: "key-" + strings.ReplaceAll(iam.NewUID(), "-", ""), Name: keyName, Region: region,
+		ID: iam.NewKeyPairID(), Name: keyName, Region: region,
 	}
 	pub, _, options, rest, err := ssh.ParseAuthorizedKey([]byte(material))
 	if err == nil && len(options) == 0 && len(strings.TrimSpace(string(rest))) == 0 &&

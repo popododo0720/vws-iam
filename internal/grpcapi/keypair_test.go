@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -397,5 +398,89 @@ func TestKeyPairLostNameLock(t *testing.T) {
 			})
 			wantAWS(t, err, codes.NotFound, "InvalidKeyPair.NotFound")
 		}
+	}
+}
+
+var awsKeyPairID = regexp.MustCompile(`^key-[0-9a-f]{17}$`)
+
+func TestKeyPairIDsAreAWSShaped(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 499)
+	now := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
+	e := newEnvOn(t, memstore.New(), &now)
+	created, err := e.keypairs.CreateKeyPair(t.Context(), &iamv1.CreateKeyPairRequest{
+		Parent: parentName, KeyName: "created", Region: "local",
+		KeyType: iamv1.KeyPairType_KEY_PAIR_TYPE_ED25519,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := e.keypairs.ImportKeyPair(t.Context(), keyPairImport())
+	if err != nil {
+		t.Fatal(err)
+	}
+	imported := unpack(t, op, &iamv1.KeyPair{})
+	for _, name := range []string{created.GetKeyPair().GetName(), imported.GetName()} {
+		if id := name[strings.LastIndex(name, "/")+1:]; !awsKeyPairID.MatchString(id) {
+			t.Errorf("minted id %q is not key- and 17 hex digits", id)
+		}
+	}
+}
+
+func TestKeyPairLegacyIDStaysReadable(t *testing.T) {
+	b := memstore.New()
+	now := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
+	e := newEnvOn(t, b, &now)
+	op, err := e.keypairs.ImportKeyPair(t.Context(), keyPairImport())
+	if err != nil {
+		t.Fatal(err)
+	}
+	minted := unpack(t, op, &iamv1.KeyPair{})
+	scoped := store.Scoped(b, proj)
+	mintedID := minted.GetName()[strings.LastIndex(minted.GetName(), "/")+1:]
+	stored, err := store.Get[iam.KeyPair](t.Context(), scoped, mintedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := stored.Object
+	legacy.ID, legacy.Name = "key-"+strings.Repeat("0a", 16), "legacy"
+	if _, err := store.Create(t.Context(), scoped, legacy); err != nil {
+		t.Fatal(err)
+	}
+	name := parentName + "/keyPairs/" + legacy.ID
+	got, err := e.keypairs.GetKeyPair(t.Context(), &iamv1.GetKeyPairRequest{Name: name})
+	if err != nil || got.GetSpec().GetKeyName() != "legacy" {
+		t.Fatalf("Get of a 32-hex id: %v", err)
+	}
+	list, err := e.keypairs.ListKeyPairs(t.Context(), &iamv1.ListKeyPairsRequest{
+		Parent: parentName, KeyNames: []string{"legacy"},
+	})
+	if err != nil || len(list.GetKeyPairs()) != 1 || list.GetKeyPairs()[0].GetName() != name {
+		t.Fatalf("List of a 32-hex id: %v", err)
+	}
+	if _, err := e.keypairs.DeleteKeyPair(t.Context(), &iamv1.DeleteKeyPairRequest{Name: name}); err != nil {
+		t.Fatalf("Delete of a 32-hex id: %v", err)
+	}
+	_, err = e.keypairs.GetKeyPair(t.Context(), &iamv1.GetKeyPairRequest{Name: name})
+	wantAWS(t, err, codes.NotFound, "InvalidKeyPair.NotFound")
+}
+
+func TestKeyPairIDCollisionIsRefused(t *testing.T) {
+	b := memstore.New()
+	now := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
+	e := newEnvOn(t, b, &now)
+	cryptotest.SetGlobalRandom(t, 499)
+	op, err := e.keypairs.ImportKeyPair(t.Context(), keyPairImport())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := unpack(t, op, &iamv1.KeyPair{})
+	cryptotest.SetGlobalRandom(t, 499)
+	second := keyPairImport()
+	second.KeyName, second.RequestId = "desktop", "import-2"
+	_, err = e.keypairs.ImportKeyPair(t.Context(), second)
+	wantAWS(t, err, codes.AlreadyExists, "EntityAlreadyExists")
+	read, err := e.keypairs.GetKeyPair(t.Context(), &iamv1.GetKeyPairRequest{Name: first.GetName()})
+	if err != nil || !proto.Equal(read, first) {
+		t.Fatalf("a colliding create changed the first key pair: %v", err)
 	}
 }

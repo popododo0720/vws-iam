@@ -3,6 +3,7 @@ package iam
 import (
 	"crypto/rand"
 	"encoding/base32"
+	"encoding/hex"
 	"fmt"
 )
 
@@ -14,6 +15,16 @@ func NewUniqueID(prefix string) string {
 		panic(fmt.Sprintf("crypto/rand: %v", err))
 	}
 	return prefix + base32.StdEncoding.EncodeToString(b)[:17]
+}
+
+// NewKeyPairID returns "key-" and 17 random lowercase hex digits, the EC2
+// key pair id shape.
+func NewKeyPairID() string {
+	b := make([]byte, 9)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("crypto/rand: %v", err))
+	}
+	return "key-" + hex.EncodeToString(b)[:17]
 }
 
 // NewUID returns a random UUID v4.
