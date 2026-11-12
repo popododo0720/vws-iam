@@ -21,7 +21,7 @@ import (
 // outside 1 to 64 characters of [\w+=,.@-] is ValidationError before any
 // store access. An unknown instance profile is NoSuchEntity. An unknown
 // role is NoSuchEntity unless the profile still names it (a role deleted
-// while in the profile, which DeleteRole does not refuse yet, #234): then
+// while in the profile by a release before #234): then
 // the stale name is removed, so the profile can be emptied. A
 // service-linked role is UnmodifiableEntity, as AWS protects it. A role
 // that is not in the profile is NoSuchEntity, as in AWS, so a retry after
@@ -112,8 +112,11 @@ func (s *Server) removeRoleFromInstanceProfile(ctx context.Context, pid, profile
 // The profile write commits only while the role is still at the version
 // read (store.UpdateIf), so a role deleted in between is never added; a
 // profile or role changed in between is read again, never written from a
-// stale copy. A request that was canceled or whose deadline passed is not
-// written. Authorization (iam:AddRoleToInstanceProfile, and iam:PassRole
+// stale copy. A role a DeleteRole is checking (iam.Role.DeleteStarted,
+// #234) is waited for, then ConcurrentModification; a mark older than
+// roleDeleteLease is cleared first, so that delete fails instead. A
+// request that was canceled or whose deadline passed is not written.
+// Authorization (iam:AddRoleToInstanceProfile, and iam:PassRole
 // on the role, as AWS requires) is console-api's, as for UpdateRole.
 //
 // TODO(#96): serve this as an RPC once vws-proto carries it
@@ -148,6 +151,11 @@ func (s *Server) addRoleToInstanceProfile(ctx context.Context, pid, profileName,
 		case r.Object.ServiceLinked():
 			return unmodifiable("Cannot perform the operation on the protected role '" + r.Object.Name +
 				"' - this role is only modifiable by its linked service")
+		case !r.Object.DeleteStarted.IsZero():
+			if err := p.awaitRoleDelete(ctx, r, attempt); err != nil {
+				return toStatus(ctx, err)
+			}
+			continue
 		}
 		ip := cur.Object
 		if len(ip.Roles) >= iam.MaxInstanceProfileRoles {

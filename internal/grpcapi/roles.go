@@ -244,9 +244,9 @@ func (s *Server) UpdateRole(ctx context.Context, req *iamv1.UpdateRoleRequest) (
 	return op, toStatus(ctx, err)
 }
 
-// DeleteRole deletes a role with no policies (AWS DeleteConflict). A
-// service-linked role is UnmodifiableEntity: only DeleteServiceLinkedRole
-// deletes it (#104).
+// DeleteRole deletes a role with no policies that no instance profile
+// holds (AWS DeleteConflict, #234; see deleteRole). A service-linked role
+// is UnmodifiableEntity: only DeleteServiceLinkedRole deletes it (#104).
 func (s *Server) DeleteRole(ctx context.Context, req *iamv1.DeleteRoleRequest) (*longrunningpb.Operation, error) {
 	pid, id, err := child(req.GetName(), "roles")
 	if err != nil {
@@ -256,15 +256,7 @@ func (s *Server) DeleteRole(ctx context.Context, req *iamv1.DeleteRoleRequest) (
 	if op, err := s.replay(ctx, pid, "DeleteRole", req.GetRequestId(), req); op != nil || err != nil {
 		return op, toStatus(ctx, err)
 	}
-	v, _, err := remove(ctx, p.b, id, req.GetEtag(), req.GetAllowMissing(), func(g iam.Role) error {
-		if g.ServiceLinked() {
-			return unmodifiable("role " + g.Name + " is service-linked; delete it with DeleteServiceLinkedRole")
-		}
-		if len(g.AttachedPolicies) > 0 || len(g.InlinePolicies) > 0 {
-			return deleteConflict("role has attached or inline policies")
-		}
-		return nil
-	})
+	v, err := p.deleteRole(ctx, id, req.GetEtag(), req.GetAllowMissing())
 	if err != nil {
 		return nil, toStatus(ctx, err)
 	}

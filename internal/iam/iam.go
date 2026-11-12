@@ -382,6 +382,11 @@ type Role struct {
 	// labels: AWS tag keys and values allow characters and lengths the label
 	// grammar rejects.
 	Tags map[string]string `json:"tags,omitempty"`
+	// DeleteStarted is when a DeleteRole began checking that no instance
+	// profile holds the role (#234), on that replica's clock; zero
+	// otherwise. AddRoleToInstanceProfile does not add a role while it is
+	// set, so the check and the delete see every add.
+	DeleteStarted time.Time `json:"deleteStarted,omitzero"`
 }
 
 func (Role) Kind() Kind    { return KindRole }
