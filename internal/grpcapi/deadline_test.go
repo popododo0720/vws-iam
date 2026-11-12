@@ -25,6 +25,7 @@ type probe struct {
 	longrunningpb.UnimplementedOperationsServer
 	iamv1.UnimplementedAccessKeyServiceServer
 	iamv1.UnimplementedMfaDeviceServiceServer
+	iamv1.UnimplementedKeyPairServiceServer
 
 	mu       sync.Mutex
 	calls    map[string]int
@@ -65,6 +66,12 @@ func (p *probe) CreateVirtualMfaDevice(
 	return nil, p.hit(ctx, "CreateVirtualMfaDevice")
 }
 
+func (p *probe) CreateKeyPair(
+	ctx context.Context, _ *iamv1.CreateKeyPairRequest,
+) (*iamv1.CreateKeyPairResponse, error) {
+	return nil, p.hit(ctx, "CreateKeyPair")
+}
+
 func (p *probe) count(method string) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -80,6 +87,7 @@ func serveProbe(t *testing.T, p *probe, cfg string) *grpc.ClientConn {
 	longrunningpb.RegisterOperationsServer(srv, p)
 	iamv1.RegisterAccessKeyServiceServer(srv, p)
 	iamv1.RegisterMfaDeviceServiceServer(srv, p)
+	iamv1.RegisterKeyPairServiceServer(srv, p)
 	go func() {
 		if err := srv.Serve(lis); err != nil {
 			t.Error(err)
@@ -147,7 +155,7 @@ func TestServerDeadline(t *testing.T) {
 // TestClientServiceConfigRetryPolicy: a client dialed with the published
 // ClientServiceConfig makes exactly 4 attempts of an idempotent call that
 // keeps answering UNAVAILABLE, and exactly one of a secret creation
-// (CreateAccessKey, CreateVirtualMfaDevice), whose lost response cannot be
+// (CreateAccessKey, CreateVirtualMfaDevice, CreateKeyPair), whose lost response cannot be
 // replayed without the secret (#19).
 func TestClientServiceConfigRetryPolicy(t *testing.T) {
 	p := &probe{calls: map[string]int{}}
@@ -155,6 +163,7 @@ func TestClientServiceConfigRetryPolicy(t *testing.T) {
 	ops := longrunningpb.NewOperationsClient(cc)
 	keys := iamv1.NewAccessKeyServiceClient(cc)
 	mfa := iamv1.NewMfaDeviceServiceClient(cc)
+	pairs := iamv1.NewKeyPairServiceClient(cc)
 	for _, c := range []struct {
 		method string
 		call   func(context.Context) error
@@ -174,6 +183,10 @@ func TestClientServiceConfigRetryPolicy(t *testing.T) {
 		}, 1},
 		{"CreateVirtualMfaDevice", func(ctx context.Context) error {
 			_, err := mfa.CreateVirtualMfaDevice(ctx, &iamv1.CreateVirtualMfaDeviceRequest{})
+			return err
+		}, 1},
+		{"CreateKeyPair", func(ctx context.Context) error {
+			_, err := pairs.CreateKeyPair(ctx, &iamv1.CreateKeyPairRequest{})
 			return err
 		}, 1},
 	} {
