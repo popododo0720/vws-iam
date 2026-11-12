@@ -2,6 +2,8 @@ package grpcapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"testing"
 	"time"
@@ -56,7 +58,7 @@ func TestReplayKeysAreKeyed(t *testing.T) {
 		t.Fatal(err)
 	}
 	vs, err := store.List[iam.ReplayEntry](ctx, b)
-	if err != nil || len(vs) != 1 || vs[0].Object.Hash == legacyReplayHash(r) || vs[0].Object.Hash != a.replayKeys(r)[0] {
+	if err != nil || len(vs) != 1 || vs[0].Object.Hash != a.replayKeys(r)[0] {
 		t.Fatalf("entries %+v %v, want one under the keyed digest", vs, err)
 	}
 	for name, s := range map[string]*Server{
@@ -81,24 +83,30 @@ func TestReplayKeysAreKeyed(t *testing.T) {
 	}
 }
 
-// TestLegacyReplayEntryRefuses keeps refusing a request claimed by a
-// release before #41 under the plain SHA-256 key, until it expires.
-func TestLegacyReplayEntryRefuses(t *testing.T) {
+// TestUnkeyedReplayEntryIgnored covers #310: only keyed digests are read.
+// An entry under the plain SHA-256 of key id and signature, which a store
+// writer without the KEK can compute (releases before #41 wrote it), does
+// not refuse the request; the request is then claimed once under its keyed
+// digest, so a re-run and a restarted replica refuse it.
+func TestUnkeyedReplayEntryIgnored(t *testing.T) {
 	ctx := t.Context()
 	now := time.Now().UTC()
+	clock := WithClock(func() time.Time { return now })
 	b := memstore.New()
-	s := New(b, testRing(t, "a", "a"), WithClock(func() time.Time { return now }))
 	r := &iamv1.AuthenticateRequest{AccessKeyId: "AKIA", Signature: "sig"}
-	legacy := iam.ReplayEntry{Hash: legacyReplayHash(r), Expires: now.Add(time.Minute)}
-	if _, err := store.Create(ctx, b, legacy); err != nil {
+	h := sha256.Sum256([]byte(r.GetAccessKeyId() + "\n" + r.GetSignature()))
+	planted := iam.ReplayEntry{Hash: hex.EncodeToString(h[:]), Expires: now.Add(replayTTL)}
+	if _, err := store.Create(ctx, b, planted); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.claimReplay(ctx, r); err == nil {
-		t.Fatal("request in the legacy store accepted")
-	}
-	now = now.Add(2 * time.Minute)
+	s := New(b, testRing(t, "a", "a"), clock)
 	if err := s.claimReplay(ctx, r); err != nil {
-		t.Fatalf("after the legacy entry expired: %v", err)
+		t.Fatalf("unkeyed entry refused the request: %v", err)
+	}
+	for name, s := range map[string]*Server{"re-run": s, "restart": New(b, testRing(t, "a", "a"), clock)} {
+		if err := s.claimReplay(ctx, r); err == nil {
+			t.Errorf("%s: replay accepted", name)
+		}
 	}
 }
 

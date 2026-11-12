@@ -3,6 +3,8 @@ package grpcapi
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"testing"
 	"time"
@@ -100,7 +102,7 @@ func TestAttemptCountersAreKeyed(t *testing.T) {
 	if err != nil || len(vs) != 1 {
 		t.Fatalf("counters %d %v, want 1", len(vs), err)
 	}
-	if k := vs[0].Object.Hash; k == legacySubjectHash(cs[0]) || k != s.counters(cs)[0].key {
+	if k := vs[0].Object.Hash; k != s.counters(cs)[0].key {
 		t.Fatalf("counter key %q is not the keyed digest", k)
 	}
 	for name, r := range map[string]*Server{
@@ -131,27 +133,30 @@ func TestAttemptCountersAreKeyed(t *testing.T) {
 	}
 }
 
-// TestLegacyAttemptCounterLocks keeps a lock written by a release before
-// #41 under the plain SHA-256 key, without writing that counter.
-func TestLegacyAttemptCounterLocks(t *testing.T) {
+// TestUnkeyedAttemptCounterIgnored covers #310: only keyed digests are
+// read. A full counter under the plain SHA-256 of the caller, which a store
+// writer without the KEK can compute (releases before #41 wrote it), locks
+// no one out, on a re-run or a restarted replica either.
+func TestUnkeyedAttemptCounterIgnored(t *testing.T) {
 	ctx := t.Context()
 	now := time.Now().UTC()
+	clock := WithClock(func() time.Time { return now })
 	b := memstore.New()
 	cs := callers{userSubject("acme", "alice")}
-	legacy := iam.AttemptCounter{
-		Hash: legacySubjectHash(cs[0]), Scope: iam.AttemptUser, Failures: UserAttemptLimit, WindowStart: now,
+	h := sha256.Sum256([]byte("vws-iam/attempt\n" + cs[0].scope + "\n" + cs[0].id))
+	planted := iam.AttemptCounter{
+		Hash: hex.EncodeToString(h[:]), Scope: iam.AttemptUser, Failures: UserAttemptLimit, WindowStart: now,
 	}
-	if _, err := store.Create(ctx, b, legacy); err != nil {
+	if _, err := store.Create(ctx, b, planted); err != nil {
 		t.Fatal(err)
 	}
-	s := New(b, testRing(t, "a", "a"), WithClock(func() time.Time { return now }))
-	ran := false
-	err := s.limitedVerify(ctx, cs, func() error { ran = true; return nil })
-	if !throttledBy(err, iam.AttemptUser) || ran {
-		t.Fatalf("err %v, check ran %v; want Throttling before the check", err, ran)
+	s := New(b, testRing(t, "a", "a"), clock)
+	for _, name := range []string{"first", "re-run"} {
+		if err := s.limitedVerify(ctx, cs, func() error { return nil }); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
 	}
-	vs, err := store.List[iam.AttemptCounter](ctx, b)
-	if err != nil || len(vs) != 1 || vs[0].Object.Hash != legacy.Hash || vs[0].Object.Failures != legacy.Failures {
-		t.Fatalf("counters %+v %v, want only the legacy one, unchanged", vs, err)
+	if err := New(b, testRing(t, "a", "a"), clock).limitedVerify(ctx, cs, func() error { return nil }); err != nil {
+		t.Fatalf("restart: %v", err)
 	}
 }

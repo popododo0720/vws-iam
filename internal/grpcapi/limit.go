@@ -2,8 +2,6 @@ package grpcapi
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"log/slog"
 	"net/netip"
@@ -58,14 +56,6 @@ func (s *Server) counters(cs callers) []counter {
 		}
 	}
 	return out
-}
-
-// legacySubjectHash is the unkeyed key of releases before #41. It is only
-// read, so a lock written by such a release still holds.
-// TODO(#310): remove after the HMAC release.
-func legacySubjectHash(j subject) string {
-	h := sha256.Sum256([]byte("vws-iam/attempt\n" + j.scope + "\n" + j.id))
-	return hex.EncodeToString(h[:])
 }
 
 // callers are the subjects of one attempt.
@@ -174,15 +164,11 @@ func (s *Server) limitedVerify(ctx context.Context, cs callers, verify func() er
 }
 
 // checkAttempts refuses a caller that is locked out under any of its
-// counters, the legacy one included. It only reads.
+// counters. It only reads.
 func (s *Server) checkAttempts(ctx context.Context, cs callers) error {
 	now := s.now()
-	cks := s.counters(cs)
-	for _, j := range cs {
-		cks = append(cks, counter{j.scope, legacySubjectHash(j)})
-	}
 	var scopes []string
-	for _, c := range cks {
+	for _, c := range s.counters(cs) {
 		v, err := store.Get[iam.AttemptCounter](ctx, s.b, c.key)
 		switch {
 		case errors.Is(err, store.ErrNotFound):
