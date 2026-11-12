@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/beevik/etree"
+
 	"github.com/popododo0720/vws-iam/internal/sts"
 	"github.com/popododo0720/vws-iam/internal/sts/samltest"
 )
@@ -45,6 +47,23 @@ func samlAttacks(t *testing.T, idp *samltest.IdP, a samltest.Assertion) map[stri
 	// a value, so a second one is not a list to merge.
 	dupRole := a
 	dupRole.Attributes = map[string][]string{samlRoleAttr: {a.Roles[0]}}
+	// The IdP signs a NameID or Role value split by a processing
+	// instruction or a child element, which exclusive canonicalization
+	// keeps; a reader of the first text node only would see the victim's
+	// NameID or a role pair the IdP did not sign.
+	splitBy := func(path, tail string, insert func(el *etree.Element)) string {
+		s := a
+		s.Edit = func(as *etree.Element) {
+			el := as.FindElement(path)
+			insert(el)
+			el.CreateText(tail)
+		}
+		return xml(s, samltest.SignAssertion)
+	}
+	const nameID = "./saml:Subject/saml:NameID"
+	const role = "./saml:AttributeStatement/saml:Attribute[@Name='" + samlRoleAttr + "']/saml:AttributeValue"
+	procInst := func(el *etree.Element) { el.CreateProcInst("x", "") }
+	child := func(el *etree.Element) { el.CreateElement("saml:x") }
 	return map[string]string{
 		"wrapped: signed assertion after an unsigned one": edit(signed, "<saml:Assertion",
 			assertionOf(xml(evil, samltest.SignNone))+"<saml:Assertion"),
@@ -63,12 +82,17 @@ func samlAttacks(t *testing.T, idp *samltest.IdP, a samltest.Assertion) map[stri
 		"DOCTYPE with an external entity": `<!DOCTYPE r [<!ENTITY x SYSTEM "file:///etc/passwd">]>` + signed,
 		"entity without DOCTYPE": edit(signed, ">alice@corp.test</saml:AttributeValue>",
 			">&who;</saml:AttributeValue>"),
+		"processing instruction inside NameID":     splitBy(nameID, ".evil.test", procInst),
+		"child element inside NameID":              splitBy(nameID, ".evil.test", child),
+		"processing instruction inside Role value": splitBy(role, "-evil", procInst),
+		"child element inside Role value":          splitBy(role, "-evil", child),
 	}
 }
 
 // TestAssumeRoleWithSAMLRefusesAttackShapes: signature wrapping, two
 // assertions, a comment in the response, a duplicate attribute (SAML or
-// XML), and a DTD or entity are each InvalidIdentityToken (#381).
+// XML), a DTD or entity, and a processing instruction or child element in
+// a claim's text are each InvalidIdentityToken (#381).
 func TestAssumeRoleWithSAMLRefusesAttackShapes(t *testing.T) {
 	e := samlSetup(t)
 	attacks := samlAttacks(t, e.idp, e.claims())

@@ -66,7 +66,13 @@ func verifySAMLResponse(b64 string, prov SAMLProvider, sp SAMLServiceProvider, n
 	if err := doc.ReadFromBytes(raw); err != nil {
 		return samlClaims{}, invalidSAML("SAMLAssertion is not XML")
 	}
-	if err := checkTokens(doc.Child); err != nil {
+	tokens := doc.Child
+	if len(tokens) > 0 {
+		if p, ok := tokens[0].(*etree.ProcInst); ok && p.Target == "xml" {
+			tokens = tokens[1:]
+		}
+	}
+	if err := checkTokens(tokens); err != nil {
 		return samlClaims{}, err
 	}
 	root := doc.Root()
@@ -120,10 +126,12 @@ func verifySAMLResponse(b64 string, prov SAMLProvider, sp SAMLServiceProvider, n
 	return assertionClaims(a, prov.EntityID, sp, now)
 }
 
-// checkTokens refuses a DTD, a comment or an element with a repeated
-// attribute anywhere in tokens. Exclusive canonicalization drops comments
+// checkTokens refuses a DTD, a comment, a processing instruction or an
+// element with a repeated attribute anywhere in tokens (the caller drops a
+// leading XML declaration). Exclusive canonicalization drops comments
 // before the digest, so a comment can split a signed NameID or value into
-// text a reader may join differently (CVE-2017-11427 class); XML 1.0 (Unique
+// text a reader may join differently (CVE-2017-11427 class); a processing
+// instruction is signed but splits text the same way; XML 1.0 (Unique
 // Att Spec) forbids a repeated attribute, and the signature check and the
 // claim reader could each pick another copy of it.
 func checkTokens(tokens []etree.Token) error {
@@ -133,6 +141,8 @@ func checkTokens(tokens []etree.Token) error {
 			return invalidSAML("SAMLAssertion has a DTD")
 		case *etree.Comment:
 			return invalidSAML("SAMLAssertion has a comment")
+		case *etree.ProcInst:
+			return invalidSAML("SAMLAssertion has a processing instruction")
 		case *etree.Element:
 			seen := make(map[[2]string]bool, len(t.Attr))
 			for _, a := range t.Attr {
@@ -158,7 +168,10 @@ func assertionClaims(a *etree.Element, entityID string, sp SAMLServiceProvider, 
 	if err != nil {
 		return samlClaims{}, err
 	}
-	if cl.issuer = strings.TrimSpace(iss.Text()); cl.issuer != entityID {
+	if cl.issuer, err = text(iss); err != nil {
+		return samlClaims{}, err
+	}
+	if cl.issuer != entityID {
 		return samlClaims{}, invalidSAML("Issuer is not the provider's entity id")
 	}
 	cond, err := one(a, nsSAMLAssertion, "Conditions")
@@ -168,7 +181,9 @@ func assertionClaims(a *etree.Element, entityID string, sp SAMLServiceProvider, 
 	if err := checkWindow(cond, now); err != nil {
 		return samlClaims{}, err
 	}
-	if !hasAudience(cond, sp.Audience) {
+	if ok, err := hasAudience(cond, sp.Audience); err != nil {
+		return samlClaims{}, err
+	} else if !ok {
 		return samlClaims{}, invalidSAML("an AudienceRestriction does not name this service")
 	}
 	subj, err := one(a, nsSAMLAssertion, "Subject")
@@ -179,7 +194,9 @@ func assertionClaims(a *etree.Element, entityID string, sp SAMLServiceProvider, 
 	if err != nil {
 		return samlClaims{}, err
 	}
-	cl.subject = strings.TrimSpace(nameID.Text())
+	if cl.subject, err = text(nameID); err != nil {
+		return samlClaims{}, err
+	}
 	cl.subjectType = strings.TrimPrefix(nameID.SelectAttrValue("Format", ""), nameIDFormatPrefix)
 	if cl.subject == "" {
 		return samlClaims{}, invalidSAML("NameID is empty")
@@ -232,16 +249,22 @@ func checkWindow(el *etree.Element, now time.Time) error {
 // audience, and there is at least one. SAML 2.0 core 2.5.1.4: the
 // Audience values of one restriction combine with OR, the restrictions
 // with AND.
-func hasAudience(cond *etree.Element, audience string) bool {
+func hasAudience(cond *etree.Element, audience string) (bool, error) {
 	rs := children(cond, nsSAMLAssertion, "AudienceRestriction")
 	for _, r := range rs {
-		if !slices.ContainsFunc(children(r, nsSAMLAssertion, "Audience"), func(au *etree.Element) bool {
-			return strings.TrimSpace(au.Text()) == audience
-		}) {
-			return false
+		var aus []string
+		for _, au := range children(r, nsSAMLAssertion, "Audience") {
+			v, err := text(au)
+			if err != nil {
+				return false, err
+			}
+			aus = append(aus, v)
+		}
+		if !slices.Contains(aus, audience) {
+			return false, nil
 		}
 	}
-	return len(rs) > 0
+	return len(rs) > 0, nil
 }
 
 // bearerRecipient returns the Recipient of the one bearer
@@ -297,7 +320,11 @@ func (c *samlClaims) readAttributes(a *etree.Element) error {
 			}
 			vals[name] = nil
 			for _, v := range children(at, nsSAMLAssertion, "AttributeValue") {
-				vals[name] = append(vals[name], strings.TrimSpace(v.Text()))
+				s, err := text(v)
+				if err != nil {
+					return err
+				}
+				vals[name] = append(vals[name], s)
 			}
 		}
 	}
@@ -339,6 +366,27 @@ func (c *samlClaims) readAttributes(a *etree.Element) error {
 		c.sourceIdentity = s[0]
 	}
 	return nil
+}
+
+// text is all of el's character data, trimmed, as the digest covers it.
+// Text beside a child element is refused: a signed alice<x/>.evil would
+// otherwise be one claim to the signature and another to a reader.
+func text(el *etree.Element) (string, error) {
+	var b strings.Builder
+	elem := false
+	for _, c := range el.Child {
+		switch c := c.(type) {
+		case *etree.CharData:
+			b.WriteString(c.Data)
+		case *etree.Element:
+			elem = true
+		}
+	}
+	s := strings.TrimSpace(b.String())
+	if elem && s != "" {
+		return "", invalidSAML("%s mixes text with child elements", el.Tag)
+	}
+	return s, nil
 }
 
 // children are el's child elements named tag in namespace ns.

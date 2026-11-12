@@ -156,6 +156,8 @@ type Assertion struct {
 	MoreSubjectConfirmationData []SubjectConfirmationData
 	// Attributes are more Attribute elements, by Name.
 	Attributes map[string][]string
+	// Edit, if set, changes the assertion element before it is signed.
+	Edit func(as *etree.Element)
 }
 
 // SubjectConfirmationData is one more SubjectConfirmationData element.
@@ -272,6 +274,9 @@ func assertion(a Assertion) *etree.Element {
 	slices.Sort(names)
 	for _, n := range names {
 		attr(n, a.Attributes[n]...)
+	}
+	if a.Edit != nil {
+		a.Edit(as)
 	}
 	return as
 }
