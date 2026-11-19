@@ -10,9 +10,12 @@ import (
 )
 
 // tlsFiles names the PEM files of the mutual TLS that secures the gRPC
-// listener (#21), usually systemd credential files. They are read
-// again on every handshake, so a rotated file takes effect on the next
-// connection without a restart.
+// listener (#21), usually systemd credential files. The process reads the
+// named paths again on every handshake, but systemd LoadCredential= copies
+// its source once, when the service starts. Replacing the deployed
+// iam-key.pem (or the certificate or client CA) therefore needs a service
+// restart; only a file changed in place at the path given here takes effect
+// on the next connection.
 type tlsFiles struct {
 	certFile, keyFile, clientCAFile string
 }

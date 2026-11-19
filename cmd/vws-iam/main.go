@@ -115,7 +115,8 @@ func parseConfig(args []string, stderr io.Writer, getenv func(string) string) (c
 	fs.StringVar(&c.tls.keyFile, "tls-key-file", "", "PEM server key of the gRPC listener; "+
 		"needs -tls-cert-file and -tls-client-ca-file")
 	fs.StringVar(&c.tls.clientCAFile, "tls-client-ca-file", "", "PEM CA bundle that client certificates (console-api) "+
-		"must chain to; a client without one is refused. The three TLS files are read again on every handshake")
+		"must chain to; a client without one is refused. The three TLS files are read again on every handshake; "+
+		"under systemd LoadCredential= the source is copied at service start, so replacing it needs a restart")
 	fs.BoolVar(&c.insecurePlaintext, "insecure-plaintext", false, "serve gRPC without TLS on a non-loopback -listen "+
 		"address; only where another layer authenticates the channel")
 	samlFlags(fs, &c.saml)

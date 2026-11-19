@@ -71,7 +71,14 @@ checked against it:
 2. Pass `-store=etcd -etcd-endpoints https://...` and load the
    credentials with `LoadCredential=`: `etcd-ca.pem`, `etcd-client.pem`,
    `etcd-client-key.pem` and the KEK directory as `kek`.
-3. Run more than one replica only on the same etcd, prefix and KEK.
+3. Serve gRPC with mutual TLS by loading the server files the same way
+   (for example `iam-cert.pem`, `iam-key.pem` and `iam-client-ca.pem`, passed
+   with `-tls-cert-file`, `-tls-key-file` and `-tls-client-ca-file`). vws-iam
+   reads those paths on every handshake, but `LoadCredential=` copies the
+   source file when the service starts. Replacing the deployed `iam-key.pem`
+   (or the certificate or client CA) needs a service restart; until then the
+   old copy stays in use.
+4. Run more than one replica only on the same etcd, prefix and KEK.
 
 ## Evidence
 
