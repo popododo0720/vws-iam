@@ -25,6 +25,7 @@ import (
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
+	"github.com/popododo0720/vws-iam/internal/grpcapi"
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/store"
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
@@ -388,6 +389,94 @@ func TestKeyPairControlNameStoredUnderOldRule(t *testing.T) {
 	}
 	_, err = e.keypairs.GetKeyPair(t.Context(), &iamv1.GetKeyPairRequest{Name: name})
 	wantAWS(t, err, codes.NotFound, "InvalidKeyPair.NotFound")
+}
+
+// An import committed under the older name rule (a tab in the name) and
+// recorded as an operation must replay on the identical retry, with the
+// original result. Another request with that name, or the same token with a
+// different body, is still refused.
+func TestKeyPairImportReplayOfOldNameRule(t *testing.T) {
+	b := memstore.New()
+	now := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
+	e := newEnvOn(t, b, &now)
+	scoped := store.Scoped(b, proj)
+	seed, err := e.keypairs.ImportKeyPair(t.Context(), keyPairImport())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := unpack(t, seed, &iamv1.KeyPair{}).GetName()
+	id = id[strings.LastIndex(id, "/")+1:]
+	stored, err := store.Get[iam.KeyPair](t.Context(), scoped, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := stored.Object
+	old.ID, old.Name = "key-"+strings.Repeat("0c", 16), "tab\there"
+	v, err := store.Create(t.Context(), scoped, old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := keyPairImport()
+	req.KeyName, req.RequestId = old.Name, "import-tab-recorded"
+	recorded := store.Versioned[iam.KeyPair]{Object: old, Version: v}
+	if err := e.api.SeedKeyPairOperation(t.Context(), proj, req, recorded); err != nil {
+		t.Fatal(err)
+	}
+
+	op, err := e.keypairs.ImportKeyPair(t.Context(), req)
+	if err != nil {
+		t.Fatalf("identical retry: %v", err)
+	}
+	got := unpack(t, op, &iamv1.KeyPair{})
+	if got.GetName() != parentName+"/keyPairs/"+old.ID || got.GetSpec().GetKeyName() != old.Name {
+		t.Fatalf("retry answered %v, want the recorded key pair %s", got, old.ID)
+	}
+
+	other := keyPairImport()
+	other.KeyName, other.RequestId = old.Name, "import-tab-new"
+	_, err = e.keypairs.ImportKeyPair(t.Context(), other)
+	wantAWS(t, err, codes.InvalidArgument, "InvalidParameterValue")
+	changed := keyPairImport()
+	changed.KeyName, changed.RequestId, changed.Region = old.Name, req.RequestId, "us-east-1"
+	_, err = e.keypairs.ImportKeyPair(t.Context(), changed)
+	wantAWS(t, err, codes.Aborted, "IdempotentParameterMismatch")
+}
+
+// The same holds for CreateKeyPair: the identical retry of a create recorded
+// on a key pair with an old-rule name is ALREADY_EXISTS as any replay, not
+// INVALID_ARGUMENT; the same name under a new token is still refused.
+func TestKeyPairCreateReplayOfOldNameRule(t *testing.T) {
+	b := memstore.New()
+	now := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
+	e := newEnvOn(t, b, &now)
+	scoped := store.Scoped(b, proj)
+	seed, err := e.keypairs.ImportKeyPair(t.Context(), keyPairImport())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := unpack(t, seed, &iamv1.KeyPair{}).GetName()
+	id = id[strings.LastIndex(id, "/")+1:]
+	stored, err := store.Get[iam.KeyPair](t.Context(), scoped, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := &iamv1.CreateKeyPairRequest{
+		Parent: parentName, KeyName: "tab\there", Region: "ap-northeast-2", RequestId: "create-tab-recorded",
+		KeyType: iamv1.KeyPairType_KEY_PAIR_TYPE_ED25519,
+	}
+	old := stored.Object
+	old.ID, old.Name = "key-"+strings.Repeat("0d", 16), req.KeyName
+	old.Requests = []string{grpcapi.CreateKeyPairToken(proj, req)}
+	if _, err := store.Create(t.Context(), scoped, old); err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.keypairs.CreateKeyPair(t.Context(), req)
+	wantAWS(t, err, codes.AlreadyExists, "InvalidKeyPair.Duplicate")
+	fresh := &iamv1.CreateKeyPairRequest{
+		Parent: req.Parent, KeyName: req.KeyName, Region: req.Region, KeyType: req.KeyType, RequestId: "create-tab-new",
+	}
+	_, err = e.keypairs.CreateKeyPair(t.Context(), fresh)
+	wantAWS(t, err, codes.InvalidArgument, "InvalidParameterValue")
 }
 
 func TestKeyPairCrashReplay(t *testing.T) {

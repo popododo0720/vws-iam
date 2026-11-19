@@ -154,6 +154,11 @@ func (s *Server) CreateKeyPair(
 		return nil, err
 	}
 	if err := keyPairNewInput(req.GetKeyName(), req.GetRegion()); err != nil {
+		// A retry of a create committed under the older name rule still
+		// answers as the recorded request did.
+		if s.project(pid).keyPairApplied(ctx, newOnce(pid, "CreateKeyPair", req.GetRequestId(), req)) {
+			return nil, keyPairDuplicate()
+		}
 		return nil, err
 	}
 	var private any
@@ -200,11 +205,13 @@ func (s *Server) ImportKeyPair(
 	if err != nil {
 		return nil, err
 	}
-	if err := keyPairNewInput(req.GetKeyName(), req.GetRegion()); err != nil {
-		return nil, err
-	}
+	// A recorded request answers before the new-name rule applies: an import
+	// committed under the older rule must replay, not turn InvalidArgument.
 	if op, err := s.replay(ctx, pid, "ImportKeyPair", req.GetRequestId(), req); op != nil || err != nil {
 		return op, toStatus(ctx, err)
+	}
+	if err := keyPairNewInput(req.GetKeyName(), req.GetRegion()); err != nil {
+		return nil, err
 	}
 	k, err := s.publicKeyPair(req.GetKeyName(), req.GetRegion(), req.GetPublicKey())
 	if err != nil {
@@ -221,6 +228,18 @@ func (s *Server) ImportKeyPair(
 		generation: v.Object.Generation, response: keyPairProto(pid, v),
 	})
 	return op, toStatus(ctx, err)
+}
+
+// keyPairApplied reports whether a committed key pair records o's request.
+// A store error counts as not applied, so the caller's own error stands.
+func (p project) keyPairApplied(ctx context.Context, o once) bool {
+	all, err := store.List[iam.KeyPair](ctx, p.b)
+	if err != nil {
+		return false
+	}
+	return slices.ContainsFunc(all, func(v store.Versioned[iam.KeyPair]) bool {
+		return !v.Object.Pending && errors.Is(o.check(v.Object.Meta), errApplied)
+	})
 }
 
 // The pending create is committed only while the regional name scan's lock
