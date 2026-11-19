@@ -1,4 +1,5 @@
 // Package memstore is the in-memory store.Backend for tests and -store=memory.
+// It is not for production: etcd is the production store.
 package memstore
 
 import (

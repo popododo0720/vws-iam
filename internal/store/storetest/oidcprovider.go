@@ -12,7 +12,7 @@ import (
 )
 
 // oidcProviderLongestRoundTrip stores a provider at every AWS limit: a
-// 255-character URL with a path (its key has slashes and needs the kube
+// 255-character URL with a path (its key has slashes and needs the
 // name hash fallback), 100 client ids of 255 characters and 5
 // thumbprints. It is found by its key in another case, and a URL that
 // differs only in case is another provider.

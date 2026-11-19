@@ -65,7 +65,7 @@ func newKeyGuard(project, expectedPath, expectedARN, userEtag string) (keyGuard,
 }
 
 // maxEtagLen bounds a user_etag. Store versions are short (a decimal
-// counter or a Kubernetes resourceVersion).
+// counter or an etcd mod_revision).
 const maxEtagLen = 128
 
 // checkUserEtag rejects a user_etag no store version can equal.
