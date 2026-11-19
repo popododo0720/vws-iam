@@ -46,14 +46,15 @@ type KeyPair struct {
 func (KeyPair) Kind() Kind    { return KindKeyPair }
 func (p KeyPair) Key() string { return p.ID }
 
-// ValidKeyPairName applies the EC2 KeyName bounds: 1 to 255 ASCII bytes.
+// ValidKeyPairName applies the EC2 KeyName bounds: 1 to 255 printable ASCII
+// bytes (0x20 to 0x7e), so a name carries no control character.
 // Names retain their case; they are not IAM user names or store keys.
 func ValidKeyPairName(name string) bool {
 	if len(name) < 1 || len(name) > 255 {
 		return false
 	}
 	for i := range len(name) {
-		if name[i] > 127 {
+		if name[i] < 0x20 || name[i] > 0x7e {
 			return false
 		}
 	}

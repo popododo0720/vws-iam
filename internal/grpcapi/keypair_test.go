@@ -30,6 +30,15 @@ import (
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
 )
 
+// keyPairNegativeRSA is a 2048-bit RSA key whose modulus lacks its 0x00 pad,
+// so it decodes negative. OpenSSH refuses it.
+const keyPairNegativeRSA = "ssh-rsa " +
+	"AAAAB3NzaC1yc2EAAAADAQABAAABAMcMsyDp3R2PFBNjX2QnYkwCj0krtm+u/LnutaTkcpkk8noRzh68sesJIj6i" +
+	"Y7Jl9a3q0IvNuJQ9D4Et0Pbx8clpIFOosU3LHQtp1/HqqsjjqsasLGDgBuhij3dDIhICoVYWayPdQRxV8FFgq6DM" +
+	"tpRDKxJ3OP63UO3hj1gNHN26ZVBrFdCEtHqGpg+6AtaZUn0l6Qh9vKXwbWTGF88xlAPZTxLd4Rz37dJZxc8emkju" +
+	"0JFQGRSPOEGZ7w0NIBsDPfZZUY6uRvwHjMDlz5togqr6nfwWlmhTdBLP9HYfhJaPKolqCXZ9Q6T5bOP5nFnc9iNV" +
+	"nuxHis8CMUtAUfTAr6E="
+
 func keyPairMaterial(t *testing.T, key any) string {
 	t.Helper()
 	pub, err := ssh.NewPublicKey(key)
@@ -137,6 +146,8 @@ func TestKeyPairImportFormats(t *testing.T) {
 		{"private", "-----BEGIN PRIVATE KEY-----\nsecret", false},
 		{"two keys", keyPairMaterial(t, ed) + "\n" + keyPairMaterial(t, ed), false},
 		{"options", "restrict " + keyPairMaterial(t, ed), false},
+		{"empty", "", false},
+		{"negative modulus", keyPairNegativeRSA, false},
 	}
 	for _, bits := range []int{512, 1023, 1024, 2048, 4096, 4097, 8192} {
 		n := new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), uint(bits-1)), big.NewInt(1))
@@ -152,7 +163,7 @@ func TestKeyPairImportFormats(t *testing.T) {
 			op, err := e.keypairs.ImportKeyPair(t.Context(), req)
 			if !c.ok {
 				wantAWS(t, err, codes.InvalidArgument, "InvalidKey.Format")
-				if strings.Contains(err.Error(), c.material) {
+				if c.material != "" && strings.Contains(err.Error(), c.material) {
 					t.Fatal("wire error echoed material")
 				}
 				return
@@ -292,7 +303,7 @@ func TestKeyPairConcurrentNames(t *testing.T) {
 
 func TestKeyPairValidationAndAuthorization(t *testing.T) {
 	e := newEnv(t)
-	for _, name := range []string{"", strings.Repeat("x", 256), "\xc3\xa9"} {
+	for _, name := range []string{"", strings.Repeat("x", 256), "\xc3\xa9", "a\nb", "a\x00b", "a\x7fb"} {
 		req := keyPairImport()
 		req.KeyName = name
 		_, err := e.keypairs.ImportKeyPair(t.Context(), req)
