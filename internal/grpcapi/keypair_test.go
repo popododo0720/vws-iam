@@ -303,7 +303,7 @@ func TestKeyPairConcurrentNames(t *testing.T) {
 
 func TestKeyPairValidationAndAuthorization(t *testing.T) {
 	e := newEnv(t)
-	for _, name := range []string{"", strings.Repeat("x", 256), "\xc3\xa9", "a\nb", "a\x00b", "a\x7fb"} {
+	for _, name := range []string{"", strings.Repeat("x", 256), "\xc3\xa9", "a\nb", "a\x00b", "a\x7fb", "a\tb"} {
 		req := keyPairImport()
 		req.KeyName = name
 		_, err := e.keypairs.ImportKeyPair(t.Context(), req)
@@ -338,6 +338,55 @@ func TestKeyPairValidationAndAuthorization(t *testing.T) {
 	if status.Code(err) != codes.Internal || strings.Contains(err.Error(), "backend down") {
 		t.Fatalf("want internal error without backend detail: %v", err)
 	}
+}
+
+// A key pair stored under the earlier rule (any byte up to 127) can have a
+// control character in its name. It stays describable by name and deletable,
+// while create and import of such a name are still refused.
+func TestKeyPairControlNameStoredUnderOldRule(t *testing.T) {
+	b := memstore.New()
+	now := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
+	e := newEnvOn(t, b, &now)
+	op, err := e.keypairs.ImportKeyPair(t.Context(), keyPairImport())
+	if err != nil {
+		t.Fatal(err)
+	}
+	minted := unpack(t, op, &iamv1.KeyPair{})
+	scoped := store.Scoped(b, proj)
+	stored, err := store.Get[iam.KeyPair](t.Context(), scoped, minted.GetName()[strings.LastIndex(minted.GetName(), "/")+1:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := stored.Object
+	old.ID, old.Name = "key-"+strings.Repeat("0b", 16), "tab\there"
+	if _, err := store.Create(t.Context(), scoped, old); err != nil {
+		t.Fatalf("seed under the old rule: %v", err)
+	}
+	name := parentName + "/keyPairs/" + old.ID
+	got, err := e.keypairs.GetKeyPair(t.Context(), &iamv1.GetKeyPairRequest{Name: name})
+	if err != nil || got.GetSpec().GetKeyName() != old.Name {
+		t.Fatalf("Get: %v", err)
+	}
+	list, err := e.keypairs.ListKeyPairs(t.Context(), &iamv1.ListKeyPairsRequest{
+		Parent: parentName, KeyNames: []string{old.Name},
+	})
+	if err != nil || len(list.GetKeyPairs()) != 1 || list.GetKeyPairs()[0].GetName() != name {
+		t.Fatalf("describe by name filter: %v", err)
+	}
+	imp := keyPairImport()
+	imp.KeyName, imp.RequestId = old.Name, "import-tab"
+	_, err = e.keypairs.ImportKeyPair(t.Context(), imp)
+	wantAWS(t, err, codes.InvalidArgument, "InvalidParameterValue")
+	_, err = e.keypairs.CreateKeyPair(t.Context(), &iamv1.CreateKeyPairRequest{
+		Parent: parentName, KeyName: old.Name, Region: "ap-northeast-2", RequestId: "create-tab",
+		KeyType: iamv1.KeyPairType_KEY_PAIR_TYPE_ED25519,
+	})
+	wantAWS(t, err, codes.InvalidArgument, "InvalidParameterValue")
+	if _, err := e.keypairs.DeleteKeyPair(t.Context(), &iamv1.DeleteKeyPairRequest{Name: name}); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	_, err = e.keypairs.GetKeyPair(t.Context(), &iamv1.GetKeyPairRequest{Name: name})
+	wantAWS(t, err, codes.NotFound, "InvalidKeyPair.NotFound")
 }
 
 func TestKeyPairCrashReplay(t *testing.T) {

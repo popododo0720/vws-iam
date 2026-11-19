@@ -32,8 +32,20 @@ func keyPairDuplicate() error {
 	return fail(codes.AlreadyExists, "ALREADY_EXISTS", "InvalidKeyPair.Duplicate", "key pair already exists")
 }
 
-func keyPairInput(keyName, region string) error {
-	if !iam.ValidKeyPairName(keyName) || !iam.ValidKeyPairRegion(region) {
+// keyPairLookupInput checks a name that selects existing records (the List
+// name filter) under the rule stored names were written with.
+func keyPairLookupInput(keyName, region string) error {
+	return keyPairInput(iam.ValidStoredKeyPairName(keyName), region)
+}
+
+// keyPairNewInput checks a name a caller wants to create or import, which must
+// be printable ASCII.
+func keyPairNewInput(keyName, region string) error {
+	return keyPairInput(iam.ValidNewKeyPairName(keyName), region)
+}
+
+func keyPairInput(nameOK bool, region string) error {
+	if !nameOK || !iam.ValidKeyPairRegion(region) {
 		return fail(codes.InvalidArgument, "INVALID_SPEC", "InvalidParameterValue", "invalid key name or region")
 	}
 	return nil
@@ -108,7 +120,7 @@ func (s *Server) ListKeyPairs(
 		return nil, invalidSpec("invalid region or more than 200 key names")
 	}
 	for _, n := range req.GetKeyNames() {
-		if err := keyPairInput(n, "region"); err != nil {
+		if err := keyPairLookupInput(n, "region"); err != nil {
 			return nil, err
 		}
 	}
@@ -141,7 +153,7 @@ func (s *Server) CreateKeyPair(
 	if err != nil {
 		return nil, err
 	}
-	if err := keyPairInput(req.GetKeyName(), req.GetRegion()); err != nil {
+	if err := keyPairNewInput(req.GetKeyName(), req.GetRegion()); err != nil {
 		return nil, err
 	}
 	var private any
@@ -188,7 +200,7 @@ func (s *Server) ImportKeyPair(
 	if err != nil {
 		return nil, err
 	}
-	if err := keyPairInput(req.GetKeyName(), req.GetRegion()); err != nil {
+	if err := keyPairNewInput(req.GetKeyName(), req.GetRegion()); err != nil {
 		return nil, err
 	}
 	if op, err := s.replay(ctx, pid, "ImportKeyPair", req.GetRequestId(), req); op != nil || err != nil {

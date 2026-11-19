@@ -47,10 +47,6 @@ func TestKeyPairValidate(t *testing.T) {
 		"empty name":          func(p *KeyPair) { p.Name = "" },
 		"name over 255":       func(p *KeyPair) { p.Name = strings.Repeat("a", 256) },
 		"non ASCII name":      func(p *KeyPair) { p.Name = "\xc3\xa9" },
-		"newline in name":     func(p *KeyPair) { p.Name = "a\nb" },
-		"NUL in name":         func(p *KeyPair) { p.Name = "a\x00b" },
-		"tab in name":         func(p *KeyPair) { p.Name = "a\tb" },
-		"DEL in name":         func(p *KeyPair) { p.Name = "a\x7fb" },
 		"negative modulus":    func(p *KeyPair) { negativeModulus(p) },
 		"missing region":      func(p *KeyPair) { p.Region = "" },
 		"bad region":          func(p *KeyPair) { p.Region = "Region_1" },
@@ -147,6 +143,32 @@ func TestKeyPairBoundaries(t *testing.T) {
 		p.Name = name
 		if err := p.Validate(); err != nil || p.Name != name {
 			t.Fatalf("name %q was changed or refused: %v", name, err)
+		}
+	}
+}
+
+// A record written before names were restricted to printable ASCII may hold a
+// control character; it must keep validating so it can be read and deleted.
+// Only a name supplied to create or import is held to the printable rule.
+func TestKeyPairNameRules(t *testing.T) {
+	for _, name := range []string{"a\tb", "a\nb", "a\x00b", "a\x7fb", "\x01"} {
+		p := testKeyPair()
+		p.Name = name
+		if err := p.Validate(); err != nil || !ValidStoredKeyPairName(name) {
+			t.Fatalf("stored name %q refused: %v", name, err)
+		}
+		if ValidNewKeyPairName(name) {
+			t.Fatalf("new name %q accepted", name)
+		}
+	}
+	for _, name := range []string{"", strings.Repeat("x", 256), "\xc3\xa9", "\x80"} {
+		if ValidStoredKeyPairName(name) || ValidNewKeyPairName(name) {
+			t.Fatalf("name %q accepted", name)
+		}
+	}
+	for _, name := range []string{"My Key", " ", "~", strings.Repeat("A", 255)} {
+		if !ValidStoredKeyPairName(name) || !ValidNewKeyPairName(name) {
+			t.Fatalf("name %q refused", name)
 		}
 	}
 }
