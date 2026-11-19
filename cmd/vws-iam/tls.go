@@ -10,8 +10,8 @@ import (
 )
 
 // tlsFiles names the PEM files of the mutual TLS that secures the gRPC
-// listener (#21), usually mounted from a Kubernetes Secret. They are read
-// again on every handshake, so a rotated Secret takes effect on the next
+// listener (#21), usually systemd credential files. They are read
+// again on every handshake, so a rotated file takes effect on the next
 // connection without a restart.
 type tlsFiles struct {
 	certFile, keyFile, clientCAFile string

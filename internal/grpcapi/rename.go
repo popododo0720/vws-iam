@@ -20,7 +20,7 @@ import (
 
 // A rename (AWS UpdateUser NewUserName, UpdateGroup NewGroupName, #134)
 // moves an object to a new key and keeps its UID, unique id, policies,
-// keys, devices and memberships. Kubernetes has no multi-object
+// keys, devices and memberships. The store has no multi-object
 // transaction, so it runs as steps whose desired state lives in the
 // objects' iam.RenameState markers, and every step can be repeated:
 //

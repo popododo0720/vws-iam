@@ -345,7 +345,7 @@ pr_ac_lines() {
 # unticked box passes only with "N/A: <reason>" (the template: "An unchecked box without a reason means
 # the PR is not done"). The untouched template line and an "N/A:" with no reason fail.
 QUALITY_TITLES=("Error handling" "Retries and timeouts" "Security" "Unit tests" "Integration tests"
-  "vws-test live evidence (required)" "Observability" "Idempotency" "AWS compatibility (where applicable)")
+  "pve-test live evidence (required)" "Observability" "Idempotency" "AWS compatibility (where applicable)")
 cmd_pr_checklist() {
   local body=${PR_BODY:-} heading="## Quality checklist (required)" section count n line title ev na t c
   if [[ -n ${1:-} ]]; then

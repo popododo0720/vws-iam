@@ -71,8 +71,8 @@ func TestEnableMFAPreconditions(t *testing.T) {
 				e := newEnvOn(t, b, &now)
 				u := e.createUser(t, t.Context(), "alice")
 				if scenario == "replaced" {
-					// The fake API resets resourceVersion on recreate; real
-					// Kubernetes versions never repeat. Read a distinct version.
+					// A recreate can reset the version in a fake; a real
+					// store never repeats one. Read a distinct version.
 					e.updateUserPath(t, u.GetName(), "/team/")
 					var err error
 					u, err = e.users.GetUser(t.Context(), &iamv1.GetUserRequest{Name: u.GetName()})
