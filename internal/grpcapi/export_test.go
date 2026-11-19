@@ -480,3 +480,9 @@ func (s *Server) SeedKeyPairOperation(
 func CreateKeyPairToken(pid string, req *iamv1.CreateKeyPairRequest) string {
 	return newOnce(pid, "CreateKeyPair", req.GetRequestId(), req).token()
 }
+
+// ImportKeyPairToken is the request record a committed ImportKeyPair leaves
+// in the key pair's Meta.Requests.
+func ImportKeyPairToken(pid string, req *iamv1.ImportKeyPairRequest) string {
+	return newOnce(pid, "ImportKeyPair", req.GetRequestId(), req).token()
+}

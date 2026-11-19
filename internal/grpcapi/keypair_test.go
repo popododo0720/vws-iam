@@ -442,6 +442,56 @@ func TestKeyPairImportReplayOfOldNameRule(t *testing.T) {
 	wantAWS(t, err, codes.Aborted, "IdempotentParameterMismatch")
 }
 
+// The old service committed the key pair (with its request token) before it
+// recorded the operation. After a crash and restart, the identical retry
+// finishes that operation from the committed key pair alone and returns the
+// original result; another request with the legacy name is still refused.
+func TestKeyPairImportCrashWindowOfOldNameRule(t *testing.T) {
+	b := memstore.New()
+	now := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
+	e := newEnvOn(t, b, &now)
+	scoped := store.Scoped(b, proj)
+	seed, err := e.keypairs.ImportKeyPair(t.Context(), keyPairImport())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := unpack(t, seed, &iamv1.KeyPair{}).GetName()
+	id = id[strings.LastIndex(id, "/")+1:]
+	stored, err := store.Get[iam.KeyPair](t.Context(), scoped, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := keyPairImport()
+	req.KeyName, req.RequestId = "tab\there", "import-tab-crashed"
+	old := stored.Object
+	old.ID, old.Name = "key-"+strings.Repeat("0e", 16), req.KeyName
+	old.Requests = []string{grpcapi.ImportKeyPairToken(proj, req)}
+	if _, err := store.Create(t.Context(), scoped, old); err != nil {
+		t.Fatal(err)
+	}
+
+	for range 2 {
+		op, err := e.keypairs.ImportKeyPair(t.Context(), req)
+		if err != nil {
+			t.Fatalf("identical retry: %v", err)
+		}
+		got := unpack(t, op, &iamv1.KeyPair{})
+		if got.GetName() != parentName+"/keyPairs/"+old.ID || got.GetSpec().GetKeyName() != old.Name {
+			t.Fatalf("retry answered %v, want the committed key pair %s", got, old.ID)
+		}
+	}
+	other := keyPairImport()
+	other.KeyName, other.RequestId = old.Name, "import-tab-new"
+	_, err = e.keypairs.ImportKeyPair(t.Context(), other)
+	wantAWS(t, err, codes.InvalidArgument, "InvalidParameterValue")
+	changed := keyPairImport()
+	changed.KeyName, changed.RequestId, changed.Region = old.Name, req.RequestId, "us-east-1"
+	_, err = e.keypairs.ImportKeyPair(t.Context(), changed)
+	if err == nil {
+		t.Fatal("same token with another body was accepted")
+	}
+}
+
 // The same holds for CreateKeyPair: the identical retry of a create recorded
 // on a key pair with an old-rule name is ALREADY_EXISTS as any replay, not
 // INVALID_ARGUMENT; the same name under a new token is still refused.
