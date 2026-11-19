@@ -353,7 +353,8 @@ func TestKeyPairControlNameStoredUnderOldRule(t *testing.T) {
 	}
 	minted := unpack(t, op, &iamv1.KeyPair{})
 	scoped := store.Scoped(b, proj)
-	stored, err := store.Get[iam.KeyPair](t.Context(), scoped, minted.GetName()[strings.LastIndex(minted.GetName(), "/")+1:])
+	mintedID := minted.GetName()[strings.LastIndex(minted.GetName(), "/")+1:]
+	stored, err := store.Get[iam.KeyPair](t.Context(), scoped, mintedID)
 	if err != nil {
 		t.Fatal(err)
 	}
