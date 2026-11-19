@@ -445,7 +445,9 @@ func TestKeyPairImportReplayOfOldNameRule(t *testing.T) {
 // The old service committed the key pair (with its request token) before it
 // recorded the operation. After a crash and restart, the identical retry
 // finishes that operation from the committed key pair alone and returns the
-// original result; another request with the legacy name is still refused.
+// original result. Before that, a new token with the legacy name is
+// InvalidArgument and the committed token with another body is
+// IdempotentParameterMismatch, as the normal replay path answers.
 func TestKeyPairImportCrashWindowOfOldNameRule(t *testing.T) {
 	b := memstore.New()
 	now := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
@@ -470,6 +472,15 @@ func TestKeyPairImportCrashWindowOfOldNameRule(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	other := keyPairImport()
+	other.KeyName, other.RequestId = old.Name, "import-tab-new"
+	_, err = e.keypairs.ImportKeyPair(t.Context(), other)
+	wantAWS(t, err, codes.InvalidArgument, "InvalidParameterValue")
+	changed := keyPairImport()
+	changed.KeyName, changed.RequestId, changed.Region = old.Name, req.RequestId, "us-east-1"
+	_, err = e.keypairs.ImportKeyPair(t.Context(), changed)
+	wantAWS(t, err, codes.Aborted, "IdempotentParameterMismatch")
+
 	for range 2 {
 		op, err := e.keypairs.ImportKeyPair(t.Context(), req)
 		if err != nil {
@@ -479,16 +490,6 @@ func TestKeyPairImportCrashWindowOfOldNameRule(t *testing.T) {
 		if got.GetName() != parentName+"/keyPairs/"+old.ID || got.GetSpec().GetKeyName() != old.Name {
 			t.Fatalf("retry answered %v, want the committed key pair %s", got, old.ID)
 		}
-	}
-	other := keyPairImport()
-	other.KeyName, other.RequestId = old.Name, "import-tab-new"
-	_, err = e.keypairs.ImportKeyPair(t.Context(), other)
-	wantAWS(t, err, codes.InvalidArgument, "InvalidParameterValue")
-	changed := keyPairImport()
-	changed.KeyName, changed.RequestId, changed.Region = old.Name, req.RequestId, "us-east-1"
-	_, err = e.keypairs.ImportKeyPair(t.Context(), changed)
-	if err == nil {
-		t.Fatal("same token with another body was accepted")
 	}
 }
 

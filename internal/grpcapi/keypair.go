@@ -156,7 +156,8 @@ func (s *Server) CreateKeyPair(
 	if err := keyPairNewInput(req.GetKeyName(), req.GetRegion()); err != nil {
 		// A retry of a create committed under the older name rule still
 		// answers as the recorded request did.
-		if _, ok := s.project(pid).keyPairApplied(ctx, newOnce(pid, "CreateKeyPair", req.GetRequestId(), req)); ok {
+		o := newOnce(pid, "CreateKeyPair", req.GetRequestId(), req)
+		if _, applied, _ := s.project(pid).keyPairApplied(ctx, o); applied {
 			return nil, keyPairDuplicate()
 		}
 		return nil, err
@@ -214,8 +215,11 @@ func (s *Server) ImportKeyPair(
 		// A crash can leave the key pair committed, with its request token,
 		// before the operation was recorded. The identical retry finishes
 		// that operation from the committed key pair.
-		v, ok := s.project(pid).keyPairApplied(ctx, newOnce(pid, "ImportKeyPair", req.GetRequestId(), req))
-		if !ok {
+		v, applied, conflict := s.project(pid).keyPairApplied(ctx, newOnce(pid, "ImportKeyPair", req.GetRequestId(), req))
+		if conflict {
+			return nil, idempotencyConflict()
+		}
+		if !applied {
 			return nil, err
 		}
 		op, err := s.done(ctx, opArgs{
@@ -243,19 +247,28 @@ func (s *Server) ImportKeyPair(
 }
 
 // keyPairApplied returns the committed key pair that records o's request.
-// A store error counts as not applied, so the caller's own error stands.
-func (p project) keyPairApplied(ctx context.Context, o once) (store.Versioned[iam.KeyPair], bool) {
+// conflict is true when a committed key pair records o's request_id with
+// another request. A store error counts as not applied, so the caller's own
+// error stands.
+func (p project) keyPairApplied(
+	ctx context.Context, o once,
+) (v store.Versioned[iam.KeyPair], applied, conflict bool) {
 	all, err := store.List[iam.KeyPair](ctx, p.b)
 	if err != nil {
-		return store.Versioned[iam.KeyPair]{}, false
+		return v, false, false
 	}
-	i := slices.IndexFunc(all, func(v store.Versioned[iam.KeyPair]) bool {
-		return !v.Object.Pending && errors.Is(o.check(v.Object.Meta), errApplied)
-	})
-	if i < 0 {
-		return store.Versioned[iam.KeyPair]{}, false
+	for _, c := range all {
+		if c.Object.Pending {
+			continue
+		}
+		switch cerr := o.check(c.Object.Meta); {
+		case errors.Is(cerr, errApplied):
+			return c, true, false
+		case cerr != nil:
+			conflict = true
+		}
 	}
-	return all[i], true
+	return v, false, conflict
 }
 
 // The pending create is committed only while the regional name scan's lock
