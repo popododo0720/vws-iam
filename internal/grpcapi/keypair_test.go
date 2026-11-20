@@ -25,10 +25,20 @@ import (
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
+	"github.com/popododo0720/vws-iam/internal/grpcapi"
 	"github.com/popododo0720/vws-iam/internal/iam"
 	"github.com/popododo0720/vws-iam/internal/store"
 	"github.com/popododo0720/vws-iam/internal/store/memstore"
 )
+
+// keyPairNegativeRSA is a 2048-bit RSA key whose modulus lacks its 0x00 pad,
+// so it decodes negative. OpenSSH refuses it.
+const keyPairNegativeRSA = "ssh-rsa " +
+	"AAAAB3NzaC1yc2EAAAADAQABAAABAMcMsyDp3R2PFBNjX2QnYkwCj0krtm+u/LnutaTkcpkk8noRzh68sesJIj6i" +
+	"Y7Jl9a3q0IvNuJQ9D4Et0Pbx8clpIFOosU3LHQtp1/HqqsjjqsasLGDgBuhij3dDIhICoVYWayPdQRxV8FFgq6DM" +
+	"tpRDKxJ3OP63UO3hj1gNHN26ZVBrFdCEtHqGpg+6AtaZUn0l6Qh9vKXwbWTGF88xlAPZTxLd4Rz37dJZxc8emkju" +
+	"0JFQGRSPOEGZ7w0NIBsDPfZZUY6uRvwHjMDlz5togqr6nfwWlmhTdBLP9HYfhJaPKolqCXZ9Q6T5bOP5nFnc9iNV" +
+	"nuxHis8CMUtAUfTAr6E="
 
 func keyPairMaterial(t *testing.T, key any) string {
 	t.Helper()
@@ -137,6 +147,8 @@ func TestKeyPairImportFormats(t *testing.T) {
 		{"private", "-----BEGIN PRIVATE KEY-----\nsecret", false},
 		{"two keys", keyPairMaterial(t, ed) + "\n" + keyPairMaterial(t, ed), false},
 		{"options", "restrict " + keyPairMaterial(t, ed), false},
+		{"empty", "", false},
+		{"negative modulus", keyPairNegativeRSA, false},
 	}
 	for _, bits := range []int{512, 1023, 1024, 2048, 4096, 4097, 8192} {
 		n := new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), uint(bits-1)), big.NewInt(1))
@@ -152,7 +164,7 @@ func TestKeyPairImportFormats(t *testing.T) {
 			op, err := e.keypairs.ImportKeyPair(t.Context(), req)
 			if !c.ok {
 				wantAWS(t, err, codes.InvalidArgument, "InvalidKey.Format")
-				if strings.Contains(err.Error(), c.material) {
+				if c.material != "" && strings.Contains(err.Error(), c.material) {
 					t.Fatal("wire error echoed material")
 				}
 				return
@@ -292,7 +304,7 @@ func TestKeyPairConcurrentNames(t *testing.T) {
 
 func TestKeyPairValidationAndAuthorization(t *testing.T) {
 	e := newEnv(t)
-	for _, name := range []string{"", strings.Repeat("x", 256), "\xc3\xa9"} {
+	for _, name := range []string{"", strings.Repeat("x", 256), "\xc3\xa9", "a\nb", "a\x00b", "a\x7fb", "a\tb"} {
 		req := keyPairImport()
 		req.KeyName = name
 		_, err := e.keypairs.ImportKeyPair(t.Context(), req)
@@ -327,6 +339,195 @@ func TestKeyPairValidationAndAuthorization(t *testing.T) {
 	if status.Code(err) != codes.Internal || strings.Contains(err.Error(), "backend down") {
 		t.Fatalf("want internal error without backend detail: %v", err)
 	}
+}
+
+// A key pair stored under the earlier rule (any byte up to 127) can have a
+// control character in its name. It stays describable by name and deletable,
+// while create and import of such a name are still refused.
+func TestKeyPairControlNameStoredUnderOldRule(t *testing.T) {
+	b := memstore.New()
+	now := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
+	e := newEnvOn(t, b, &now)
+	op, err := e.keypairs.ImportKeyPair(t.Context(), keyPairImport())
+	if err != nil {
+		t.Fatal(err)
+	}
+	minted := unpack(t, op, &iamv1.KeyPair{})
+	scoped := store.Scoped(b, proj)
+	mintedID := minted.GetName()[strings.LastIndex(minted.GetName(), "/")+1:]
+	stored, err := store.Get[iam.KeyPair](t.Context(), scoped, mintedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := stored.Object
+	old.ID, old.Name = "key-"+strings.Repeat("0b", 16), "tab\there"
+	if _, err := store.Create(t.Context(), scoped, old); err != nil {
+		t.Fatalf("seed under the old rule: %v", err)
+	}
+	name := parentName + "/keyPairs/" + old.ID
+	got, err := e.keypairs.GetKeyPair(t.Context(), &iamv1.GetKeyPairRequest{Name: name})
+	if err != nil || got.GetSpec().GetKeyName() != old.Name {
+		t.Fatalf("Get: %v", err)
+	}
+	list, err := e.keypairs.ListKeyPairs(t.Context(), &iamv1.ListKeyPairsRequest{
+		Parent: parentName, KeyNames: []string{old.Name},
+	})
+	if err != nil || len(list.GetKeyPairs()) != 1 || list.GetKeyPairs()[0].GetName() != name {
+		t.Fatalf("describe by name filter: %v", err)
+	}
+	imp := keyPairImport()
+	imp.KeyName, imp.RequestId = old.Name, "import-tab"
+	_, err = e.keypairs.ImportKeyPair(t.Context(), imp)
+	wantAWS(t, err, codes.InvalidArgument, "InvalidParameterValue")
+	_, err = e.keypairs.CreateKeyPair(t.Context(), &iamv1.CreateKeyPairRequest{
+		Parent: parentName, KeyName: old.Name, Region: "ap-northeast-2", RequestId: "create-tab",
+		KeyType: iamv1.KeyPairType_KEY_PAIR_TYPE_ED25519,
+	})
+	wantAWS(t, err, codes.InvalidArgument, "InvalidParameterValue")
+	if _, err := e.keypairs.DeleteKeyPair(t.Context(), &iamv1.DeleteKeyPairRequest{Name: name}); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	_, err = e.keypairs.GetKeyPair(t.Context(), &iamv1.GetKeyPairRequest{Name: name})
+	wantAWS(t, err, codes.NotFound, "InvalidKeyPair.NotFound")
+}
+
+// An import committed under the older name rule (a tab in the name) and
+// recorded as an operation must replay on the identical retry, with the
+// original result. Another request with that name, or the same token with a
+// different body, is still refused.
+func TestKeyPairImportReplayOfOldNameRule(t *testing.T) {
+	b := memstore.New()
+	now := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
+	e := newEnvOn(t, b, &now)
+	scoped := store.Scoped(b, proj)
+	seed, err := e.keypairs.ImportKeyPair(t.Context(), keyPairImport())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := unpack(t, seed, &iamv1.KeyPair{}).GetName()
+	id = id[strings.LastIndex(id, "/")+1:]
+	stored, err := store.Get[iam.KeyPair](t.Context(), scoped, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := stored.Object
+	old.ID, old.Name = "key-"+strings.Repeat("0c", 16), "tab\there"
+	v, err := store.Create(t.Context(), scoped, old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := keyPairImport()
+	req.KeyName, req.RequestId = old.Name, "import-tab-recorded"
+	recorded := store.Versioned[iam.KeyPair]{Object: old, Version: v}
+	if err := e.api.SeedKeyPairOperation(t.Context(), proj, req, recorded); err != nil {
+		t.Fatal(err)
+	}
+
+	op, err := e.keypairs.ImportKeyPair(t.Context(), req)
+	if err != nil {
+		t.Fatalf("identical retry: %v", err)
+	}
+	got := unpack(t, op, &iamv1.KeyPair{})
+	if got.GetName() != parentName+"/keyPairs/"+old.ID || got.GetSpec().GetKeyName() != old.Name {
+		t.Fatalf("retry answered %v, want the recorded key pair %s", got, old.ID)
+	}
+
+	other := keyPairImport()
+	other.KeyName, other.RequestId = old.Name, "import-tab-new"
+	_, err = e.keypairs.ImportKeyPair(t.Context(), other)
+	wantAWS(t, err, codes.InvalidArgument, "InvalidParameterValue")
+	changed := keyPairImport()
+	changed.KeyName, changed.RequestId, changed.Region = old.Name, req.RequestId, "us-east-1"
+	_, err = e.keypairs.ImportKeyPair(t.Context(), changed)
+	wantAWS(t, err, codes.Aborted, "IdempotentParameterMismatch")
+}
+
+// The old service committed the key pair (with its request token) before it
+// recorded the operation. After a crash and restart, the identical retry
+// finishes that operation from the committed key pair alone and returns the
+// original result. Before that, a new token with the legacy name is
+// InvalidArgument and the committed token with another body is
+// IdempotentParameterMismatch, as the normal replay path answers.
+func TestKeyPairImportCrashWindowOfOldNameRule(t *testing.T) {
+	b := memstore.New()
+	now := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
+	e := newEnvOn(t, b, &now)
+	scoped := store.Scoped(b, proj)
+	seed, err := e.keypairs.ImportKeyPair(t.Context(), keyPairImport())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := unpack(t, seed, &iamv1.KeyPair{}).GetName()
+	id = id[strings.LastIndex(id, "/")+1:]
+	stored, err := store.Get[iam.KeyPair](t.Context(), scoped, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := keyPairImport()
+	req.KeyName, req.RequestId = "tab\there", "import-tab-crashed"
+	old := stored.Object
+	old.ID, old.Name = "key-"+strings.Repeat("0e", 16), req.KeyName
+	old.Requests = []string{grpcapi.ImportKeyPairToken(proj, req)}
+	if _, err := store.Create(t.Context(), scoped, old); err != nil {
+		t.Fatal(err)
+	}
+
+	other := keyPairImport()
+	other.KeyName, other.RequestId = old.Name, "import-tab-new"
+	_, err = e.keypairs.ImportKeyPair(t.Context(), other)
+	wantAWS(t, err, codes.InvalidArgument, "InvalidParameterValue")
+	changed := keyPairImport()
+	changed.KeyName, changed.RequestId, changed.Region = old.Name, req.RequestId, "us-east-1"
+	_, err = e.keypairs.ImportKeyPair(t.Context(), changed)
+	wantAWS(t, err, codes.Aborted, "IdempotentParameterMismatch")
+
+	for range 2 {
+		op, err := e.keypairs.ImportKeyPair(t.Context(), req)
+		if err != nil {
+			t.Fatalf("identical retry: %v", err)
+		}
+		got := unpack(t, op, &iamv1.KeyPair{})
+		if got.GetName() != parentName+"/keyPairs/"+old.ID || got.GetSpec().GetKeyName() != old.Name {
+			t.Fatalf("retry answered %v, want the committed key pair %s", got, old.ID)
+		}
+	}
+}
+
+// The same holds for CreateKeyPair: the identical retry of a create recorded
+// on a key pair with an old-rule name is ALREADY_EXISTS as any replay, not
+// INVALID_ARGUMENT; the same name under a new token is still refused.
+func TestKeyPairCreateReplayOfOldNameRule(t *testing.T) {
+	b := memstore.New()
+	now := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
+	e := newEnvOn(t, b, &now)
+	scoped := store.Scoped(b, proj)
+	seed, err := e.keypairs.ImportKeyPair(t.Context(), keyPairImport())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := unpack(t, seed, &iamv1.KeyPair{}).GetName()
+	id = id[strings.LastIndex(id, "/")+1:]
+	stored, err := store.Get[iam.KeyPair](t.Context(), scoped, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := &iamv1.CreateKeyPairRequest{
+		Parent: parentName, KeyName: "tab\there", Region: "ap-northeast-2", RequestId: "create-tab-recorded",
+		KeyType: iamv1.KeyPairType_KEY_PAIR_TYPE_ED25519,
+	}
+	old := stored.Object
+	old.ID, old.Name = "key-"+strings.Repeat("0d", 16), req.KeyName
+	old.Requests = []string{grpcapi.CreateKeyPairToken(proj, req)}
+	if _, err := store.Create(t.Context(), scoped, old); err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.keypairs.CreateKeyPair(t.Context(), req)
+	wantAWS(t, err, codes.AlreadyExists, "InvalidKeyPair.Duplicate")
+	fresh := &iamv1.CreateKeyPairRequest{
+		Parent: req.Parent, KeyName: req.KeyName, Region: req.Region, KeyType: req.KeyType, RequestId: "create-tab-new",
+	}
+	_, err = e.keypairs.CreateKeyPair(t.Context(), fresh)
+	wantAWS(t, err, codes.InvalidArgument, "InvalidParameterValue")
 }
 
 func TestKeyPairCrashReplay(t *testing.T) {

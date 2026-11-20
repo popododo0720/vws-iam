@@ -5,9 +5,11 @@ import (
 
 	"cloud.google.com/go/longrunning/autogen/longrunningpb"
 
+	commonv1 "github.com/popododo0720/vws-proto/gen/go/vws/common/v1"
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
 	"github.com/popododo0720/vws-iam/internal/iam"
+	"github.com/popododo0720/vws-iam/internal/store"
 	"github.com/popododo0720/vws-iam/internal/sts"
 )
 
@@ -458,4 +460,29 @@ func (s *Server) CheckConsoleSession(ctx context.Context, tok string) (iam.Conso
 
 func (s *Server) RevokeConsoleSession(ctx context.Context, tok string) error {
 	return s.revokeConsoleSession(ctx, tok)
+}
+
+// SeedKeyPairOperation records the finished ImportKeyPair operation for req
+// answering with k, as an earlier version of the service wrote it.
+func (s *Server) SeedKeyPairOperation(
+	ctx context.Context, pid string, req *iamv1.ImportKeyPairRequest, k store.Versioned[iam.KeyPair],
+) error {
+	_, err := s.done(ctx, opArgs{
+		project: pid, method: "ImportKeyPair", requestID: req.GetRequestId(), req: req,
+		resource: name(pid, "keyPairs", k.Object.ID), verb: commonv1.OperationVerb_OPERATION_VERB_CREATE,
+		generation: k.Object.Generation, response: keyPairProto(pid, k),
+	})
+	return err
+}
+
+// CreateKeyPairToken is the request record a committed CreateKeyPair leaves
+// in the key pair's Meta.Requests.
+func CreateKeyPairToken(pid string, req *iamv1.CreateKeyPairRequest) string {
+	return newOnce(pid, "CreateKeyPair", req.GetRequestId(), req).token()
+}
+
+// ImportKeyPairToken is the request record a committed ImportKeyPair leaves
+// in the key pair's Meta.Requests.
+func ImportKeyPairToken(pid string, req *iamv1.ImportKeyPairRequest) string {
+	return newOnce(pid, "ImportKeyPair", req.GetRequestId(), req).token()
 }

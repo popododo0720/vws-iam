@@ -32,8 +32,20 @@ func keyPairDuplicate() error {
 	return fail(codes.AlreadyExists, "ALREADY_EXISTS", "InvalidKeyPair.Duplicate", "key pair already exists")
 }
 
-func keyPairInput(keyName, region string) error {
-	if !iam.ValidKeyPairName(keyName) || !iam.ValidKeyPairRegion(region) {
+// keyPairLookupInput checks a name that selects existing records (the List
+// name filter) under the rule stored names were written with.
+func keyPairLookupInput(keyName, region string) error {
+	return keyPairInput(iam.ValidStoredKeyPairName(keyName), region)
+}
+
+// keyPairNewInput checks a name a caller wants to create or import, which must
+// be printable ASCII.
+func keyPairNewInput(keyName, region string) error {
+	return keyPairInput(iam.ValidNewKeyPairName(keyName), region)
+}
+
+func keyPairInput(nameOK bool, region string) error {
+	if !nameOK || !iam.ValidKeyPairRegion(region) {
 		return fail(codes.InvalidArgument, "INVALID_SPEC", "InvalidParameterValue", "invalid key name or region")
 	}
 	return nil
@@ -108,7 +120,7 @@ func (s *Server) ListKeyPairs(
 		return nil, invalidSpec("invalid region or more than 200 key names")
 	}
 	for _, n := range req.GetKeyNames() {
-		if err := keyPairInput(n, "region"); err != nil {
+		if err := keyPairLookupInput(n, "region"); err != nil {
 			return nil, err
 		}
 	}
@@ -141,7 +153,13 @@ func (s *Server) CreateKeyPair(
 	if err != nil {
 		return nil, err
 	}
-	if err := keyPairInput(req.GetKeyName(), req.GetRegion()); err != nil {
+	if err := keyPairNewInput(req.GetKeyName(), req.GetRegion()); err != nil {
+		// A retry of a create committed under the older name rule still
+		// answers as the recorded request did.
+		o := newOnce(pid, "CreateKeyPair", req.GetRequestId(), req)
+		if _, applied, _ := s.project(pid).keyPairApplied(ctx, o); applied {
+			return nil, keyPairDuplicate()
+		}
 		return nil, err
 	}
 	var private any
@@ -188,10 +206,27 @@ func (s *Server) ImportKeyPair(
 	if err != nil {
 		return nil, err
 	}
-	if err := keyPairInput(req.GetKeyName(), req.GetRegion()); err != nil {
-		return nil, err
-	}
+	// A recorded request answers before the new-name rule applies: an import
+	// committed under the older rule must replay, not turn InvalidArgument.
 	if op, err := s.replay(ctx, pid, "ImportKeyPair", req.GetRequestId(), req); op != nil || err != nil {
+		return op, toStatus(ctx, err)
+	}
+	if err := keyPairNewInput(req.GetKeyName(), req.GetRegion()); err != nil {
+		// A crash can leave the key pair committed, with its request token,
+		// before the operation was recorded. The identical retry finishes
+		// that operation from the committed key pair.
+		v, applied, conflict := s.project(pid).keyPairApplied(ctx, newOnce(pid, "ImportKeyPair", req.GetRequestId(), req))
+		if conflict {
+			return nil, idempotencyConflict()
+		}
+		if !applied {
+			return nil, err
+		}
+		op, err := s.done(ctx, opArgs{
+			project: pid, method: "ImportKeyPair", requestID: req.GetRequestId(), req: req,
+			resource: name(pid, "keyPairs", v.Object.ID), verb: commonv1.OperationVerb_OPERATION_VERB_CREATE,
+			generation: v.Object.Generation, response: keyPairProto(pid, v),
+		})
 		return op, toStatus(ctx, err)
 	}
 	k, err := s.publicKeyPair(req.GetKeyName(), req.GetRegion(), req.GetPublicKey())
@@ -209,6 +244,31 @@ func (s *Server) ImportKeyPair(
 		generation: v.Object.Generation, response: keyPairProto(pid, v),
 	})
 	return op, toStatus(ctx, err)
+}
+
+// keyPairApplied returns the committed key pair that records o's request.
+// conflict is true when a committed key pair records o's request_id with
+// another request. A store error counts as not applied, so the caller's own
+// error stands.
+func (p project) keyPairApplied(
+	ctx context.Context, o once,
+) (v store.Versioned[iam.KeyPair], applied, conflict bool) {
+	all, err := store.List[iam.KeyPair](ctx, p.b)
+	if err != nil {
+		return v, false, false
+	}
+	for _, c := range all {
+		if c.Object.Pending {
+			continue
+		}
+		switch cerr := o.check(c.Object.Meta); {
+		case errors.Is(cerr, errApplied):
+			return c, true, false
+		case cerr != nil:
+			conflict = true
+		}
+	}
+	return v, false, conflict
 }
 
 // The pending create is committed only while the regional name scan's lock

@@ -46,14 +46,32 @@ type KeyPair struct {
 func (KeyPair) Kind() Kind    { return KindKeyPair }
 func (p KeyPair) Key() string { return p.ID }
 
-// ValidKeyPairName applies the EC2 KeyName bounds: 1 to 255 ASCII bytes.
-// Names retain their case; they are not IAM user names or store keys.
-func ValidKeyPairName(name string) bool {
+// ValidStoredKeyPairName applies the rule records were written under before
+// names were restricted: 1 to 255 bytes, none above 127. Control characters
+// are allowed, so a record stored then still validates for reads, name filters
+// and delete. Use ValidNewKeyPairName for names a caller supplies to create or
+// import. Names retain their case; they are not IAM user names or store keys.
+func ValidStoredKeyPairName(name string) bool {
 	if len(name) < 1 || len(name) > 255 {
 		return false
 	}
 	for i := range len(name) {
 		if name[i] > 127 {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidNewKeyPairName applies the EC2 KeyName bounds to a name being created
+// or imported: 1 to 255 printable ASCII bytes (0x20 to 0x7e), so a new name
+// carries no control character.
+func ValidNewKeyPairName(name string) bool {
+	if !ValidStoredKeyPairName(name) {
+		return false
+	}
+	for i := range len(name) {
+		if name[i] < 0x20 || name[i] > 0x7e {
 			return false
 		}
 	}
@@ -67,7 +85,7 @@ func (p KeyPair) Validate() error {
 	switch {
 	case !keyPairIDRE.MatchString(p.ID):
 		return invalid("key pair id")
-	case !ValidKeyPairName(p.Name):
+	case !ValidStoredKeyPairName(p.Name):
 		return invalid("key pair %q name", p.ID)
 	case !ValidKeyPairRegion(p.Region):
 		return invalid("key pair %q region", p.ID)

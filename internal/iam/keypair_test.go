@@ -47,6 +47,7 @@ func TestKeyPairValidate(t *testing.T) {
 		"empty name":          func(p *KeyPair) { p.Name = "" },
 		"name over 255":       func(p *KeyPair) { p.Name = strings.Repeat("a", 256) },
 		"non ASCII name":      func(p *KeyPair) { p.Name = "\xc3\xa9" },
+		"negative modulus":    func(p *KeyPair) { negativeModulus(p) },
 		"missing region":      func(p *KeyPair) { p.Region = "" },
 		"bad region":          func(p *KeyPair) { p.Region = "Region_1" },
 		"digit region":        func(p *KeyPair) { p.Region = "1region" },
@@ -83,6 +84,50 @@ func TestKeyPairValidate(t *testing.T) {
 	}
 }
 
+// keyPairNegativeRSA is a 2048-bit RSA key written without the 0x00 pad its
+// modulus needs, so x/crypto/ssh reads the modulus as negative. OpenSSH
+// refuses such a key.
+const keyPairNegativeRSA = "ssh-rsa " +
+	"AAAAB3NzaC1yc2EAAAADAQABAAABAMcMsyDp3R2PFBNjX2QnYkwCj0krtm+u/LnutaTkcpkk8noRzh68sesJIj6i" +
+	"Y7Jl9a3q0IvNuJQ9D4Et0Pbx8clpIFOosU3LHQtp1/HqqsjjqsasLGDgBuhij3dDIhICoVYWayPdQRxV8FFgq6DM" +
+	"tpRDKxJ3OP63UO3hj1gNHN26ZVBrFdCEtHqGpg+6AtaZUn0l6Qh9vKXwbWTGF88xlAPZTxLd4Rz37dJZxc8emkju" +
+	"0JFQGRSPOEGZ7w0NIBsDPfZZUY6uRvwHjMDlz5togqr6nfwWlmhTdBLP9HYfhJaPKolqCXZ9Q6T5bOP5nFnc9iNV" +
+	"nuxHis8CMUtAUfTAr6E="
+
+// negativeModulus swaps in the negative-modulus RSA key with the type and
+// fingerprint a consistent record would carry, so only the modulus is wrong.
+func negativeModulus(p *KeyPair) {
+	blob, err := base64.StdEncoding.DecodeString(strings.Fields(keyPairNegativeRSA)[1])
+	if err != nil {
+		panic(err)
+	}
+	sum := sha256.Sum256(blob)
+	p.PublicKey, p.KeyType, p.FingerprintSHA256 = keyPairNegativeRSA, KeyPairRSA, hex.EncodeToString(sum[:])
+}
+
+// TestKeyPairFingerprintMatchesSSHKeygen pins the stored hex digest to the
+// SHA256:<base64> form `ssh-keygen -l` prints for the same key.
+func TestKeyPairFingerprintMatchesSSHKeygen(t *testing.T) {
+	const (
+		line = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
+		want = "+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU"
+	)
+	p := testKeyPair()
+	p.PublicKey = line
+	blob, err := base64.StdEncoding.DecodeString(strings.Fields(line)[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(blob)
+	p.FingerprintSHA256 = hex.EncodeToString(sum[:])
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if got := base64.RawStdEncoding.EncodeToString(sum[:]); got != want {
+		t.Fatalf("fingerprint SHA256:%s, ssh-keygen prints SHA256:%s", got, want)
+	}
+}
+
 func TestKeyPairBoundaries(t *testing.T) {
 	for _, n := range []int{1, 255} {
 		p := testKeyPair()
@@ -93,11 +138,37 @@ func TestKeyPairBoundaries(t *testing.T) {
 			t.Fatalf("name length %d: %v", n, err)
 		}
 	}
-	for _, name := range []string{"My Key", "my key", "a/b", "!@#$%^&*()"} {
+	for _, name := range []string{"My Key", "my key", "a/b", "!@#$%^&*()", " ", "~"} {
 		p := testKeyPair()
 		p.Name = name
 		if err := p.Validate(); err != nil || p.Name != name {
 			t.Fatalf("name %q was changed or refused: %v", name, err)
+		}
+	}
+}
+
+// A record written before names were restricted to printable ASCII may hold a
+// control character; it must keep validating so it can be read and deleted.
+// Only a name supplied to create or import is held to the printable rule.
+func TestKeyPairNameRules(t *testing.T) {
+	for _, name := range []string{"a\tb", "a\nb", "a\x00b", "a\x7fb", "\x01"} {
+		p := testKeyPair()
+		p.Name = name
+		if err := p.Validate(); err != nil || !ValidStoredKeyPairName(name) {
+			t.Fatalf("stored name %q refused: %v", name, err)
+		}
+		if ValidNewKeyPairName(name) {
+			t.Fatalf("new name %q accepted", name)
+		}
+	}
+	for _, name := range []string{"", strings.Repeat("x", 256), "\xc3\xa9", "\x80"} {
+		if ValidStoredKeyPairName(name) || ValidNewKeyPairName(name) {
+			t.Fatalf("name %q accepted", name)
+		}
+	}
+	for _, name := range []string{"My Key", " ", "~", strings.Repeat("A", 255)} {
+		if !ValidStoredKeyPairName(name) || !ValidNewKeyPairName(name) {
+			t.Fatalf("name %q refused", name)
 		}
 	}
 }
