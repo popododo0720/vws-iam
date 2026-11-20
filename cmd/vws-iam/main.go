@@ -4,7 +4,7 @@
 // revocations, replay entries, attempt counters, and operations) persists
 // in etcd under one key prefix, so every replica reads the same state and a
 // restart loses nothing. -store picks the backend: etcd (default) or
-// memory (one process only).
+// memory (one process only, not for production).
 package main
 
 import (
@@ -79,8 +79,8 @@ const usage = `usage: vws-iam [flags]            serve gRPC
 -store=etcd reads systemd credentials from $CREDENTIALS_DIRECTORY: the etcd client TLS
 (etcd-ca.pem, etcd-client.pem, etcd-client-key.pem) and the KEK (kek_active holding the
 active id, kek_<id> the base64 of 32 bytes per key).
--store=memory KEK: env VWS_IAM_KEK (base64 of 32 bytes) + VWS_IAM_KEK_ID, -kek-dir, or a
-random one.
+-store=memory is not for production (tests and local runs only). Its KEK: env VWS_IAM_KEK
+(base64 of 32 bytes) + VWS_IAM_KEK_ID, -kek-dir, or a random one.
 Bootstrap root credentials: env VWS_IAM_ROOT_PROJECT, VWS_IAM_ROOT_ACCESS_KEY_ID,
 VWS_IAM_ROOT_SECRET_ACCESS_KEY, or -root-credentials-dir. The root console password
 is optional: env VWS_IAM_ROOT_PASSWORD, or a password file in -root-credentials-dir.
@@ -100,7 +100,8 @@ func parseConfig(args []string, stderr io.Writer, getenv func(string) string) (c
 	fs.SetOutput(stderr)
 	fs.StringVar(&c.listen, "listen", "127.0.0.1:9095", "gRPC listen address")
 	fs.StringVar(&c.storeMode, "store", storeEtcd,
-		"backend: etcd (shared by every replica) or memory (one process, lost on exit; never with replicas)")
+		"backend: etcd (production store, shared by every replica) or "+
+			"memory (not for production: one process, lost on exit; never with replicas)")
 	var endpoints string
 	fs.StringVar(&endpoints, "etcd-endpoints", "", "comma-separated https://host:port etcd client URLs (-store=etcd)")
 	fs.StringVar(&c.etcdPrefix, "etcd-prefix", "/vws/iam", "etcd key prefix of the IAM objects (-store=etcd)")
@@ -114,7 +115,8 @@ func parseConfig(args []string, stderr io.Writer, getenv func(string) string) (c
 	fs.StringVar(&c.tls.keyFile, "tls-key-file", "", "PEM server key of the gRPC listener; "+
 		"needs -tls-cert-file and -tls-client-ca-file")
 	fs.StringVar(&c.tls.clientCAFile, "tls-client-ca-file", "", "PEM CA bundle that client certificates (console-api) "+
-		"must chain to; a client without one is refused. The three TLS files are read again on every handshake")
+		"must chain to; a client without one is refused. The three TLS files are read again on every handshake; "+
+		"under systemd LoadCredential= the source is copied at service start, so replacing it needs a restart")
 	fs.BoolVar(&c.insecurePlaintext, "insecure-plaintext", false, "serve gRPC without TLS on a non-loopback -listen "+
 		"address; only where another layer authenticates the channel")
 	samlFlags(fs, &c.saml)

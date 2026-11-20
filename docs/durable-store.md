@@ -8,7 +8,7 @@ behind the `-store` flag in `cmd/vws-iam`.
 
 vws-iam ran with two replicas while each replica kept state in memory.
 A user or access key written on one replica was not visible on the
-other, and a pod restart lost all state. AWS IAM is durable and serves
+other, and a process restart lost all state. AWS IAM is durable and serves
 the same data from every endpoint after propagation.
 
 ## Options considered
@@ -31,7 +31,7 @@ credentials so restarts can read existing data.
 
 ## Backend selection
 
-`-store` takes `etcd` (default) or `memory`; `kube`, `auto`,
+`-store` takes `etcd` (default, the production store) or `memory` (not for production); `kube`, `auto`,
 `-namespace` and `-kubeconfig` are refused:
 
 - `etcd` connects to the `-etcd-endpoints` (comma-separated
@@ -42,8 +42,10 @@ credentials so restarts can read existing data.
   directory credential `kek` (`kek_active` holding the active id,
   `kek_<id>` the base64 of 32 bytes for each key). A missing file fails
   startup with an error naming it.
-- `memory` keeps state in one process only and logs a warning. It is for
-  local runs and tests, never for replicas.
+- `memory` keeps state in one process only and logs a warning. It is not
+  for production: use it for local runs and tests, never for replicas.
+  etcd is the production store: one member on a single VM (default) or
+  the 3-member HA profile.
 
 Before serving, the store is probed with exponential backoff, each try
 under its own deadline. An unreachable etcd or a refused client
@@ -69,7 +71,14 @@ checked against it:
 2. Pass `-store=etcd -etcd-endpoints https://...` and load the
    credentials with `LoadCredential=`: `etcd-ca.pem`, `etcd-client.pem`,
    `etcd-client-key.pem` and the KEK directory as `kek`.
-3. Run more than one replica only on the same etcd, prefix and KEK.
+3. Serve gRPC with mutual TLS by loading the server files the same way
+   (for example `iam-cert.pem`, `iam-key.pem` and `iam-client-ca.pem`, passed
+   with `-tls-cert-file`, `-tls-key-file` and `-tls-client-ca-file`). vws-iam
+   reads those paths on every handshake, but `LoadCredential=` copies the
+   source file when the service starts. Replacing the deployed `iam-key.pem`
+   (or the certificate or client CA) needs a service restart; until then the
+   old copy stays in use.
+4. Run more than one replica only on the same etcd, prefix and KEK.
 
 ## Evidence
 

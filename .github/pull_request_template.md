@@ -13,7 +13,7 @@ AWS-grade production quality, not demo (see QUALITY.md). Every checked box needs
 - [ ] **Security**: all input validated; least-privilege permissions; secrets only via systemd credentials or the configured memory-mode keyring, never logged and never in the repo. Evidence:
 - [ ] **Unit tests**: new behavior and failure paths covered; a new test fails on main. Evidence:
 - [ ] **Integration tests**: covered against real dependencies or embedded etcd/fakes at the boundary. Evidence:
-- [ ] **vws-test live evidence (required)**: link or paths to commands and output from the vws-test cluster. No live evidence = not done. Evidence:
+- [ ] **vws-test live evidence (required)**: link or paths to commands and output from the pve-test environment. No live evidence = not done. Evidence:
 - [ ] **Observability**: OpenTelemetry traces/metrics for the new paths and structured logs (no secrets). Evidence:
 - [ ] **Idempotency**: safe on retry, duplicate request and process restart. Evidence:
 - [ ] **AWS compatibility (where applicable)**: API behavior and error codes match AWS. Evidence:

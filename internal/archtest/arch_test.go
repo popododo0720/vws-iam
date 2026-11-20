@@ -1,5 +1,5 @@
 // Package archtest enforces the AGENTS.md rules that the compiler does not.
-// Modeled on vws-compute's internal/archtest.
+// Each layer rule is checked against a deliberate violation in a probe tree.
 package archtest
 
 import (
